@@ -109,7 +109,7 @@ See the [default runtime report](reports/phase5-runtime-cost-default.json) and
 readiness and shutdown remain 5 ms and 14 ms respectively; separate wall-clock
 samples are recorded in those reports.
 
-## Remaining Phase 5 Work
+## Phase Boundary
 
 This package is a proof, not a public production lifecycle API. Its fake
 Database, Users, and Worker participants now execute through Core's independent
