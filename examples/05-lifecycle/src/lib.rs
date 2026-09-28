@@ -41,6 +41,36 @@ impl Capability for UsersCapability {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FakeDatabase {
     resources: SharedResources,
+    managed: bool,
+}
+
+/// An already-open database whose lifetime remains with the caller.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalDatabaseOwner {
+    resources: SharedResources,
+}
+
+impl ExternalDatabaseOwner {
+    /// Creates an external database before the lifecycle coordinator starts.
+    pub fn new() -> Self {
+        Self {
+            resources: Rc::new(RefCell::new(FakeResources {
+                database_open: true,
+                ..FakeResources::default()
+            })),
+        }
+    }
+
+    /// Reports whether the caller-owned database is still open.
+    pub fn is_open(&self) -> bool {
+        self.resources.borrow().database_open
+    }
+}
+
+impl Default for ExternalDatabaseOwner {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Module for FakeDatabase {
@@ -360,10 +390,11 @@ enum Participant {
 }
 
 impl Participant {
-    fn new(module: ModuleId, resources: &SharedResources) -> Option<Self> {
+    fn new(module: ModuleId, resources: &SharedResources, managed_database: bool) -> Option<Self> {
         Some(match module {
             DATABASE => Self::Database(FakeDatabase {
                 resources: resources.clone(),
+                managed: managed_database,
             }),
             USERS => Self::Users(FakeUsers {
                 resources: resources.clone(),
@@ -373,6 +404,29 @@ impl Participant {
             }),
             _ => return None,
         })
+    }
+
+    fn supports(&self, phase: Phase) -> bool {
+        match self {
+            Self::Database(module) => match phase {
+                Phase::Initialize | Phase::Stop => module.managed,
+                Phase::Ready => true,
+                _ => false,
+            },
+            Self::Users(_) => matches!(
+                phase,
+                Phase::Initialize
+                    | Phase::Start
+                    | Phase::Ready
+                    | Phase::Drain
+                    | Phase::Cancel
+                    | Phase::Stop
+            ),
+            Self::Worker(_) => matches!(
+                phase,
+                Phase::Start | Phase::Ready | Phase::Drain | Phase::Cancel | Phase::Stop
+            ),
+        }
     }
 
     fn invoke(
@@ -487,7 +541,19 @@ pub fn start(control: TestControl) -> Outcome {
         Ok(frozen) => frozen,
         Err(error) => return failed_projection(error),
     };
-    Driver::new(frozen, control).start()
+    Driver::new(frozen, control, None).start()
+}
+
+/// Starts with a database that the caller owns and must close.
+pub fn start_with_external_database(
+    control: TestControl,
+    database: &ExternalDatabaseOwner,
+) -> Outcome {
+    let frozen = match application().freeze(WORKER) {
+        Ok(frozen) => frozen,
+        Err(error) => return failed_projection(error),
+    };
+    Driver::new(frozen, control, Some(database.resources.clone())).start()
 }
 
 impl Outcome {
@@ -535,16 +601,21 @@ struct Driver {
 }
 
 impl Driver {
-    fn new(frozen: FrozenProcess, control: TestControl) -> Self {
+    fn new(
+        frozen: FrozenProcess,
+        control: TestControl,
+        external_resources: Option<SharedResources>,
+    ) -> Self {
         let modules = lifecycle_order(&frozen);
-        let shared = Rc::new(RefCell::new(FakeResources::default()));
+        let managed_database = external_resources.is_none();
+        let shared = external_resources.unwrap_or_default();
         let ordered = modules
             .into_iter()
             .filter_map(|module| step(module, control))
             .collect();
         let participants = lifecycle_order(&frozen)
             .into_iter()
-            .filter_map(|module| Participant::new(module, &shared))
+            .filter_map(|module| Participant::new(module, &shared, managed_database))
             .collect();
         Self {
             ordered,
@@ -575,7 +646,7 @@ impl Driver {
         self.status.alive = true;
         self.status.state = LifecycleState::Initializing;
         for step in self.ordered.clone() {
-            if !step.initialize {
+            if !step.initialize || !self.participates(step.module, Phase::Initialize) {
                 continue;
             }
             if let Err(failure) = self.perform(
@@ -592,7 +663,7 @@ impl Driver {
 
         self.status.state = LifecycleState::Starting;
         for step in self.ordered.clone() {
-            if !step.start {
+            if !step.start || !self.participates(step.module, Phase::Start) {
                 continue;
             }
             if let Err(failure) = self.perform(step, Phase::Start, self.control.deadlines.start_ms)
@@ -606,7 +677,7 @@ impl Driver {
         self.status.started = true;
 
         for step in self.ordered.clone() {
-            if !step.ready {
+            if !step.ready || !self.participates(step.module, Phase::Ready) {
                 continue;
             }
             if step.required_health && step.health == Health::Unhealthy {
@@ -733,6 +804,11 @@ impl Driver {
                 Participant::Users(_) => module == USERS,
                 Participant::Worker(_) => module == WORKER_ROOT,
             })
+    }
+
+    fn participates(&mut self, module: ModuleId, phase: Phase) -> bool {
+        self.participant_mut(module)
+            .is_some_and(|participant| participant.supports(phase))
     }
 
     fn invoke(&mut self, module: ModuleId, phase: Phase) -> Option<Result<(), &'static str>> {

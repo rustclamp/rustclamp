@@ -23,7 +23,7 @@ flowchart TD
 
 ## Evidence
 
-Eight tests cover dependency-derived order, no readiness after startup or
+Nine tests cover dependency-derived order, no readiness after startup or
 required-health failure, cleanup of only acquired resources, continued cleanup
 after injected errors, deadline handling, optional degradation, programmatic
 shutdown, and a bounded final diagnostic flush. Status keeps `started`, `ready`,
@@ -41,6 +41,21 @@ retain both phase and module identity.
 
 These values come from configured fake operation durations. They verify the
 measurement path and ordering; they are not wall-clock performance claims.
+
+## Ownership Comparison
+
+| Path | Database owner | Initialize/stop hooks | After process shutdown |
+| --- | --- | --- | --- |
+| Default | Lifecycle fixture | Both run | Database is closed |
+| External | Caller (`ExternalDatabaseOwner`) | Neither runs | Database remains open |
+
+The controlled fixture clock records 5 ms to ready and 12 ms through shutdown
+for the managed path, versus 3 ms and 9 ms for the external path. These values
+reflect skipped Database hooks, not a production performance advantage.
+
+Both paths provide the Database capability to Users. The caller must close an
+external database. Detached-work and restart ownership modes are not modeled.
+
 This proof introduces no dependency and does not implement a production runtime,
 real resource, telemetry exporter, or Tokio adapter. Async behavior remains
 deferred until the synchronous coordination contract is understood.

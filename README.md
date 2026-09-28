@@ -55,10 +55,11 @@ process-specific build targets, and scale measurements.
 
 `examples/05-lifecycle` begins Phase 5 with a synchronous fake-resource proof:
 it derives Database → Users startup and reverse cleanup from the frozen process
-requirements, exercises failure cleanup and programmatic shutdown, and uses a
-deterministic test clock for lifecycle measurements. These are simulated
-durations, not production benchmarks. Tokio and production lifecycle APIs remain
-out of scope until the synchronous coordination contract is established.
+requirements, exercises failure cleanup and programmatic shutdown, and compares
+managed with caller-owned Database lifetimes. A deterministic test clock records
+simulated lifecycle durations, not production benchmarks. Tokio and production
+lifecycle APIs remain out of scope until the synchronous coordination contract
+is established.
 The [Phase 5 progress report](docs/evidence/phase5-lifecycle.md) compares its
 build footprint with the Phase 4 process example and separates measured process
 wall time from deterministic fake-clock readiness durations.

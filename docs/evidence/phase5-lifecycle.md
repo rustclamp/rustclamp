@@ -11,10 +11,11 @@ cancellation, reverse stop, and a final diagnostic flush.
 
 ## Verification
 
-Eight tests cover ordering, startup and health failures, partial-acquisition
+Nine tests cover ordering, startup and health failures, partial-acquisition
 cleanup, continued safe cleanup after a drain error, bounded fake operation
-durations, optional degradation, and programmatic shutdown. Clippy passes with
-warnings denied. The example stays facade-free and adds no crates.
+durations, optional degradation, programmatic shutdown, and external-resource
+ownership. Clippy passes with warnings denied. The example stays facade-free
+and adds no crates.
 
 ## Lifecycle Timings
 
@@ -31,6 +32,18 @@ The deterministic fake clock is configured with these operation durations:
 
 These are simulated values for ordering and timeout tests, not elapsed hardware
 performance. They do not predict production startup latency.
+
+## Ownership Evidence
+
+The managed fixture initializes and closes Database. With
+`ExternalDatabaseOwner`, the database is already open, its Initialize and Stop
+hooks are omitted, Users still receives its capability, and the database
+remains open after process shutdown. This is a behavior comparison verified by
+test, not a performance measurement. The external owner remains responsible for
+closing it. With the fixture's configured durations, external ownership records
+3 ms to ready and 9 ms through shutdown, versus 5 ms and 12 ms for the managed
+path; the difference is exactly the skipped Database hooks, not a production
+performance claim.
 
 ## Build Comparison
 
@@ -59,7 +72,7 @@ This package is a proof, not a public production lifecycle API. Its fake
 Database, Users, and Worker participants now execute through Core's independent
 synchronous Initialize, Start, Ready, Drain, and Stop contracts with an
 identity-only `LifecycleContext`. The dispatcher remains local to this example.
-Managed versus external ownership, shared
+Managed versus external ownership is demonstrated for a single process; shared
 application/process lifetime, execution-scoped resources, observability failure
 behavior, a reusable synchronous runtime driver, and the optional Tokio adapter
 and supervision remain open. No Tokio dependency or runtime repository was

@@ -1,6 +1,6 @@
 use rustclamp_example_lifecycle::{
-    DATABASE, Health, LifecycleFailure, LifecycleState, Phase, ShutdownReason, TestControl, USERS,
-    WORKER, WORKER_ROOT, application, start,
+    DATABASE, ExternalDatabaseOwner, Health, LifecycleFailure, LifecycleState, Phase,
+    ShutdownReason, TestControl, USERS, WORKER, WORKER_ROOT, application, start,
 };
 
 fn modules_in_phase(
@@ -53,6 +53,26 @@ fn dependencies_initialize_before_users_and_stop_after_consumers() {
     assert_eq!(shutdown.shutdown_reason, Some(ShutdownReason::Requested));
     assert!(!shutdown.status.alive && !shutdown.status.started && !shutdown.status.ready);
     assert_eq!(shutdown.resources, Default::default());
+}
+
+#[test]
+fn external_database_is_used_but_never_initialized_or_stopped_by_the_process() {
+    let owner = ExternalDatabaseOwner::new();
+    let result =
+        rustclamp_example_lifecycle::start_with_external_database(TestControl::default(), &owner);
+
+    assert!(owner.is_open());
+    assert_eq!(result.elapsed_ms(), 3);
+    assert_eq!(modules_in_phase(&result.events, Phase::Initialize), [USERS]);
+    assert!(result.resources.database_open && result.resources.users_initialized);
+
+    let stopped = rustclamp_example_lifecycle::shutdown(result, ShutdownReason::Requested);
+    assert!(!stopped.resources.users_initialized);
+    assert!(!stopped.events.iter().any(|event| {
+        event.module == DATABASE && matches!(event.phase, Phase::Initialize | Phase::Stop)
+    }));
+    assert!(owner.is_open());
+    assert_eq!(stopped.elapsed_ms(), 9);
 }
 
 #[test]

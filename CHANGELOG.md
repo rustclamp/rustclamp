@@ -30,3 +30,6 @@
   build-footprint comparisons against the Phase 4 process example.
 - Documented Core's opt-in synchronous lifecycle participation contracts in
   the lifecycle example and Phase 5 evidence.
+- Added an external fake Database owner path that preserves caller ownership
+  through process shutdown, with managed/external behavior and fake-clock
+  comparisons in the lifecycle docs.
