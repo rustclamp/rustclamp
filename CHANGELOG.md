@@ -12,3 +12,5 @@
   measured comparisons, evidence, and release documentation.
 - Updated isolated checks to include declared internal dependency closures and
   distinguish package-list validation from registry-dependent archive verification.
+- Added colored test/benchmark terminal verdicts, per-benchmark intent text, and
+  Phase 2 qualifier, cardinality, and composition-edit measurements.

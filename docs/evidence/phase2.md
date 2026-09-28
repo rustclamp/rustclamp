@@ -48,24 +48,29 @@ samples, and the report records the integer nanoseconds per operation.
 | Path | Median | Raw samples (ns/op) |
 | --- | ---: | --- |
 | Direct typed access | 2 ns | 2, 2, 2, 2, 2, 2, 2, 2, 2 |
-| Resolve unique provision | 8 ns | 8, 8, 8, 8, 8, 8, 8, 8, 8 |
+| Resolve unique provision | 6 ns | 6, 6, 6, 6, 6, 7, 7, 7, 8 |
 | Select last of 2 provisions | 12 ns | 12, 12, 12, 12, 12, 12, 12, 12, 13 |
-| Select last of 8 provisions | 29 ns | 27, 27, 28, 28, 29, 29, 29, 31, 31 |
-| Resolve qualified unique provision (`Primary`) | 6 ns | 6, 6, 6, 6, 6, 6, 6, 6, 6 |
-| Select qualified last of 8 (`Primary`) | 27 ns | 26, 27, 27, 27, 27, 27, 27, 27, 29 |
-| Optional, no provider | 6 ns | 6, 6, 6, 6, 6, 6, 7, 7, 7 |
+| Select last of 8 provisions | 28 ns | 27, 27, 27, 27, 28, 29, 30, 31, 34 |
+| Resolve qualified unique provision (`Primary`) | 5 ns | 5, 5, 5, 5, 5, 6, 6, 6, 6 |
+| Select qualified last of 8 (`Primary`) | 27 ns | 26, 26, 26, 27, 27, 27, 28, 29, 31 |
+| Optional, no provider | 7 ns | 6, 6, 6, 7, 7, 7, 7, 7, 7 |
 | Optional, one provider | 3 ns | 3, 3, 3, 3, 3, 3, 3, 3, 3 |
-| Resolve all, 2 providers | 17 ns | 17, 17, 17, 17, 17, 17, 17, 17, 19 |
-| Resolve all, 8 providers | 40 ns | 39, 39, 39, 40, 40, 40, 40, 40, 40 |
+| Resolve all, 2 providers | 17 ns | 16, 17, 17, 17, 17, 17, 17, 17, 19 |
+| Resolve all, 8 providers | 40 ns | 40, 40, 40, 40, 40, 40, 40, 41, 41 |
+| Remove module and revalidate | 36 ns | 36, 36, 36, 36, 36, 36, 36, 36, 37 |
+| Replace provider and revalidate | 62 ns | 60, 61, 61, 62, 62, 62, 62, 63, 74 |
 
 The initial Phase 2 run recorded 5/12/31 ns for unique/two/eight-provider
 resolution. After the shared resolver refactor, a follow-up recorded 7/11/27 ns
-and qualified paths at 5/27 ns. The latest run, after adding optional and many
-cardinality APIs, recorded 8/12/29 ns unqualified and 6/27 ns qualified, plus
-the optional and many paths above. Resolver and harness source changed between
-runs, so these are version snapshots, not controlled estimates of the cost of
-one feature. Many-provider timing includes constructing and sorting the returned
-vector; allocation counts are not instrumented. These remain microbenchmark
+and qualified paths at 5/27 ns. The latest run, after adding graph edits,
+recorded 6/12/28 ns unqualified and 5/27 ns qualified, plus optional,
+many-provider, removal, and replacement paths above. The two-provider selection
+range was 12-13 ns in the terminal-runner check; the previous sample ranged
+12-32 ns. Resolver
+and harness source changed between runs; these are version snapshots, not
+controlled estimates of one feature's cost. Many-provider timing includes
+constructing and sorting the returned vector; composition edit timings include
+snapshot copies and validation. Allocation counts are not instrumented. These remain microbenchmark
 observations, not application latency guarantees; nanosecond-scale results are
 sensitive to host scheduling, frequency, compiler optimization, and timer
 granularity. They do not justify a performance threshold. All runs' samples are retained in
@@ -74,17 +79,19 @@ granularity. They do not justify a performance threshold. All runs' samples are 
 The initial five-run release build report recorded one internal dependency
 (Core), a clean-build median of 416.90 ms, unchanged-build median of 40.37 ms,
 an example binary of 4,365,760 bytes, and process wall-time median of 1.516 ms.
-After the typed qualifier implementation, the same command measured 451.79 ms
-clean build, 41.87 ms unchanged rebuild, a 4,357,888-byte example binary, and
-1.297 ms process wall time. Relative to the initial measurement of the same
-example, the latest follow-up is +50.53 ms clean build, +0.12 ms unchanged rebuild,
--7,872 bytes, and -0.063 ms process wall time. This is a source-version
-comparison on one uncontrolled host, not a causal estimate of qualifier cost.
+After the typed qualifier and composition-edit implementations, the same command
+measured 467.77 ms clean build, 39.47 ms unchanged rebuild, a 4,357,888-byte
+example binary, and 1.484 ms process wall time. Relative to the initial
+measurement of the same example, the latest follow-up is +50.87 ms clean build,
+-0.89 ms unchanged rebuild, -7,872 bytes, and -0.032 ms process wall time. This
+is a source-version comparison on one uncontrolled host, not a causal estimate
+of feature cost.
 Process timing includes launch, output, and exit; it is not pure resolver
 latency. Allocator counts, RSS, CPU, and edited-source rebuilds were not
-measured. The successful resolver path contains no explicit collection or
-allocation, while error construction collects candidate IDs; this source
-observation is not an allocator measurement. Raw reports:
+measured. The single-provider resolver success path contains no explicit
+collection; the many-provider path allocates a sorted output vector, while error
+construction collects candidate IDs. These source observations are not allocator
+measurements. Raw reports:
 [initial](reports/phase2-kernel-build.json),
 [latest follow-up](reports/phase2-kernel-build-followup.json).
 

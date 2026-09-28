@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "recorded_at": "2026-09-28T12:01:36.819553+00:00",
+  "recorded_at": "2026-09-28T12:41:10.790041+00:00",
   "package": "rustclamp-kernel",
-  "source_sha256": "6c7a75869aacc3ed65959e7043de300584c886d4f69c3e5914f571b272c2064c",
+  "source_sha256": "0a6db86506f6c34c9a02d49c90d760a2fef1c0fd90e250a1cc036b10565a3d54",
   "toolchain": "rustc 1.96.1 (31fca3adb 2026-06-26)\nbinary: rustc\ncommit-hash: 31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd\ncommit-date: 2026-06-26\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.1\nLLVM version: 22.1.2",
   "cargo": "cargo 1.96.1 (356927216 2026-06-26)",
   "target": "x86_64-unknown-linux-gnu",
@@ -69,21 +69,21 @@
   },
   "dependency_count": 1,
   "clean_seconds": [
-    0.458219549,
-    0.465168083,
-    0.487370582,
-    0.467435981,
-    0.497851342
+    0.478406174,
+    0.465098893,
+    0.484706787,
+    0.447977119,
+    0.467769673
   ],
-  "clean_median_seconds": 0.467435981,
+  "clean_median_seconds": 0.467769673,
   "incremental_noop_seconds": [
-    0.042033714,
-    0.039331576,
-    0.040480507,
-    0.040366431,
-    0.041058139
+    0.039208905,
+    0.040383416,
+    0.039474909,
+    0.04216248,
+    0.039074161
   ],
-  "incremental_noop_median_seconds": 0.040480507,
+  "incremental_noop_median_seconds": 0.039474909,
   "binary_bytes": [
     4357888,
     4357888,
@@ -92,11 +92,11 @@
     4357888
   ],
   "process_wall_seconds": [
-    0.00143863,
-    0.001985483,
-    0.001326878,
-    0.001452706,
-    0.001609161
+    0.001154122,
+    0.001484467,
+    0.001115479,
+    0.00202549,
+    0.001561522
   ],
   "runtime_allocations": null,
   "runtime_memory": null,

@@ -57,28 +57,29 @@ the phase columns below are context, not a before/after speedup comparison.
 
 | Metric | Phase 1: plain Rust | Phase 1: Pico | Phase 2: Kernel |
 | --- | ---: | ---: | ---: |
-| Clean-build median | 232.40 ms | 269.18 ms | 467.44 ms |
-| Unchanged rebuild median | 133.48 ms | 135.15 ms | 40.48 ms |
-| Process wall-time median | 1.203 ms | 1.256 ms | 1.453 ms |
+| Clean-build median | 232.40 ms | 269.18 ms | 467.77 ms |
+| Unchanged rebuild median | 133.48 ms | 135.15 ms | 39.47 ms |
+| Process wall-time median | 1.203 ms | 1.256 ms | 1.484 ms |
 | Release binary size | 4,335,592 B | 4,335,592 B | 4,357,888 B |
 | Dependency packages | 0 | 1 facade | 1 internal (Core) |
 
 Phase 1's paired comparison found Pico added 36.78 ms to the clean-build
 median, 1.67 ms to the unchanged-build median, and 0 bytes to the binary. Phase
-2's latest resolver microbenchmark measured direct typed access at 2 ns/op,
-unqualified resolution at 8 ns/op (+6 ns), selection from two providers at 12
-ns/op (+10 ns), and selection from eight at 29 ns/op (+27 ns). Typed `Primary`
-qualification measured 6 ns/op with one provider and 27 ns/op when selecting
-among eight. Optional absence/one-provider paths measured 6/3 ns; collecting
-all providers measured 17 ns for two and 40 ns for eight. These are
-nine-sample medians, not end-to-end application latency. Earlier Phase 2 runs
-recorded unqualified 5/12/31 ns and then 7/11/27 ns. The resolver and harness
-changed between snapshots, so these are not controlled estimates of individual
-feature costs. The many-provider timing includes output-vector allocation.
+2's latest resolver microbenchmark measured direct access at 2 ns/op,
+unqualified resolution at 6 ns/op, selection from two providers at 12 ns/op,
+and selection from eight at 28 ns/op. Typed `Primary` paths measured 5/27 ns
+for one/eight providers; optional absent/unique paths were 7/3 ns; collecting
+all providers was 17/40 ns for two/eight. Removing a module and revalidating
+measured 36 ns, replacing a provider and revalidating 62 ns. These are
+nine-sample medians, not end-to-end latency. The two-provider selection range
+was 12-13 ns in the latest run. Earlier Phase 2 runs recorded unqualified
+5/12/31, 7/11/27, 8/12/29, then 6/21/27 ns; the resolver and harness changed between snapshots,
+so the runs do not isolate individual feature costs. Many-provider and
+composition-edit timings include allocated snapshots/vectors.
 
 The first Phase 2 build snapshot was 416.90 ms clean, 40.37 ms unchanged,
 4,365,760 B, and 1.516 ms process wall time. The latest follow-up on the same
-example is +50.53 ms clean, +0.12 ms unchanged, -7,872 B, and -0.063 ms process
+example is +50.87 ms clean, -0.89 ms unchanged, -7,872 B, and -0.032 ms process
 time. This compares source versions on one uncontrolled host; it does not
 isolate feature costs. The process measurement includes launch and output.
 

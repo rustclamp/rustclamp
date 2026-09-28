@@ -77,7 +77,11 @@ def main():
     workspace_settings = tomllib.loads(workspace_manifest.read_text())
     digest = hashlib.sha256()
     for path in sorted(source_root.rglob("*")):
-        if path.is_file() and not {".git", "target", "__pycache__", "reports"}.intersection(path.relative_to(source_root).parts):
+        if (
+            path.is_file()
+            and path.suffix.lower() != ".md"
+            and not {".git", "target", "__pycache__", "reports"}.intersection(path.relative_to(source_root).parts)
+        ):
             digest.update(str(path.relative_to(source_root)).encode())
             digest.update(path.read_bytes())
     report = {

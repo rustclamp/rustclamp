@@ -73,6 +73,41 @@
       {"name": "resolve_many_8", "candidate_count": 8, "median_ns_per_operation": 40, "samples_ns_per_operation": [39, 39, 39, 40, 40, 40, 40, 40, 40]}
     ]
   },
+  "run_after_graph_edit_operations": {
+    "sample_count": 9,
+    "paths": [
+      {"name": "direct_typed_access", "candidate_count": 0, "median_ns_per_operation": 2, "samples_ns_per_operation": [2, 2, 2, 2, 2, 2, 2, 2, 2]},
+      {"name": "resolve_unique", "candidate_count": 1, "median_ns_per_operation": 6, "samples_ns_per_operation": [6, 6, 6, 6, 6, 6, 6, 7, 10]},
+      {"name": "resolve_selected_2", "candidate_count": 2, "selected_position": "last", "median_ns_per_operation": 21, "samples_ns_per_operation": [12, 12, 13, 20, 21, 21, 21, 23, 32]},
+      {"name": "resolve_selected_8", "candidate_count": 8, "selected_position": "last", "median_ns_per_operation": 27, "samples_ns_per_operation": [26, 26, 26, 26, 27, 27, 28, 33, 37]},
+      {"name": "resolve_qualified_unique", "qualifier": "bench.primary", "candidate_count": 1, "median_ns_per_operation": 5, "samples_ns_per_operation": [5, 5, 5, 5, 5, 5, 5, 5, 6]},
+      {"name": "resolve_qualified_selected_8", "qualifier": "bench.primary", "candidate_count": 8, "selected_position": "last", "median_ns_per_operation": 29, "samples_ns_per_operation": [29, 29, 29, 29, 29, 29, 30, 30, 30]},
+      {"name": "resolve_optional_absent", "candidate_count": 0, "median_ns_per_operation": 6, "samples_ns_per_operation": [6, 6, 6, 6, 6, 6, 6, 6, 7]},
+      {"name": "resolve_optional_unique", "candidate_count": 1, "median_ns_per_operation": 3, "samples_ns_per_operation": [3, 3, 3, 3, 3, 3, 3, 3, 3]},
+      {"name": "resolve_many_2", "candidate_count": 2, "median_ns_per_operation": 17, "samples_ns_per_operation": [16, 17, 17, 17, 17, 17, 17, 17, 19]},
+      {"name": "resolve_many_8", "candidate_count": 8, "median_ns_per_operation": 39, "samples_ns_per_operation": [39, 39, 39, 39, 39, 39, 39, 39, 41]},
+      {"name": "remove_module_and_revalidate", "candidate_count": 1, "median_ns_per_operation": 36, "samples_ns_per_operation": [36, 36, 36, 36, 36, 36, 36, 37, 37]},
+      {"name": "replace_provider_and_revalidate", "candidate_count": 1, "median_ns_per_operation": 59, "samples_ns_per_operation": [58, 58, 59, 59, 59, 60, 60, 61, 62]}
+    ]
+  },
+  "terminal_runner_smoke": {
+    "recorded_by": "python3 rustclamp/tools/run.py bench --color always",
+    "sample_count": 9,
+    "paths": [
+      {"name": "direct_typed_access", "median_ns_per_operation": 2, "samples_ns_per_operation": [2, 2, 2, 2, 2, 2, 2, 2, 2]},
+      {"name": "resolve_unique", "median_ns_per_operation": 6, "samples_ns_per_operation": [6, 6, 6, 6, 6, 7, 7, 7, 8]},
+      {"name": "resolve_selected_2", "median_ns_per_operation": 12, "samples_ns_per_operation": [12, 12, 12, 12, 12, 12, 12, 12, 13]},
+      {"name": "resolve_selected_8", "median_ns_per_operation": 28, "samples_ns_per_operation": [27, 27, 27, 27, 28, 29, 30, 31, 34]},
+      {"name": "resolve_qualified_unique", "qualifier": "bench.primary", "median_ns_per_operation": 5, "samples_ns_per_operation": [5, 5, 5, 5, 5, 6, 6, 6, 6]},
+      {"name": "resolve_qualified_selected_8", "qualifier": "bench.primary", "median_ns_per_operation": 27, "samples_ns_per_operation": [26, 26, 26, 27, 27, 27, 28, 29, 31]},
+      {"name": "resolve_optional_absent", "median_ns_per_operation": 7, "samples_ns_per_operation": [6, 6, 6, 7, 7, 7, 7, 7, 7]},
+      {"name": "resolve_optional_unique", "median_ns_per_operation": 3, "samples_ns_per_operation": [3, 3, 3, 3, 3, 3, 3, 3, 3]},
+      {"name": "resolve_many_2", "median_ns_per_operation": 17, "samples_ns_per_operation": [17, 17, 17, 17, 17, 17, 17, 18, 18]},
+      {"name": "resolve_many_8", "median_ns_per_operation": 40, "samples_ns_per_operation": [40, 40, 40, 40, 40, 40, 40, 41, 41]},
+      {"name": "remove_module_and_revalidate", "median_ns_per_operation": 36, "samples_ns_per_operation": [36, 36, 36, 36, 36, 36, 36, 36, 37]},
+      {"name": "replace_provider_and_revalidate", "median_ns_per_operation": 62, "samples_ns_per_operation": [60, 61, 61, 62, 62, 62, 62, 63, 74]}
+    ]
+  },
   "limitations": [
     "Single host and first-run microbenchmark; no regression threshold is justified.",
     "Nanosecond-scale timing is sensitive to scheduling, frequency, compiler optimization, and timer granularity.",

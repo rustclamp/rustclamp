@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 
@@ -60,9 +61,39 @@ def allowed_package_closure(package):
     return packages
 
 
+CHECKS_PASSED = 0
+CHECKS_WITH_WARNINGS = 0
+
+
+def status(text, color):
+    if "NO_COLOR" in os.environ or not sys.stdout.isatty():
+        return text
+    codes = {"green": "32", "yellow": "33", "red": "31", "cyan": "36"}
+    return f"\033[{codes[color]}m{text}\033[0m"
+
+
 def run(*command, cwd, env=None):
-    print("+", " ".join(map(str, command)), flush=True)
-    subprocess.run(command, cwd=cwd, env=env, check=True)
+    global CHECKS_PASSED, CHECKS_WITH_WARNINGS
+    print(status("▶", "cyan"), " ".join(map(str, command)), flush=True)
+    process = subprocess.Popen(
+        command, cwd=cwd, env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, bufsize=1)
+    assert process.stdout is not None
+    command_warnings = 0
+    for line in process.stdout:
+        print(line, end="", flush=True)
+        if "warning:" in line.lower():
+            command_warnings += 1
+    return_code = process.wait()
+    if return_code:
+        print(status(f"✗ CHECK FAILED (exit={return_code})", "red"), flush=True)
+        raise subprocess.CalledProcessError(return_code, command)
+    CHECKS_PASSED += 1
+    if command_warnings:
+        CHECKS_WITH_WARNINGS += command_warnings
+        print(status(f"⚠ CHECK PASSED WITH {command_warnings} WARNING(S)", "yellow"), flush=True)
+    else:
+        print(status("✓ CHECK PASSED", "green"), flush=True)
 
 
 def check(path):
@@ -80,48 +111,57 @@ def main():
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     args = parser.parse_args()
     root = args.root.resolve()
-    run("python3", str(root / "rustclamp/tools/workspace.py"), "--root", str(root), cwd=root)
-    run("cargo", "generate-lockfile", "--offline", cwd=root)
-    run("python3", str(root / "rustclamp/tools/boundaries.py"), "--manifest",
-        str(root / "Cargo.toml"), "--expect-four", cwd=root)
-    check(root)
-    # Copy each package and only its declared internal dependency closure out of the
-    # coordination workspace. Unrelated siblings cannot mask a package failure.
-    for repo in REPOS:
-        with tempfile.TemporaryDirectory(prefix=f"clamp-isolated-{repo}-") as tmp:
-            isolated_root = Path(tmp) / "isolated"
-            isolated_root.mkdir()
-            isolated = isolated_root / repo
-            shutil.copytree(root / repo, isolated, ignore=shutil.ignore_patterns(".git", "target", "__pycache__"))
-            local_dependencies = local_dependency_repositories(root, repo)
-            for dependency_repo in sorted(local_dependencies):
-                shutil.copytree(
-                    root / dependency_repo,
-                    isolated_root / dependency_repo,
-                    ignore=shutil.ignore_patterns(".git", "target", "__pycache__"),
-                )
-            check(isolated)
-            if local_dependencies:
-                # Unpublished internal path dependencies cannot be resolved from
-                # the registry during cargo package's archive verification.
-                run("cargo", "package", "--list", "--offline", "--locked", "--allow-dirty", cwd=isolated)
-            else:
-                run("cargo", "package", "--offline", "--locked", "--allow-dirty", cwd=isolated)
-            consumer = Path(tmp) / "consumer"
-            (consumer / "src").mkdir(parents=True)
-            name = "rustclamp" if repo == "rustclamp" else f"rustclamp-{repo}"
-            (consumer / "Cargo.toml").write_text(
-                '[package]\nname="external-consumer"\nversion="0.0.0"\nedition="2024"\n'
-                f'[dependencies]\n{name}={{version="0.1", path="../isolated/{repo}"}}\n')
-            (consumer / "src/main.rs").write_text("fn main() {}\n")
-            run("cargo", "+1.96.1", "check", "--offline", cwd=consumer)
-            data = json.loads(subprocess.check_output(
-                ["cargo", "+1.96.1", "metadata", "--offline", "--format-version", "1"],
-                cwd=consumer, text=True))
-            actual = {p["name"] for p in data["packages"]}
-            permitted = allowed_package_closure(name) | {name, "external-consumer"}
-            assert actual <= permitted, f"unexpected isolated dependency graph: {sorted(actual - permitted)}"
-    print("Combined, isolated, packaging and relative-path consumer checks passed.")
+    try:
+        run("python3", str(root / "rustclamp/tools/workspace.py"), "--root", str(root), cwd=root)
+        run("cargo", "generate-lockfile", "--offline", cwd=root)
+        run("python3", str(root / "rustclamp/tools/boundaries.py"), "--manifest",
+            str(root / "Cargo.toml"), "--expect-four", cwd=root)
+        check(root)
+        # Copy each package and only its declared internal dependency closure out of the
+        # coordination workspace. Unrelated siblings cannot mask a package failure.
+        for repo in REPOS:
+            with tempfile.TemporaryDirectory(prefix=f"clamp-isolated-{repo}-") as tmp:
+                isolated_root = Path(tmp) / "isolated"
+                isolated_root.mkdir()
+                isolated = isolated_root / repo
+                shutil.copytree(root / repo, isolated, ignore=shutil.ignore_patterns(".git", "target", "__pycache__"))
+                local_dependencies = local_dependency_repositories(root, repo)
+                for dependency_repo in sorted(local_dependencies):
+                    shutil.copytree(
+                        root / dependency_repo,
+                        isolated_root / dependency_repo,
+                        ignore=shutil.ignore_patterns(".git", "target", "__pycache__"),
+                    )
+                check(isolated)
+                if local_dependencies:
+                    # Unpublished internal path dependencies cannot be resolved from
+                    # the registry during cargo package's archive verification.
+                    run("cargo", "package", "--list", "--offline", "--locked", "--allow-dirty", cwd=isolated)
+                else:
+                    run("cargo", "package", "--offline", "--locked", "--allow-dirty", cwd=isolated)
+                consumer = Path(tmp) / "consumer"
+                (consumer / "src").mkdir(parents=True)
+                name = "rustclamp" if repo == "rustclamp" else f"rustclamp-{repo}"
+                (consumer / "Cargo.toml").write_text(
+                    '[package]\nname="external-consumer"\nversion="0.0.0"\nedition="2024"\n'
+                    f'[dependencies]\n{name}={{version="0.1", path="../isolated/{repo}"}}\n')
+                (consumer / "src/main.rs").write_text("fn main() {}\n")
+                run("cargo", "+1.96.1", "check", "--offline", cwd=consumer)
+                data = json.loads(subprocess.check_output(
+                    ["cargo", "+1.96.1", "metadata", "--offline", "--format-version", "1"],
+                    cwd=consumer, text=True))
+                actual = {p["name"] for p in data["packages"]}
+                permitted = allowed_package_closure(name) | {name, "external-consumer"}
+                assert actual <= permitted, f"unexpected isolated dependency graph: {sorted(actual - permitted)}"
+    except Exception:
+        print(status(f"✗ FULL CHECK FAILED after {CHECKS_PASSED} successful commands", "red"), flush=True)
+        raise
+    if CHECKS_WITH_WARNINGS:
+        print(status(
+            f"⚠ FULL CHECK COMPLETED WITH WARNINGS ({CHECKS_PASSED} commands, {CHECKS_WITH_WARNINGS} warnings)",
+            "yellow"), flush=True)
+    else:
+        print(status(f"✓ FULL CHECK SUCCESSFULLY COMPLETED ({CHECKS_PASSED} commands)", "green"), flush=True)
 
 
 if __name__ == "__main__":

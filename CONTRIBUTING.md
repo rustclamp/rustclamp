@@ -41,6 +41,21 @@ cargo metadata --offline --format-version 1
 python3 rustclamp/tools/check.py
 ```
 
+For immediate terminal verdicts on the common run, use:
+
+```sh
+python3 rustclamp/tools/run.py test
+python3 rustclamp/tools/run.py bench
+```
+
+The runner marks passing suites and measured benchmark paths green with `✓`,
+failures red with `✗`, and advisory benchmark or compiler caveats yellow with
+`⚠`. Every benchmark result is followed by its intent in plain language. Each
+run ends with an explicit success, warning, or failure summary. Color is
+automatic for terminals, disabled for redirected output and `NO_COLOR`, and can
+be forced with `--color always`. The benchmark is advisory on an uncontrolled
+host; its warning does not mean the command failed.
+
 `workspace.py` creates the root **virtual Cargo manifest**, never a root Git
 repository. The four siblings remain independently owned, versioned repositories.
 It refuses to overwrite a differing coordination manifest or toolchain file.
