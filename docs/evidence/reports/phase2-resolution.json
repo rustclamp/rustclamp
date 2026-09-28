@@ -19,7 +19,7 @@
   "warmup_iterations": 2000,
   "sample_count": 9,
   "units": "integer nanoseconds per operation",
-  "paths": [
+  "original_run_before_qualifier_path": [
     {
       "name": "direct_typed_access",
       "candidate_count": 0,
@@ -47,6 +47,32 @@
       "samples_ns_per_operation": [31, 31, 31, 31, 31, 31, 31, 31, 31]
     }
   ],
+  "follow_up_run_after_shared_resolver_refactor": {
+    "sample_count": 9,
+    "paths": [
+      {"name": "direct_typed_access", "candidate_count": 0, "median_ns_per_operation": 2, "samples_ns_per_operation": [2, 2, 2, 2, 2, 2, 2, 2, 2]},
+      {"name": "resolve_unique", "candidate_count": 1, "median_ns_per_operation": 7, "samples_ns_per_operation": [6, 7, 7, 7, 7, 7, 8, 10, 11]},
+      {"name": "resolve_selected_2", "candidate_count": 2, "selected_position": "last", "median_ns_per_operation": 11, "samples_ns_per_operation": [11, 11, 11, 11, 11, 11, 12, 12, 14]},
+      {"name": "resolve_selected_8", "candidate_count": 8, "selected_position": "last", "median_ns_per_operation": 27, "samples_ns_per_operation": [26, 26, 26, 27, 27, 27, 27, 27, 34]},
+      {"name": "resolve_qualified_unique", "qualifier": "bench.primary", "candidate_count": 1, "median_ns_per_operation": 5, "samples_ns_per_operation": [5, 5, 5, 5, 5, 5, 5, 5, 6]},
+      {"name": "resolve_qualified_selected_8", "qualifier": "bench.primary", "candidate_count": 8, "selected_position": "last", "median_ns_per_operation": 27, "samples_ns_per_operation": [26, 26, 26, 26, 27, 27, 28, 28, 32]}
+    ]
+  },
+  "latest_run_after_cardinality_addition": {
+    "sample_count": 9,
+    "paths": [
+      {"name": "direct_typed_access", "candidate_count": 0, "median_ns_per_operation": 2, "samples_ns_per_operation": [2, 2, 2, 2, 2, 2, 2, 2, 5]},
+      {"name": "resolve_unique", "candidate_count": 1, "median_ns_per_operation": 8, "samples_ns_per_operation": [8, 8, 8, 8, 8, 8, 8, 8, 8]},
+      {"name": "resolve_selected_2", "candidate_count": 2, "selected_position": "last", "median_ns_per_operation": 12, "samples_ns_per_operation": [12, 12, 12, 12, 12, 12, 12, 12, 13]},
+      {"name": "resolve_selected_8", "candidate_count": 8, "selected_position": "last", "median_ns_per_operation": 29, "samples_ns_per_operation": [27, 27, 28, 28, 29, 29, 29, 31, 31]},
+      {"name": "resolve_qualified_unique", "qualifier": "bench.primary", "candidate_count": 1, "median_ns_per_operation": 6, "samples_ns_per_operation": [6, 6, 6, 6, 6, 6, 6, 6, 6]},
+      {"name": "resolve_qualified_selected_8", "qualifier": "bench.primary", "candidate_count": 8, "selected_position": "last", "median_ns_per_operation": 27, "samples_ns_per_operation": [26, 27, 27, 27, 27, 27, 27, 27, 29]},
+      {"name": "resolve_optional_absent", "candidate_count": 0, "median_ns_per_operation": 6, "samples_ns_per_operation": [6, 6, 6, 6, 6, 6, 7, 7, 7]},
+      {"name": "resolve_optional_unique", "candidate_count": 1, "median_ns_per_operation": 3, "samples_ns_per_operation": [3, 3, 3, 3, 3, 3, 3, 3, 3]},
+      {"name": "resolve_many_2", "candidate_count": 2, "median_ns_per_operation": 17, "samples_ns_per_operation": [17, 17, 17, 17, 17, 17, 17, 17, 19]},
+      {"name": "resolve_many_8", "candidate_count": 8, "median_ns_per_operation": 40, "samples_ns_per_operation": [39, 39, 39, 40, 40, 40, 40, 40, 40]}
+    ]
+  },
   "limitations": [
     "Single host and first-run microbenchmark; no regression threshold is justified.",
     "Nanosecond-scale timing is sensitive to scheduling, frequency, compiler optimization, and timer granularity.",
