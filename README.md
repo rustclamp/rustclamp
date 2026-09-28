@@ -49,10 +49,34 @@ architecture below is a design direction, not a working end-to-end pipeline.
 “Application modules” means modules in a user's application, not these companion
 repositories.
 
-The first Kernel resolver comparison measured 2 ns per direct typed access, 5 ns
-for a unique provision, 12 ns for explicit selection from two, and 31 ns from
-eight candidates on the recorded host. These are microbenchmark observations,
-not an application latency promise; see the [Phase 2 evidence](docs/evidence/phase2.md).
+## Phase 1 and Phase 2 Measurements
+
+Phase 1 measured the Pico facade against plain Rust. Phase 2 measured Kernel's
+typed capability resolver against direct typed access. The workloads differ, so
+the phase columns below are context, not a before/after speedup comparison.
+
+| Metric | Phase 1: plain Rust | Phase 1: Pico | Phase 2: Kernel |
+| --- | ---: | ---: | ---: |
+| Clean-build median | 232.40 ms | 269.18 ms | 416.90 ms |
+| Unchanged rebuild median | 133.48 ms | 135.15 ms | 40.37 ms |
+| Process wall-time median | 1.203 ms | 1.256 ms | 1.516 ms |
+| Release binary size | 4,335,592 B | 4,335,592 B | 4,365,760 B |
+| Dependency packages | 0 | 1 facade | 1 internal (Core) |
+
+Phase 1's paired comparison found Pico added 36.78 ms to the clean-build
+median, 1.67 ms to the unchanged-build median, and 0 bytes to the binary. Phase
+2's resolver microbenchmark measured direct typed access at 2 ns/op, unique
+resolution at 5 ns/op (+3 ns), selection from two providers at 12 ns/op (+10 ns),
+and selection from eight at 31 ns/op (+29 ns). Those are nine-sample medians;
+they are resolver operation costs, not end-to-end application latency.
+
+The build and process numbers between phases are not apples-to-apples: Phase 1
+uses matched plain/Pico hello-world consumers, while Phase 2 builds/runs a
+Kernel clock-resolution example with Core. The Phase 2 process measurement also
+includes process launch, output, and exit. Do not interpret the cross-phase
+difference as a regression or improvement. See [Phase 1 evidence](docs/evidence/phase1.md)
+and [Phase 2 evidence](docs/evidence/phase2.md) for methods, limitations, and raw
+samples.
 
 ## Target Architecture
 
