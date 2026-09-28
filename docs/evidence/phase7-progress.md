@@ -8,7 +8,10 @@ event explicitly to this envelope before serialization.
 
 The boundary and JSON payload choice are recorded in
 [ADR 0006](../adr/0006-phase7-message-boundary.md). The package is added to the
-local workspace and isolated-package tooling. It has no Core or Kernel dependency.
+local workspace and isolated-package tooling. Its `MessageBus` capability is
+typed through Core, while transport and serialization remain outside Core and
+Kernel. The bounded in-memory bus is for tests and development; it does not
+claim cross-process delivery.
 
 ## Verification so far
 
@@ -16,9 +19,11 @@ local workspace and isolated-package tooling. It has no Core or Kernel dependenc
   package.
 - `cargo fmt -- --check` passes for the messaging package.
 - The messaging package's resolved dependency closure passes the boundary policy.
-- The event-mapping example is run separately as the P7-02 demonstration.
+- The event-mapping example prints the explicit envelope's JSON representation.
+- The in-memory bus is bounded and returns a full-queue envelope to the caller
+  for retry rather than dropping it.
 
 ## Next
 
-Add the in-memory message transport, then prove handler contributions and the
-API-to-worker path before selecting one transport for the separate-process proof.
+Select a real transport for the separate-process proof, then prove handler
+contributions and the API-to-worker path.

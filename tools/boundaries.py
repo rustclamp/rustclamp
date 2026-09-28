@@ -15,6 +15,7 @@ ALLOWED = {
     "rustclamp-messaging": {
         "itoa", "memchr", "proc-macro2", "quote", "serde", "serde_core",
         "serde_derive", "serde_json", "syn", "unicode-ident", "zmij",
+        "rustclamp-core",
     },
     "rustclamp-runtime": {
     'bytes',
