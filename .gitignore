@@ -1,3 +1,4 @@
 /target/
 /examples/*/target/
+/examples/*/*/target/
 __pycache__/
