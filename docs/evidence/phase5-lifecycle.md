@@ -55,9 +55,11 @@ details are in the [raw report](reports/phase5-lifecycle-build.json); the Phase
 
 ## Remaining Phase 5 Work
 
-This package is a proof, not a public production lifecycle API. Managed versus
-external ownership, shared application/process lifetime, execution-scoped
-resources, observability failure behavior, stable opt-in participation
-contracts, a reusable synchronous runtime driver, and the optional Tokio
-adapter and supervision remain open. No Tokio dependency or runtime repository
-was added.
+This package is a proof, not a public production lifecycle API. Core now defines
+independent synchronous Initialize, Start, Ready, Drain, and Stop contracts and
+an identity-only `LifecycleContext`; the fixture driver is not yet wired to
+dispatch those traits. Managed versus external ownership, shared
+application/process lifetime, execution-scoped resources, observability failure
+behavior, a reusable synchronous runtime driver, and the optional Tokio adapter
+and supervision remain open. No Tokio dependency or runtime repository was
+added.

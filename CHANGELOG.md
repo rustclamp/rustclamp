@@ -28,3 +28,5 @@
   dependency order, readiness, failure cleanup, deadlines, health, and shutdown.
 - Added Phase 5 lifecycle evidence with fake-clock metrics and qualified
   build-footprint comparisons against the Phase 4 process example.
+- Documented Core's opt-in synchronous lifecycle participation contracts in
+  the lifecycle example and Phase 5 evidence.

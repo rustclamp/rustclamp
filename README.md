@@ -62,6 +62,9 @@ out of scope until the synchronous coordination contract is established.
 The [Phase 5 progress report](docs/evidence/phase5-lifecycle.md) compares its
 build footprint with the Phase 4 process example and separates measured process
 wall time from deterministic fake-clock readiness durations.
+Core now provides opt-in phase traits and an identity-only lifecycle context;
+they add no dispatcher or runtime, and modules that implement only `Module`
+remain unchanged.
 
 ## Project Map
 
