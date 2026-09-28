@@ -100,8 +100,8 @@ def main():
         "incremental_noop_seconds": incremental, "incremental_noop_median_seconds": statistics.median(incremental),
         "binary_bytes": sizes or None, "process_wall_seconds": startup or None,
         "runtime_allocations": None, "runtime_memory": None, "runtime_cpu": None,
-        "limitations": ["No executable in phase 0; binary and runtime costs are not applicable unless --example is supplied.",
-                        "Process wall time includes spawn, program execution, output redirection and exit; it does not isolate initialization.",
+        "limitations": (["No executable was measured; pass --example to record executable metrics."] if not args.example else []) +
+                       ["Process wall time includes spawn, program execution, output redirection and exit; it does not isolate initialization.",
                         "Allocation counts require a separate instrumented prototype; CPU and memory need a workload-specific measurement.",
                         "Incremental samples are unchanged builds, not edited-source recompilation."]}
     args.output.parent.mkdir(parents=True, exist_ok=True)

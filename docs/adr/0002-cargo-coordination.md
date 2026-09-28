@@ -52,3 +52,24 @@ licensing and registry access remain undecided.
 - [Rust 1.96.1 release](https://blog.rust-lang.org/2026/06/30/Rust-1.96.1/)
 - [Phase 0 evidence](../evidence/phase0.md)
 - [Release conventions](../releases.md)
+
+## Layout Comparison
+
+~~~mermaid
+flowchart LR
+    Siblings[Independent package repositories] --> Generate[Generate virtual manifest at common parent]
+    Generate --> Metadata[cargo metadata]
+    Metadata --> Check[Combined and isolated checks]
+    Check --> Consumers[Relative-path consumers]
+~~~
+
+| Layout | Observed tradeoff | Decision |
+| --- | --- | --- |
+| Manifest under `workspace/` with `../core` members | Cargo 1.96.1 rejects members outside the workspace hierarchy | Reject |
+| `package.workspace` in independent manifests | Couples each package manifest to one developer checkout | Reject |
+| Generated virtual manifest at ecosystem parent | Coordinates siblings and preserves standalone package manifests | Adopt |
+| One Git monorepo | Simplifies one local manifest but changes agreed repository ownership | Not adopted |
+
+Verification checks membership and resolved dependency edges with Cargo, then
+repeats package checks from isolated copies. The generated manifest is local
+coordination state; it does not change Git ownership.

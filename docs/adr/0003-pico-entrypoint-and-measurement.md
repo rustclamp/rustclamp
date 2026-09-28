@@ -16,6 +16,25 @@ dependencies. There is no composition or lifecycle work to perform, no registry
 or state to retain, no thread to start, and no allocation in the implementation.
 Later composition entrypoints must preserve this minimal closure path.
 
+~~~mermaid
+flowchart LR
+    Caller[Caller thread] --> Once[Invoke FnOnce once]
+    Once --> Result[Return R unchanged]
+    Once -. no framework composition .-> Done[Return to caller]
+~~~
+
+| Property | Plain Rust | Pico |
+| --- | --- | --- |
+| Resolved packages | Consumer only | Consumer and facade |
+| Facade dependencies | — | 0 |
+| Entrypoint allocation observation | 0 | 0 |
+| Binary size, recorded profile | 4,335,592 B | 4,335,592 B |
+| Error and panic behavior | Native Rust | Preserved from closure |
+
+The size and allocation equality apply to the measured target and harness.
+Compiler cost differs, and process timing includes launch/output/exit. Full paired
+samples and limitations are in [Phase 1 evidence](../evidence/phase1.md).
+
 `examples/00-pico/main.rs` is an explicit Cargo example. The plain control has
 identical output in `benchmarks/fixtures/plain.rs`. The cost harness builds each
 as an isolated application with identical package names, profile settings and

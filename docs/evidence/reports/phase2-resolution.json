@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-28",
+  "benchmark": "kernel/benches/resolution.rs",
+  "toolchain": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+  "target": "x86_64-unknown-linux-gnu",
+  "machine": "AMD Ryzen 5 PRO 4650U with Radeon Graphics; Linux 6.18.53-1-lts",
+  "profile": {
+    "name": "bench",
+    "opt_level": 3,
+    "debug": false,
+    "strip": "none",
+    "lto": false,
+    "codegen_units": 16,
+    "panic": "unwind"
+  },
+  "command": "cargo bench --offline --locked -p rustclamp-kernel --bench resolution",
+  "iterations_per_sample": 100000,
+  "warmup_iterations": 2000,
+  "sample_count": 9,
+  "units": "integer nanoseconds per operation",
+  "paths": [
+    {
+      "name": "direct_typed_access",
+      "candidate_count": 0,
+      "median_ns_per_operation": 2,
+      "samples_ns_per_operation": [2, 2, 2, 2, 2, 2, 2, 2, 2]
+    },
+    {
+      "name": "resolve_unique",
+      "candidate_count": 1,
+      "median_ns_per_operation": 5,
+      "samples_ns_per_operation": [5, 5, 5, 5, 5, 5, 5, 5, 5]
+    },
+    {
+      "name": "resolve_selected_2",
+      "candidate_count": 2,
+      "selected_position": "last",
+      "median_ns_per_operation": 12,
+      "samples_ns_per_operation": [12, 12, 12, 12, 12, 12, 12, 12, 13]
+    },
+    {
+      "name": "resolve_selected_8",
+      "candidate_count": 8,
+      "selected_position": "last",
+      "median_ns_per_operation": 31,
+      "samples_ns_per_operation": [31, 31, 31, 31, 31, 31, 31, 31, 31]
+    }
+  ],
+  "limitations": [
+    "Single host and first-run microbenchmark; no regression threshold is justified.",
+    "Nanosecond-scale timing is sensitive to scheduling, frequency, compiler optimization, and timer granularity.",
+    "No allocator instrumentation, RSS, CPU utilization, or controlled host load was recorded."
+  ]
+}

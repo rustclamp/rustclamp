@@ -5,6 +5,19 @@ Each package has its own version and changelog. Initial scaffolds happen to use
 compatible ranges as dependencies appear. Do not expose a lower package's private
 implementation as an integration API.
 
+## Release Flow
+
+```mermaid
+flowchart TD
+    Change[Change owning package] --> Checks[Combined and isolated checks]
+    Checks --> Review[Review changelog and package contents]
+    Review --> Gate{License, name, registry access verified?}
+    Gate -->|No| Hold[Keep publishing disabled]
+    Gate -->|Yes| DryRun[Package and publish dry run]
+    DryRun --> Release[Publish and tag verified revision]
+    Release --> Consumer[Build a fresh registry consumer]
+```
+
 Use SemVer. During `0.x`, breaking public API changes increment the minor version;
 compatible fixes increment the patch version. Public re-exports, documented feature
 behavior and MSRV are part of compatibility. Treat an MSRV increase as a breaking
@@ -36,3 +49,14 @@ Before enabling publication:
 No registry-dependent publish dry run is claimed by Phase 0. Core, Kernel and
 Runtime may release independently; the facade follows only when it needs their
 changes. Initial site repository visibility is separate from Cargo publishing.
+
+## Release Evidence
+
+| Gate | Required evidence |
+| --- | --- |
+| Package quality | Combined plus isolated format, lint, tests, and rustdoc |
+| Boundary safety | Resolved dependency checks for every dependency kind |
+| Artifact quality | `cargo package --list`, package verification, publish dry run |
+| Consumer behavior | Fresh consumer built from registry versions |
+| Compatibility | Changelog, dependency ranges, feature support, MSRV |
+| Remote execution | Hosted workflow status, tracked separately from local pass |

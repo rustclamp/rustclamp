@@ -56,3 +56,29 @@ signatures. `rustclamp::prelude::*` and `Clamp::run(...)` are prototype targets,
 not Phase 0 implemented APIs. The developer binary name `clamp` is provisional;
 no CLI or integration package is created. Package name availability, licensing and
 registry publication remain release gates distinct from local builds.
+
+## Architecture Flow
+
+~~~mermaid
+flowchart TD
+    Sources[Historical specifications] --> Reconcile[Record conflicts and evidence]
+    Reconcile --> Composition[v1.5 composition baseline]
+    Reconcile --> Names[Brand and package naming]
+    Reconcile --> Ownership[Repository ownership]
+    Composition --> Prototypes[Phased implementation proofs]
+    Names --> Prototypes
+    Ownership --> Prototypes
+~~~
+
+## Alternatives Considered
+
+| Choice | Decision | Rationale |
+| --- | --- | --- |
+| Neo vs Clamp | Clamp for framework; retain Neo historically | Align implementation with the adopted public brand |
+| Monorepo vs sibling repositories | Sibling repositories | Independent ownership and release boundaries are explicit |
+| `neo-*` vs `rustclamp-*` packages | `rustclamp-*` | Matches the package namespace decision |
+| Create every future package now | Four initial package repositories | New boundaries must be earned by working prototypes |
+| Infer deployment from repository creation | Verify domains and hosting separately | A repository is not deployment evidence |
+
+The decisions fix names and ownership boundaries while leaving Rust API
+signatures open until experiments establish useful contracts.

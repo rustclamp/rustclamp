@@ -5,6 +5,23 @@ Pico closure entrypoint in `examples/00-pico/`; all four libraries remain free o
 dependencies. Runtime, lifecycle and integration contracts must be justified by
 subsequent prototypes.
 
+## Decision and Change Flow
+
+```mermaid
+flowchart LR
+    Question[Concrete question] --> Prototype[Smallest prototype]
+    Prototype --> Tests[Correctness and failure tests]
+    Tests --> Measure[Measure against a control]
+    Measure --> Inspect[Inspect dependencies and composition]
+    Inspect --> Decision[Record decision and limits]
+    Decision --> Change[Change the owning repository]
+    Change --> Check[Run local and isolated checks]
+```
+
+Use this flow to decide whether a concept belongs in Core, Kernel, Runtime, an
+integration, or application code. A benchmark without a correctness control, or
+a design without a failure case, is incomplete evidence.
+
 ## Checkout and checks
 
 Prerequisites: Git, rustup, Python 3.11 or newer, and Rust 1.96.1 with rustfmt and
@@ -32,9 +49,10 @@ experiments; `playground/` holds disposable apps. Their contents are local.
 The reproducible coordination source lives in this repository's `tools/`.
 
 The full check verifies workspace membership, boundaries, formatting, Clippy,
-tests and rustdoc, then copies each package into an unrelated temporary directory.
-It checks and packages that copy and builds a consumer using a versioned relative
-path. This prevents parent workspace discovery from hiding isolated build failures.
+tests and rustdoc, then copies each package and its declared internal dependency
+closure into a temporary directory. It builds a consumer using versioned relative
+paths. For packages with unpublished internal dependencies, it checks the package
+file list; full archive verification waits until dependencies exist in the registry.
 Python powers the dependency harness; it adds no Rust package dependency.
 
 For a single repository, clone it outside the ecosystem workspace and run the
@@ -89,3 +107,15 @@ Use small commits in the owning repository. Stage explicit project paths and
 inspect staged changes before committing. Keep AI configuration out of commits.
 Document public behavior and compatibility changes in that package's changelog.
 See [release conventions](docs/releases.md) and [measurement protocol](docs/measurements.md).
+
+## Check Matrix
+
+| Check level | What it catches | Current command |
+| --- | --- | --- |
+| Coordinated workspace | Cross-package integration and architecture edges | `python3 rustclamp/tools/check.py` from ecosystem root |
+| Isolated package copy | Accidental parent workspace or sibling dependence | Included in the facade check |
+| Public consumer | Relative path and published-manifest behavior | Included in the facade check |
+| Hosted CI | Remote workflow execution | Pending GitHub token `workflow` scope |
+
+Passing a combined build does not replace isolated-consumer checks. Likewise,
+local CI-equivalent results do not establish that hosted workflows have run.

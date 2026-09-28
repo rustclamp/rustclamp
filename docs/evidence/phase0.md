@@ -1,5 +1,16 @@
 # Phase 0 evidence
 
+~~~mermaid
+flowchart TD
+    Repositories[Six independently owned repositories] --> Checkout[Fresh coordinated checkout]
+    Checkout --> Metadata[Cargo membership and dependency metadata]
+    Metadata --> Boundaries[Positive and negative dependency fixtures]
+    Boundaries --> Package[Isolated package and consumer checks]
+    Package --> Local[Local checks and evidence]
+    Local --> Hosted[Hosted workflow publication]
+    Hosted -->|Blocked: token scope| Pending[Hosted CI remains unverified]
+~~~
+
 Date: 2026-09-28. Compiler/MSRV: Rust 1.96.1. Host: x86_64 Linux.
 
 ## Layout and ownership
@@ -83,3 +94,20 @@ were not introduced into Core, Kernel or Runtime.
 
 `graphify update .` completed after the initial sandboxed attempt failed; its local
 generated graph remains outside the six repositories.
+
+## Comparison and Interpretation
+
+| Verification path | Result | What it establishes |
+| --- | --- | --- |
+| Combined local workspace | Pass | Current sibling revisions compose and satisfy dependency boundaries |
+| Fresh coordinated clone | Pass | Checkout instructions reconstruct a working development setup |
+| Isolated package copies | Pass | Packages build without parent-workspace assistance |
+| Relative-path consumers | Pass | Current local consumer manifests build |
+| Hosted GitHub workflows | Not run | Token cannot publish workflow files without the `workflow` scope |
+| Registry publication | Not run | License, name ownership, and registry access remain release gates |
+
+Seven deliberately invalid dependency fixtures are rejected and one allowed
+Kernel-to-Core edge is accepted. This validates the local harness, not hosted CI
+or registry behavior. There are no public behavioral contracts to benchmark in
+this phase, so library binary, startup, and allocation costs are not applicable,
+not zero.

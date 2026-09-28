@@ -1,5 +1,17 @@
 # Phase 1: Pico and plain Rust
 
+~~~mermaid
+flowchart LR
+    Plain[Plain Rust control] --> Match[Same payload, toolchain, flags, isolated workspace]
+    Pico[Pico facade] --> Match
+    Match --> Correctness[Output and exit checks]
+    Match --> Allocations[Separate allocation probe]
+    Match --> Metrics[Paired build, size, and process samples]
+    Correctness --> Findings[Interpret with host and harness limits]
+    Allocations --> Findings
+    Metrics --> Findings
+~~~
+
 Date: 2026-09-28. Local CI-equivalent checks pass. Source snapshots are published
 to the four package repositories. The CI workflow files remain local because the
 GitHub token lacks the `workflow` scope. No hosted checks have run; publish the
@@ -108,3 +120,29 @@ scope.
 
 Capability resolution remains Phase 2 work. No additional framework package,
 integration or composition subsystem was introduced.
+
+## Comparison Summary
+
+| Observation | Plain Rust | Pico | Interpretation |
+| --- | ---: | ---: | --- |
+| Resolved packages | 0 | Facade only | One additional package with no facade dependencies |
+| Clean-build median | 232.40 ms | 269.18 ms | +36.78 ms on this host; no timing gate from five samples |
+| Unchanged rebuild | 133.48 ms | 135.15 ms | +1.67 ms median |
+| Binary size | 4,335,592 B | 4,335,592 B | Equal under the recorded release profile |
+| Empty entrypoint allocations | 0 | 0 | No observed framework allocation |
+| Process wall-time median | 1.203 ms | 1.256 ms | Samples overlap; process launch and I/O are included |
+
+## Verification Matrix
+
+| Surface | Control or failure case | Result |
+| --- | --- | --- |
+| Entry behavior | Closure runs exactly once on caller thread | Pass |
+| Rust ownership | Borrowed mutable data, returned borrow, owned non-`Send` capture | Pass |
+| Result semantics | Structured error passes through unchanged | Pass |
+| Panic and cleanup | Panic payload propagates; drop guard runs once under unwind | Pass |
+| Dependency surface | Isolated graph and activated features | Facade only, no dependencies |
+| Measurement validity | Allocation positive controls in debug and release | Pass; optimizer limits documented |
+
+The evidence supports keeping Pico outside Core, Kernel, and Runtime. It does not
+justify a universal “zero overhead” claim; later comparisons must repeat this
+method for their real workload.

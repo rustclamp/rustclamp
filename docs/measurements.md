@@ -1,5 +1,21 @@
 # Prototype measurement protocol
 
+The protocol compares an implementation with a control under matched conditions.
+It is intended to expose costs and limits, not to manufacture a single
+framework-performance score.
+
+The current typed capability-resolution comparison is recorded in
+[Phase 2 evidence](evidence/phase2.md), with raw resolver samples and build data.
+
+```mermaid
+flowchart LR
+    Define[Define equivalent workloads] --> Isolate[Isolate consumers]
+    Isolate --> Match[Match toolchain and flags]
+    Match --> Alternate[Alternate paired runs]
+    Alternate --> Preserve[Preserve raw samples and environment]
+    Preserve --> Interpret[Interpret with limitations]
+```
+
 For the runnable Pico/plain comparison, use:
 
 ```sh
@@ -58,3 +74,21 @@ CPU use, sustained workload and compiler-detail measurements when relevant to th
 prototype. Missing measurements use JSON `null` with an explanation, never zero.
 Phase 0 has library scaffolds only, so it cannot establish binary, startup or
 allocation overhead. Its report verifies the recording procedure.
+
+## Comparison Rules
+
+| Comparison | Hold constant | Report separately |
+| --- | --- | --- |
+| Pico vs plain Rust | Output, toolchain, profile, flags, host | Dependency graph, clean/edit/unchanged builds, binary size, process wall time, entrypoint allocations |
+| Capability resolution vs direct typed access | Capability value, toolchain, profile, host | Unique resolution and explicit-selection cost at increasing candidate counts; structured failure paths separately |
+| Combined vs isolated package | Package source and toolchain | Workspace feature unification and parent-manifest effects |
+| Runtime adapter vs direct runtime use | Workload, concurrency, runtime configuration | Framework coordination work, task/thread count, readiness and shutdown time |
+| Contribution assembly vs direct structure | Resulting routes/tree/table and conflict rules | Composition cost, retained runtime structure, target-owned validation |
+| Simulation vs direct loop | Inputs, clock, random seed, update order | Repeatability, throughput, allocations, compile and binary cost |
+
+Interpret paired medians with their raw sample range and machine conditions.
+Do not infer a causal runtime penalty from Cargo build time, or initialization
+cost from process timing that includes spawn and I/O. A missing measurement is
+unknown; it is not zero. Set regression budgets from repeated evidence on a
+controlled host, then keep platform comparisons advisory unless that host and
+toolchain are part of the supported target.

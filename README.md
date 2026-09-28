@@ -35,26 +35,32 @@ run in independent repositories and in the combined developer checkout.
 | Repository | Responsibility | Status |
 | --- | --- | --- |
 | [`rustclamp`](https://github.com/rustclamp/rustclamp) | Main framework facade and application entry point | Pico is implemented and measured |
-| [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts | `Clock` contract added; no composition yet |
-| [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Scaffold; no public behavior |
+| [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts | `Clock` contract |
+| [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Typed single-capability resolution; no full module composition |
 | [`runtime`](https://github.com/rustclamp/runtime) | Execution-environment contracts | Scaffold; no public contracts |
 | [`docs.rustclamp.com`](https://github.com/rustclamp/docs.rustclamp.com) | User and architecture documentation | Supporting repository, not a framework component |
 | [`rustclamp.com`](https://github.com/rustclamp/rustclamp.com) | Project website | Supporting repository, not a framework component |
 
-Today, the demonstrated framework path is only `Clamp::run`: it runs a closure
-synchronously on the current thread. Core now defines a `Clock` contract, and
-its example injects a clock with ordinary Rust constructors; Kernel does not yet
-resolve that dependency. Kernel and Runtime remain scaffolds. The target
+Today, the demonstrated facade path is `Clamp::run`: it runs a closure
+synchronously on the current thread. Core defines a `Clock` contract, and Kernel
+can resolve one typed requirement with explicit selection. Full module composition,
+process projection, and runtime integration are not implemented. The target
 architecture below is a design direction, not a working end-to-end pipeline.
 “Application modules” means modules in a user's application, not these companion
 repositories.
+
+The first Kernel resolver comparison measured 2 ns per direct typed access, 5 ns
+for a unique provision, 12 ns for explicit selection from two, and 31 ns from
+eight candidates on the recorded host. These are microbenchmark observations,
+not an application latency promise; see the [Phase 2 evidence](docs/evidence/phase2.md).
 
 ## Target Architecture
 
 The target model grows from selected process roots. Reachability determines
 which modules, providers, contributions, configuration, and resources participate.
 The Kernel coordinates the resolved projection; a selected runtime drives work.
-Only the Pico entrypoint has been proven so far; later stages remain experimental.
+Pico is the only end-to-end facade path. Capability resolution is currently a
+focused Kernel prototype; later stages remain experimental.
 
 ```mermaid
 flowchart LR
