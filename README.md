@@ -36,13 +36,19 @@ Two facade-free Phase 2 consumers are also runnable from this repository:
 Core and resolves them through Kernel. Their tests run with
 `python3 tools/check.py`.
 
+`examples/03-contribution` adds a typed CLI command target. Core exposes only
+generic declaration/target contracts, Kernel checks that required declarations
+are consumed, and the CLI target owns duplicate-name validation, deterministic
+ordering, empty-tree behavior, and runtime command execution. This is a focused
+target prototype, not a production console package or process projection.
+
 ## Project Map
 
 | Repository | Responsibility | Status |
 | --- | --- | --- |
 | [`rustclamp`](https://github.com/rustclamp/rustclamp) | Main framework facade and application entry point | Pico is implemented and measured |
 | [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts | `Clock` and additive module/capability declarations |
-| [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Typed capability resolution and validation; no automated whole-app composition |
+| [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Typed capability resolution and generic contribution-target assembly; no automated whole-app composition |
 | [`runtime`](https://github.com/rustclamp/runtime) | Execution-environment contracts | Scaffold; no public contracts |
 | [`docs.rustclamp.com`](https://github.com/rustclamp/docs.rustclamp.com) | User and architecture documentation | Supporting repository, not a framework component |
 | [`rustclamp.com`](https://github.com/rustclamp/rustclamp.com) | Project website | Supporting repository, not a framework component |
@@ -116,6 +122,38 @@ includes process launch, output, and exit. Do not interpret the cross-phase
 difference as a regression or improvement. See [Phase 1 evidence](docs/evidence/phase1.md)
 and [Phase 2 evidence](docs/evidence/phase2.md) for methods, limitations, and raw
 samples.
+
+## Phase 3: Contribution Target Prototype
+
+The third example proves a small domain-owned assembly path. Hello and Goodbye
+modules declare commands; Kernel carries typed declarations and catches
+required orphans; the CLI target owns duplicate checking, alphabetical order,
+and the built command tree. Public and admin command declarations have distinct
+types. The tree runs commands without retaining the full composition metadata.
+
+```mermaid
+flowchart LR
+    Modules[Command modules] --> Declarations[Typed declarations]
+    Declarations --> Kernel[Kernel active target composition]
+    Kernel --> Cli[CLI-owned validation and ordering]
+    Cli --> Tree[Runtime CommandTree]
+    Tree --> Run[Execute command]
+```
+
+| Metric | Phase 3 observation |
+| --- | ---: |
+| Assembly of two commands | 86 ns/op median |
+| Runtime tree storage | 96 B, including vector capacity |
+| Clean release build | 1.116 s median, 3 runs |
+| Unchanged release rebuild | 61.84 ms median |
+| Release executable | 4,367,280 B |
+| Internal dependencies | Core + Kernel; no facade |
+
+These figures describe a tiny synthetic target, not total framework overhead.
+Allocation calls are not instrumented, process time includes launch/output, and
+Phase 2 examples are not a comparable baseline. Full commands, samples,
+limitations, and test cases are in the
+[Phase 3 evidence](docs/evidence/phase3.md).
 
 ## Target Architecture
 

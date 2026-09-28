@@ -17,3 +17,5 @@
 - Added facade-free Clock and module consumer examples, request-state and
   non-Send borrowing tests, and example checks to the coordinated runner.
 - Recorded Phase 2 example build reports and synthetic 1/5/20-module measurements.
+- Added a target-owned CLI contribution example with qualified command sets,
+  structured conflicts, orphan validation, and assembly/runtime measurements.

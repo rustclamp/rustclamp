@@ -110,6 +110,7 @@ def check_examples(root):
     examples = (
         ("01-capability", "rustclamp-example-capability"),
         ("02-module", "rustclamp-example-module"),
+        ("03-contribution", "rustclamp-example-contribution"),
     )
     for example, package_name in examples:
         example_root = root / "rustclamp/examples" / example
@@ -137,6 +138,9 @@ def check_examples(root):
         run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest), cwd=root)
         run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
             "--example", example, cwd=root)
+        if example == "03-contribution":
+            run("cargo", "bench", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--bench", "assembly", cwd=root)
 
 
 def main():
