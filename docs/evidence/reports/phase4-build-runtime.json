@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-28T15:46:25.244522+00:00",
+  "package": "rustclamp-process-build-targets",
+  "source_sha256": "3cd6c0a2d114b543e928992d9b6be0b28069f4e42ba8b2f6447eaca09c2944d0",
+  "toolchain": "rustc 1.96.1 (31fca3adb 2026-06-26)\nbinary: rustc\ncommit-hash: 31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd\ncommit-date: 2026-06-26\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.1\nLLVM version: 22.1.2",
+  "cargo": "cargo 1.96.1 (356927216 2026-06-26)",
+  "target": "x86_64-unknown-linux-gnu",
+  "machine": {
+    "platform": "Linux-6.18.53-1-lts-x86_64-with-glibc2.44",
+    "cpu_count": 12,
+    "cpu": ": AMD Ryzen 5 PRO 4650U with Radeon Graphics",
+    "memory": "MemTotal:       15674960 kB"
+  },
+  "profile": {
+    "name": "release",
+    "explicit_settings": {}
+  },
+  "features": {
+    "default": false,
+    "explicit": "runtime-selected"
+  },
+  "environment": {
+    "RUSTFLAGS": "",
+    "CARGO_ENCODED_RUSTFLAGS": "",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": ""
+  },
+  "build_configuration": "Cargo manifests and .cargo/config files are authoritative; archive alongside report",
+  "workspace_manifest_sha256": "95df36dc93ec43f3632ceec5930212d20e8a5815ecd52f47f895f78b03724ce0",
+  "lockfile_sha256": "3911ef643b80f0d06001ad72db76f422b30eef3e650bb7a88f4d4fa74d33363b",
+  "cache": "Fresh target directory per clean sample; OS page cache uncontrolled; immediate unchanged rebuild; CARGO_INCREMENTAL=1",
+  "repetitions": 2,
+  "commands": {
+    "build": [
+      "cargo",
+      "build",
+      "--offline",
+      "--locked",
+      "--release",
+      "--manifest-path",
+      "/home/neo/projects/rustclamp/rustclamp/examples/04-process/build-targets/Cargo.toml",
+      "--package",
+      "rustclamp-process-build-targets",
+      "--no-default-features",
+      "--features",
+      "runtime-selected",
+      "--bin",
+      "runtime-selected",
+      "--target",
+      "x86_64-unknown-linux-gnu"
+    ],
+    "metadata": [
+      "cargo",
+      "metadata",
+      "--offline",
+      "--locked",
+      "--format-version",
+      "1",
+      "--manifest-path",
+      "/home/neo/projects/rustclamp/rustclamp/examples/04-process/build-targets/Cargo.toml",
+      "--no-default-features",
+      "--features",
+      "runtime-selected"
+    ]
+  },
+  "dependency_count": 2,
+  "clean_seconds": [
+    2.023731677,
+    2.004830598
+  ],
+  "clean_median_seconds": 2.0142811375,
+  "incremental_noop_seconds": [
+    0.040228046,
+    0.041595473
+  ],
+  "incremental_noop_median_seconds": 0.040911759500000006,
+  "binary_bytes": [
+    664504,
+    664504
+  ],
+  "process_wall_seconds": [
+    0.001328772,
+    0.001296181
+  ],
+  "runtime_allocations": null,
+  "runtime_memory": null,
+  "runtime_cpu": null,
+  "limitations": [
+    "Process wall time includes spawn, program execution, output redirection and exit; it does not isolate initialization.",
+    "Allocation counts require a separate instrumented prototype; CPU and memory need a workload-specific measurement.",
+    "Incremental samples are unchanged builds, not edited-source recompilation."
+  ]
+}

@@ -30,12 +30,15 @@ def main():
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--package", required=True)
     parser.add_argument("--example", help="Optional executable Cargo example to build and run")
+    parser.add_argument("--bin", help="Optional named Cargo binary to build and run")
     parser.add_argument("--features", default="", help="Comma-separated features; defaults are disabled")
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.repetitions < 2:
         parser.error("use at least two repetitions")
+    if args.example and args.bin:
+        parser.error("choose either --example or --bin")
     manifest = args.manifest.resolve()
     cwd = manifest.parent
     feature_args = ["--no-default-features"]
@@ -57,6 +60,8 @@ def main():
                str(manifest), "--package", args.package, *feature_args]
     if args.example:
         command += ["--example", args.example]
+    if args.bin:
+        command += ["--bin", args.bin]
     clean, incremental, startup, sizes = [], [], [], []
     compiler = output(["rustc", "-vV"], cwd)
     host = next(line.split(": ", 1)[1] for line in compiler.splitlines() if line.startswith("host:"))
@@ -68,8 +73,10 @@ def main():
             env = {**os.environ, "CARGO_TARGET_DIR": str(target), "CARGO_INCREMENTAL": "1"}
             clean.append(timed(command, cwd, env))
             incremental.append(timed(command, cwd, env))
-            if args.example:
-                binary = target / host / "release/examples" / (args.example + (".exe" if os.name == "nt" else ""))
+            if args.example or args.bin:
+                binary_name = args.example or args.bin
+                binary_dir = "examples" if args.example else ""
+                binary = target / host / "release" / binary_dir / (binary_name + (".exe" if os.name == "nt" else ""))
                 sizes.append(binary.stat().st_size)
                 startup.append(timed([str(binary)], cwd, env))
     source_root = Path(package["manifest_path"]).parent
@@ -104,7 +111,7 @@ def main():
         "incremental_noop_seconds": incremental, "incremental_noop_median_seconds": statistics.median(incremental),
         "binary_bytes": sizes or None, "process_wall_seconds": startup or None,
         "runtime_allocations": None, "runtime_memory": None, "runtime_cpu": None,
-        "limitations": (["No executable was measured; pass --example to record executable metrics."] if not args.example else []) +
+        "limitations": (["No executable was measured; pass --example or --bin to record executable metrics."] if not (args.example or args.bin) else []) +
                        ["Process wall time includes spawn, program execution, output redirection and exit; it does not isolate initialization.",
                         "Allocation counts require a separate instrumented prototype; CPU and memory need a workload-specific measurement.",
                         "Incremental samples are unchanged builds, not edited-source recompilation."]}

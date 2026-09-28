@@ -17,3 +17,10 @@
 - Added facade-free Clock and module consumer examples, request-state and
   non-Send borrowing tests, and example checks to the coordinated runner.
 - Recorded Phase 2 example build reports and synthetic 1/5/20-module measurements.
+- Added a target-owned CLI contribution example with qualified command sets,
+  structured conflicts, orphan validation, and assembly/runtime measurements.
+- Started process projection with stable application/process/execution
+  identities, root-based reachability, and a CLI/Worker example sharing Clock.
+- Completed the process-composition prototype with provider defaults and
+  replacement provenance, projection-scoped configuration, freeze/inspection,
+  process isolation assertions, build-target comparison, and scale evidence.

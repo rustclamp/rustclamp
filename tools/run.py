@@ -31,8 +31,12 @@ def main():
     parser.add_argument("mode", choices=COMMANDS)
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     args = parser.parse_args()
-    command = COMMANDS[args.mode]
-    print(style("▶", "cyan", args.color), " ".join(command), flush=True)
+    commands = [COMMANDS[args.mode]]
+    if args.mode == "bench":
+        commands.append([
+            "cargo", "bench", "--offline", "--locked", "-p", "rustclamp-kernel",
+            "--bench", "process_projection",
+        ])
 
     suite = "Cargo tests"
     suite_count = 0
@@ -41,39 +45,44 @@ def main():
     bench_count = 0
     warnings = []
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        assert process.stdout is not None
-        for line in process.stdout:
-            stripped = line.strip()
-            bench_line = re.match(r"✓ BENCH (.+)", stripped)
-            if args.mode == "bench" and bench_line:
-                bench_count += 1
-                print(style(f"✓ BENCH {bench_line.group(1)}", "green", args.color), flush=True)
-                continue
-            print(line, end="", flush=True)
-            if stripped.startswith("Running "):
-                suite = stripped.removeprefix("Running ").split(" (", 1)[0]
-            elif stripped.startswith("Doc-tests "):
-                suite = stripped
-            result = re.search(r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;", stripped)
-            if result:
-                passed, failed = map(int, result.groups())
-                suite_count += 1
-                test_count += passed
-                failed_tests += failed
-                mark = "✗" if failed else "✓"
-                color = "red" if failed else "green"
-                print(style(f"{mark} TEST SUITE {suite}: {passed} passed, {failed} failed", color, args.color), flush=True)
-            if "warning:" in stripped.lower():
-                warnings.append(stripped)
-        return_code = process.wait()
+        return_code = 0
+        for command in commands:
+            print(style("▶", "cyan", args.color), " ".join(command), flush=True)
+            process = subprocess.Popen(
+                command,
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            assert process.stdout is not None
+            for line in process.stdout:
+                stripped = line.strip()
+                bench_line = re.match(r"✓ BENCH (.+)", stripped)
+                if args.mode == "bench" and bench_line:
+                    bench_count += 1
+                    print(style(f"✓ BENCH {bench_line.group(1)}", "green", args.color), flush=True)
+                    continue
+                print(line, end="", flush=True)
+                if stripped.startswith("Running "):
+                    suite = stripped.removeprefix("Running ").split(" (", 1)[0]
+                elif stripped.startswith("Doc-tests "):
+                    suite = stripped
+                result = re.search(r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;", stripped)
+                if result:
+                    passed, failed = map(int, result.groups())
+                    suite_count += 1
+                    test_count += passed
+                    failed_tests += failed
+                    mark = "✗" if failed else "✓"
+                    color = "red" if failed else "green"
+                    print(style(f"{mark} TEST SUITE {suite}: {passed} passed, {failed} failed", color, args.color), flush=True)
+                if "warning:" in stripped.lower():
+                    warnings.append(stripped)
+            return_code = process.wait()
+            if return_code:
+                break
     except OSError as error:
         print(style(f"✗ Could not start {args.mode}: {error}", "red", args.color))
         print(style(f"✗ {args.mode.upper()} FAILED", "red", args.color))

@@ -110,6 +110,8 @@ def check_examples(root):
     examples = (
         ("01-capability", "rustclamp-example-capability"),
         ("02-module", "rustclamp-example-module"),
+        ("03-contribution", "rustclamp-example-contribution"),
+        ("04-process", "rustclamp-example-process"),
     )
     for example, package_name in examples:
         example_root = root / "rustclamp/examples" / example
@@ -137,6 +139,51 @@ def check_examples(root):
         run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest), cwd=root)
         run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
             "--example", example, cwd=root)
+        if example == "03-contribution":
+                run("cargo", "bench", "--offline", "--locked", "--manifest-path", str(manifest),
+                    "--bench", "assembly", cwd=root)
+
+
+def check_process_build_targets(root):
+    manifest = root / "rustclamp/examples/04-process/build-targets/Cargo.toml"
+    modes = (
+        ("runtime-selected", "runtime-selected", [["cli"], ["worker"]],
+         {"rustclamp-core", "rustclamp-kernel"}),
+        ("cli-target", "cli-target", [[]], {"rustclamp-core"}),
+        ("worker-target", "worker-target", [[]],
+         {"rustclamp-core", "rustclamp-kernel"}),
+    )
+    run("cargo", "fmt", "--manifest-path", str(manifest), "--", "--check", cwd=root)
+    for feature, binary, runs, expected_dependencies in modes:
+        mode = ["--no-default-features", "--features", feature, "--bin", binary]
+        run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
+            *mode, "--", "-D", "warnings", cwd=root)
+        run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest),
+            *mode, cwd=root)
+        for arguments in runs:
+            run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+                *mode, "--", *arguments, cwd=root)
+        metadata = json.loads(subprocess.check_output(
+            ["cargo", "metadata", "--offline", "--locked", "--format-version", "1",
+             "--manifest-path", str(manifest), "--no-default-features", "--features", feature],
+            cwd=root, text=True))
+        package = next(item for item in metadata["packages"]
+                       if item["name"] == "rustclamp-process-build-targets")
+        nodes = {item["id"]: item for item in metadata["resolve"]["nodes"]}
+        pending = [edge["pkg"] for edge in nodes[package["id"]]["deps"]]
+        reached = set()
+        while pending:
+            current = pending.pop()
+            if current not in reached:
+                reached.add(current)
+                pending.extend(edge["pkg"] for edge in nodes[current]["deps"])
+        names = sorted({item["name"] for item in metadata["packages"]
+                        if item["id"] in reached})
+        assert set(names) == expected_dependencies, (
+            f"{feature} dependency closure changed: expected "
+            f"{sorted(expected_dependencies)}, found {names}"
+        )
+        print(f"{feature} build dependency graph: {', '.join(names) or '(none)'}")
 
 
 def main():
@@ -151,6 +198,7 @@ def main():
             str(root / "Cargo.toml"), "--expect-four", cwd=root)
         check(root)
         check_examples(root)
+        check_process_build_targets(root)
         # Copy each package and only its declared internal dependency closure out of the
         # coordination workspace. Unrelated siblings cannot mask a package failure.
         for repo in REPOS:
