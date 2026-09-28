@@ -24,3 +24,7 @@
 - Completed the process-composition prototype with provider defaults and
   replacement provenance, projection-scoped configuration, freeze/inspection,
   process isolation assertions, build-target comparison, and scale evidence.
+- Started Phase 5 with a synchronous fake-resource lifecycle proof covering
+  dependency order, readiness, failure cleanup, deadlines, health, and shutdown.
+- Added Phase 5 lifecycle evidence with fake-clock metrics and qualified
+  build-footprint comparisons against the Phase 4 process example.
