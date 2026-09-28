@@ -44,8 +44,10 @@ measurement path and ordering; they are not wall-clock performance claims.
 This proof introduces no dependency and does not implement a production runtime,
 real resource, telemetry exporter, or Tokio adapter. Async behavior remains
 deferred until the synchronous coordination contract is understood.
-Core now exposes independent synchronous lifecycle participation traits, but this
-fixture driver has not yet been generalized to dispatch through them.
+The fixture's Database, Users, and Worker participants now opt into Core's
+independent synchronous lifecycle traits. This example-local dispatcher invokes
+those contracts; it is not a reusable production driver, and ordinary modules
+remain lifecycle-free unless they implement the relevant trait.
 
 Release build, binary, dependency, and process-wall measurements are compared
 with the Phase 4 process example in the [Phase 5 progress report](../../docs/evidence/phase5-lifecycle.md).
