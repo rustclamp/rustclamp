@@ -1,6 +1,8 @@
 use rustclamp_example_lifecycle::{
-    DATABASE, ExternalDatabaseOwner, Health, LifecycleFailure, LifecycleState, Phase,
-    ShutdownReason, TestControl, USERS, WORKER, WORKER_ROOT, application, start,
+    ApplicationResources, CleanupState, DATABASE, EXECUTION, ExecutionResources,
+    ExternalDatabaseOwner, Health, LifecycleFailure, LifecycleState, MAINTENANCE_EXECUTION, Phase,
+    ProcessResources, REPORTER, ResourceOwner, ShutdownReason, TestControl, USERS, WORKER,
+    WORKER_ROOT, application, start,
 };
 
 fn modules_in_phase(
@@ -12,6 +14,98 @@ fn modules_in_phase(
         .filter(|event| event.phase == phase)
         .map(|event| event.module)
         .collect()
+}
+
+#[test]
+fn application_resource_is_shared_while_process_resources_are_isolated() {
+    let [worker, reporter] = application()
+        .freeze_processes(&[WORKER, REPORTER])
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let application_resources = ApplicationResources::new();
+    let worker_resources = ProcessResources::new(&worker, &application_resources);
+    let reporter_resources = ProcessResources::new(&reporter, &application_resources);
+
+    assert_ne!(worker_resources.process(), reporter_resources.process());
+    assert!(worker_resources.start());
+    assert!(reporter_resources.start());
+    worker_resources.stop();
+
+    assert!(!worker_resources.is_active());
+    assert!(reporter_resources.is_active());
+    assert!(application_resources.database_open());
+
+    reporter_resources.stop();
+    assert!(!worker_resources.is_active() && !reporter_resources.is_active());
+    assert!(application_resources.database_open());
+    application_resources.close();
+    assert!(!application_resources.database_open());
+    assert!(!worker_resources.start() && !reporter_resources.start());
+}
+
+#[test]
+fn execution_resource_exists_only_for_its_frozen_root_and_stops_independently() {
+    let worker = application().freeze(WORKER).unwrap();
+    let application_resources = ApplicationResources::new();
+    let request = ExecutionResources::new(&worker, EXECUTION, &application_resources).unwrap();
+    let maintenance =
+        ExecutionResources::new(&worker, MAINTENANCE_EXECUTION, &application_resources).unwrap();
+
+    assert!(
+        ExecutionResources::new(
+            &worker,
+            rustclamp_core::ExecutionId::new("example.lifecycle.unprojected"),
+            &application_resources,
+        )
+        .is_none()
+    );
+    assert_ne!(request.execution(), maintenance.execution());
+    assert!(request.start() && maintenance.start());
+    request.stop();
+
+    assert!(!request.is_active());
+    assert!(maintenance.is_active());
+    assert!(application_resources.database_open());
+}
+
+#[test]
+fn runtime_selection_is_process_specific_and_manual_path_needs_no_async_runtime() {
+    use rustclamp_example_lifecycle::{ProcessRuntimeKind, runtime_for_process, service_task};
+    use rustclamp_runtime::{ManualRuntime, Supervision, Supervisor, TaskContext};
+
+    assert_eq!(runtime_for_process(WORKER), Some(ProcessRuntimeKind::Tokio));
+    assert_eq!(
+        runtime_for_process(REPORTER),
+        Some(ProcessRuntimeKind::Manual)
+    );
+    assert_eq!(
+        runtime_for_process(rustclamp_core::ProcessId::new("example.lifecycle.unknown")),
+        None
+    );
+    let outcome =
+        Supervisor::new(ManualRuntime).supervise(&service_task(REPORTER), &TaskContext::new());
+    assert_eq!(outcome, Supervision::Completed);
+}
+
+#[cfg(feature = "tokio-runtime")]
+#[test]
+fn worker_process_runs_through_the_optional_tokio_adapter() {
+    use rustclamp_example_lifecycle::{service_task, shutdown_reason_for_signal};
+    use rustclamp_runtime::{
+        Supervision, Supervisor, TaskContext,
+        tokio_runtime::{ShutdownSignal, TokioRuntime},
+    };
+
+    let runtime = TokioRuntime::managed().unwrap();
+    assert_eq!(
+        Supervisor::new(runtime).supervise(&service_task(WORKER), &TaskContext::new()),
+        Supervision::Completed
+    );
+    assert_eq!(
+        shutdown_reason_for_signal(ShutdownSignal::Interrupt),
+        ShutdownReason::Requested
+    );
 }
 
 #[test]
@@ -28,6 +122,17 @@ fn freeze_and_validation_finish_before_lifecycle_side_effects() {
 #[test]
 fn dependencies_initialize_before_users_and_stop_after_consumers() {
     let result = start(TestControl::default());
+    let inspection = result.inspection();
+    assert_eq!(inspection.dependencies().len(), 2);
+    let database = inspection
+        .modules()
+        .iter()
+        .find(|module| module.module() == DATABASE)
+        .unwrap();
+    assert_eq!(database.owner(), ResourceOwner::Process);
+    assert_eq!(database.cleanup(), CleanupState::Active);
+    assert!(database.phases().contains(&Phase::Initialize));
+    assert!(!database.phases().contains(&Phase::Start));
     assert_eq!(
         modules_in_phase(&result.events, Phase::Initialize),
         [DATABASE, USERS]
@@ -49,10 +154,17 @@ fn dependencies_initialize_before_users_and_stop_after_consumers() {
         modules_in_phase(&shutdown.events, Phase::Stop),
         [WORKER_ROOT, USERS, DATABASE]
     );
-    assert_eq!(shutdown.elapsed_ms(), 12);
+    assert_eq!(shutdown.elapsed_ms(), 14);
     assert_eq!(shutdown.shutdown_reason, Some(ShutdownReason::Requested));
     assert!(!shutdown.status.alive && !shutdown.status.started && !shutdown.status.ready);
     assert_eq!(shutdown.resources, Default::default());
+    assert!(
+        shutdown
+            .inspection()
+            .modules()
+            .iter()
+            .all(|module| module.cleanup() == CleanupState::Stopped)
+    );
 }
 
 #[test]
@@ -62,6 +174,14 @@ fn external_database_is_used_but_never_initialized_or_stopped_by_the_process() {
         rustclamp_example_lifecycle::start_with_external_database(TestControl::default(), &owner);
 
     assert!(owner.is_open());
+    let database = result
+        .inspection()
+        .modules()
+        .iter()
+        .find(|module| module.module() == DATABASE)
+        .unwrap();
+    assert_eq!(database.owner(), ResourceOwner::External);
+    assert_eq!(database.cleanup(), CleanupState::External);
     assert_eq!(result.elapsed_ms(), 3);
     assert_eq!(modules_in_phase(&result.events, Phase::Initialize), [USERS]);
     assert!(result.resources.database_open && result.resources.users_initialized);
@@ -72,7 +192,7 @@ fn external_database_is_used_but_never_initialized_or_stopped_by_the_process() {
         event.module == DATABASE && matches!(event.phase, Phase::Initialize | Phase::Stop)
     }));
     assert!(owner.is_open());
-    assert_eq!(stopped.elapsed_ms(), 9);
+    assert_eq!(stopped.elapsed_ms(), 11);
 }
 
 #[test]
@@ -117,6 +237,16 @@ fn cleanup_errors_do_not_skip_remaining_cleanup_or_flush() {
         ShutdownReason::Requested,
     );
     assert_eq!(result.cleanup_failures, [(Phase::Drain, USERS)]);
+    assert_eq!(
+        result
+            .inspection()
+            .modules()
+            .iter()
+            .find(|module| module.module() == USERS)
+            .unwrap()
+            .cleanup(),
+        CleanupState::Failed
+    );
     assert!(
         result
             .events
@@ -124,6 +254,34 @@ fn cleanup_errors_do_not_skip_remaining_cleanup_or_flush() {
             .any(|event| event.phase == Phase::Stop && event.module == DATABASE)
     );
     assert_eq!(result.events.last().unwrap().phase, Phase::Flush);
+}
+
+#[test]
+fn diagnostic_flush_is_bounded_and_keeps_a_local_fallback() {
+    let fallback = rustclamp_example_lifecycle::shutdown(
+        start(TestControl {
+            telemetry_unavailable: true,
+            ..TestControl::default()
+        }),
+        ShutdownReason::Requested,
+    );
+    assert!(fallback.diagnostic_fallback);
+    assert_eq!(fallback.events.last().unwrap().phase, Phase::Flush);
+
+    let bounded = rustclamp_example_lifecycle::shutdown(
+        start(TestControl {
+            flush_ms: 5,
+            deadlines: rustclamp_example_lifecycle::Deadlines {
+                flush_ms: 2,
+                ..Default::default()
+            },
+            ..TestControl::default()
+        }),
+        ShutdownReason::Requested,
+    );
+    assert!(bounded.diagnostic_fallback);
+    assert_eq!(bounded.elapsed_ms(), 15);
+    assert_eq!(bounded.events.last().unwrap().phase, Phase::Flush);
 }
 
 #[test]
@@ -140,6 +298,21 @@ fn deadlines_bound_startup_drain_and_cleanup() {
         Some(LifecycleFailure::PhaseDeadline {
             phase: Phase::Initialize,
             module: DATABASE
+        })
+    );
+
+    let cumulative_initialize_timeout = start(TestControl {
+        deadlines: rustclamp_example_lifecycle::Deadlines {
+            initialize_ms: 2,
+            ..Default::default()
+        },
+        ..TestControl::default()
+    });
+    assert_eq!(
+        cumulative_initialize_timeout.failure,
+        Some(LifecycleFailure::PhaseDeadline {
+            phase: Phase::Initialize,
+            module: USERS
         })
     );
 
@@ -174,6 +347,28 @@ fn deadlines_bound_startup_drain_and_cleanup() {
         [(Phase::Drain, WORKER_ROOT), (Phase::Drain, USERS)]
     );
     assert!(!drain_timeout.status.alive);
+
+    let task_stop_timeout = rustclamp_example_lifecycle::shutdown(
+        start(TestControl {
+            deadlines: rustclamp_example_lifecycle::Deadlines {
+                task_stop_ms: 0,
+                ..Default::default()
+            },
+            ..TestControl::default()
+        }),
+        ShutdownReason::Requested,
+    );
+    assert!(
+        task_stop_timeout
+            .cleanup_failures
+            .contains(&(Phase::TaskStop, WORKER_ROOT))
+    );
+    assert!(
+        task_stop_timeout
+            .events
+            .iter()
+            .any(|event| event.phase == Phase::Stop && event.module == WORKER_ROOT)
+    );
 }
 
 #[test]

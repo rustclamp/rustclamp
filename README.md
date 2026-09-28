@@ -56,10 +56,14 @@ process-specific build targets, and scale measurements.
 `examples/05-lifecycle` begins Phase 5 with a synchronous fake-resource proof:
 it derives Database → Users startup and reverse cleanup from the frozen process
 requirements, exercises failure cleanup and programmatic shutdown, and compares
-managed with caller-owned Database lifetimes. A deterministic test clock records
-simulated lifecycle durations, not production benchmarks. Tokio and production
-lifecycle APIs remain out of scope until the synchronous coordination contract
-is established.
+managed with caller-owned Database lifetimes. Bounded fake-clock lifecycle
+operations include task stop and final diagnostic flush with an in-memory
+fallback. Coexisting projections prove shared application database lifetime and
+isolated process state; explicit execution handles demonstrate execution scope.
+The lifecycle outcome exposes dependency edges, owners, phase participation,
+and cleanup state. The separate Runtime package defines executor-neutral task
+supervision and an optional Tokio adapter selected per process. These remain prototype contracts; the base task contract is synchronous, and
+the optional Tokio adapter also supports native async tasks.
 The [Phase 5 progress report](docs/evidence/phase5-lifecycle.md) compares its
 build footprint with the Phase 4 process example and separates measured process
 wall time from deterministic fake-clock readiness durations.
@@ -74,7 +78,7 @@ remain unchanged.
 | [`rustclamp`](https://github.com/rustclamp/rustclamp) | Main framework facade and application entry point | Pico is implemented and measured |
 | [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts | Capabilities, modules, contributions, and application/process identities |
 | [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Typed resolution, contribution assembly, and process-root reachability prototype |
-| [`runtime`](https://github.com/rustclamp/runtime) | Execution-environment contracts | Scaffold; no public contracts |
+| [`runtime`](https://github.com/rustclamp/runtime) | Execution-environment contracts | Executor-neutral task supervision; optional Tokio adapter |
 | [`docs.rustclamp.com`](https://github.com/rustclamp/docs.rustclamp.com) | User and architecture documentation | Supporting repository, not a framework component |
 | [`rustclamp.com`](https://github.com/rustclamp/rustclamp.com) | Project website | Supporting repository, not a framework component |
 

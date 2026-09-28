@@ -33,3 +33,10 @@
 - Added an external fake Database owner path that preserves caller ownership
   through process shutdown, with managed/external behavior and fake-clock
   comparisons in the lifecycle docs.
+- Added a coexisting Worker/Reporter projection proof: application-owned fake
+  Database state is shared and survives process shutdown, while process state
+  remains isolated.
+- Added an execution-scoped fake resource handle that can be constructed only
+  for roots in the frozen process projection and stops independently.
+- Added lifecycle outcome inspection for dependency edges, actual resource
+  owners, participant phases, and cleanup state, with example output.

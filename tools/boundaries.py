@@ -12,8 +12,13 @@ ALLOWED = {
     "rustclamp": {"rustclamp-core", "rustclamp-kernel", "rustclamp-runtime"},
     "rustclamp-core": set(),
     "rustclamp-kernel": {"rustclamp-core"},
-    "rustclamp-runtime": {"rustclamp-core"},
+    "rustclamp-runtime": {
+        "rustclamp-core", "tokio", "errno", "libc", "mio", "pin-project-lite",
+        "proc-macro2", "quote", "signal-hook-registry", "syn", "tokio-macros",
+        "unicode-ident", "wasi", "windows-link", "windows-sys",
+    },
 }
+OPTIONAL = {"rustclamp-runtime": {"tokio"}}
 
 
 def metadata(manifest):
@@ -35,6 +40,8 @@ def violations(data):
         for dep in package["dependencies"]:
             if dep["name"] not in ALLOWED[name]:
                 errors.append(f"{name} -> {dep['name']}: forbidden dependency")
+            if dep["name"] in OPTIONAL.get(name, set()) and not dep["optional"]:
+                errors.append(f"{name} -> {dep['name']}: dependency must remain optional")
             if dep.get("path") and dep["req"] == "*":
                 errors.append(f"{name} -> {dep['name']}: path requires a version")
     # Check the complete resolved closure, not just immediate edges.
@@ -66,6 +73,7 @@ def self_test():
         ("rustclamp-core", "async-openai", "target", False),
         ("rustclamp-kernel", "axum", "normal", False),
         ("rustclamp-runtime", "tokio", "normal", False),
+        ("rustclamp-runtime", "tokio", "optional", True),
         ("rustclamp-kernel", "rustclamp", "dev", False),
         ("rustclamp-kernel", "rustclamp-core", "normal", True),
     ]

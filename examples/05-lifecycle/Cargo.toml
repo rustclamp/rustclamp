@@ -8,6 +8,11 @@ publish = false
 [dependencies]
 rustclamp-core = { version = "0.1.0", path = "../../../core" }
 rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
+rustclamp-runtime = { version = "0.1.0", path = "../../../runtime" }
+
+[features]
+default = []
+tokio-runtime = ["rustclamp-runtime/tokio"]
 
 [workspace]
 
