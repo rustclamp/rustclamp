@@ -30,22 +30,30 @@ See the [Pico results](docs/evidence/phase1.md) for measured costs and limitatio
 The example and source are available in the `rustclamp` repository. Package checks
 run in independent repositories and in the combined developer checkout.
 
+Two facade-free Phase 2 consumers are also runnable from this repository:
+`examples/01-capability` demonstrates direct Clock injection with Core, and
+`examples/02-module` declares a Greeter requirement and Clock provider through
+Core and resolves them through Kernel. Their tests run with
+`python3 tools/check.py`.
+
 ## Project Map
 
 | Repository | Responsibility | Status |
 | --- | --- | --- |
 | [`rustclamp`](https://github.com/rustclamp/rustclamp) | Main framework facade and application entry point | Pico is implemented and measured |
-| [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts | `Clock` contract |
-| [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Typed single-capability resolution; no full module composition |
+| [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts | `Clock` and additive module/capability declarations |
+| [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Typed capability resolution and validation; no automated whole-app composition |
 | [`runtime`](https://github.com/rustclamp/runtime) | Execution-environment contracts | Scaffold; no public contracts |
 | [`docs.rustclamp.com`](https://github.com/rustclamp/docs.rustclamp.com) | User and architecture documentation | Supporting repository, not a framework component |
 | [`rustclamp.com`](https://github.com/rustclamp/rustclamp.com) | Project website | Supporting repository, not a framework component |
 
 Today, the demonstrated facade path is `Clamp::run`: it runs a closure
-synchronously on the current thread. Core defines a `Clock` contract, and Kernel
-can resolve one typed requirement with explicit selection. Full module composition,
-process projection, and runtime integration are not implemented. The target
-architecture below is a design direction, not a working end-to-end pipeline.
+synchronously on the current thread. Core defines `Clock` and additive module
+contracts; Kernel resolves declared typed requirements, reports composition
+errors, and validates cycles. These are reusable prototypes, not automatic
+whole-application discovery. Process projection and runtime integration are
+not implemented. The target architecture below is a design direction, not a
+working end-to-end pipeline.
 “Application modules” means modules in a user's application, not these companion
 repositories.
 
@@ -62,6 +70,24 @@ the phase columns below are context, not a before/after speedup comparison.
 | Process wall-time median | 1.203 ms | 1.256 ms | 1.484 ms |
 | Release binary size | 4,335,592 B | 4,335,592 B | 4,357,888 B |
 | Dependency packages | 0 | 1 facade | 1 internal (Core) |
+
+The Phase 2 examples measure the consumer boundaries directly. Their results
+are separate programs, not an isolated overhead comparison:
+
+| Metric | `01-capability` (Core) | `02-module` (Core + Kernel) |
+| --- | ---: | ---: |
+| Resolved internal dependencies | 1 | 2 |
+| Clean release build median, 3 runs | 300.31 ms | 675.50 ms |
+| Unchanged release build median | 41.98 ms | 40.52 ms |
+| Release executable size | 4,345,912 B | 4,354,696 B |
+| Process wall-time median | 1.430 ms | 1.234 ms |
+
+The paired Phase 1 plain Rust/Pico result remains the relevant facade baseline:
+Pico added 0 bytes and measured 0 entrypoint allocations in that specific
+closure example. The Phase 2 applications have different behavior and
+dependencies, so their binary/build differences do not estimate framework
+overhead. Full sample ranges and commands are in the
+[Phase 2 evidence](docs/evidence/phase2.md).
 
 Phase 1's paired comparison found Pico added 36.78 ms to the clean-build
 median, 1.67 ms to the unchanged-build median, and 0 bytes to the binary. Phase

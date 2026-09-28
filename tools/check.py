@@ -106,6 +106,39 @@ def check(path):
         cwd=path, env={**os.environ, "RUSTDOCFLAGS": "-D warnings"})
 
 
+def check_examples(root):
+    examples = (
+        ("01-capability", "rustclamp-example-capability"),
+        ("02-module", "rustclamp-example-module"),
+    )
+    for example, package_name in examples:
+        example_root = root / "rustclamp/examples" / example
+        manifest = example_root / "Cargo.toml"
+        metadata = json.loads(subprocess.check_output(
+            ["cargo", "metadata", "--offline", "--locked", "--format-version", "1",
+             "--manifest-path", str(manifest)], cwd=root, text=True))
+        packages = {package["id"]: package["name"] for package in metadata["packages"]}
+        nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+        package_id = next(key for key, name in packages.items() if name == package_name)
+        pending = [dependency["pkg"] for dependency in nodes[package_id]["deps"]]
+        reached = set()
+        while pending:
+            dependency = pending.pop()
+            if dependency not in reached:
+                reached.add(dependency)
+                pending.extend(item["pkg"] for item in nodes[dependency]["deps"])
+        dependencies = {packages[item] for item in reached}
+        assert "rustclamp" not in dependencies, f"{example} unexpectedly depends on the facade"
+        print(f"{example} dependency graph: {', '.join(sorted(dependencies))}; facade absent")
+
+        run("cargo", "fmt", "--manifest-path", str(manifest), "--", "--check", cwd=root)
+        run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
+            "--all-targets", "--", "-D", "warnings", cwd=root)
+        run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest), cwd=root)
+        run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+            "--example", example, cwd=root)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
@@ -117,6 +150,7 @@ def main():
         run("python3", str(root / "rustclamp/tools/boundaries.py"), "--manifest",
             str(root / "Cargo.toml"), "--expect-four", cwd=root)
         check(root)
+        check_examples(root)
         # Copy each package and only its declared internal dependency closure out of the
         # coordination workspace. Unrelated siblings cannot mask a package failure.
         for repo in REPOS:

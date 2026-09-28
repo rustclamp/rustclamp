@@ -1,0 +1,20 @@
+[package]
+name = "rustclamp-example-module"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.1"
+publish = false
+
+[dependencies]
+rustclamp-core = { version = "0.1.0", path = "../../../core" }
+rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
+
+[workspace]
+
+[profile.release]
+opt-level = 3
+debug = false
+strip = "none"
+lto = false
+codegen-units = 16
+panic = "unwind"

@@ -108,6 +108,19 @@
       {"name": "replace_provider_and_revalidate", "median_ns_per_operation": 62, "samples_ns_per_operation": [60, 61, 61, 62, 62, 62, 62, 63, 74]}
     ]
   },
+  "p2_16_scale_run": {
+    "recorded_by": "cargo bench --offline --locked --bench resolution",
+    "sample_count": 9,
+    "paths": [
+      {"name": "construction_graph_validate_chain_8", "module_count": 8, "median_ns_per_operation": 1652, "samples_ns_per_operation": [1636, 1639, 1649, 1652, 1652, 1657, 1662, 1665, 1694]},
+      {"name": "construction_graph_detect_cycle_8", "module_count": 8, "median_ns_per_operation": 1346, "samples_ns_per_operation": [1337, 1338, 1339, 1344, 1346, 1347, 1351, 1360, 1366]},
+      {"name": "resolve_selected_1_modules", "module_count": 1, "median_ns_per_operation": 9, "samples_ns_per_operation": [9, 9, 9, 9, 9, 9, 9, 9, 9]},
+      {"name": "resolve_selected_5_modules", "module_count": 5, "median_ns_per_operation": 20, "samples_ns_per_operation": [19, 20, 20, 20, 20, 20, 20, 20, 20]},
+      {"name": "resolve_selected_20_modules", "module_count": 20, "median_ns_per_operation": 39, "samples_ns_per_operation": [38, 38, 39, 39, 39, 39, 39, 39, 50]},
+      {"name": "construction_graph_validate_chain_5", "module_count": 5, "median_ns_per_operation": 939, "samples_ns_per_operation": [931, 931, 936, 937, 939, 940, 940, 945, 960]},
+      {"name": "construction_graph_validate_chain_20", "module_count": 20, "median_ns_per_operation": 5735, "samples_ns_per_operation": [5698, 5703, 5711, 5711, 5735, 5736, 5741, 5744, 5749]}
+    ]
+  },
   "limitations": [
     "Single host and first-run microbenchmark; no regression threshold is justified.",
     "Nanosecond-scale timing is sensitive to scheduling, frequency, compiler optimization, and timer granularity.",

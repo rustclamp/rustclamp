@@ -14,3 +14,6 @@
   distinguish package-list validation from registry-dependent archive verification.
 - Added colored test/benchmark terminal verdicts, per-benchmark intent text, and
   Phase 2 qualifier, cardinality, and composition-edit measurements.
+- Added facade-free Clock and module consumer examples, request-state and
+  non-Send borrowing tests, and example checks to the coordinated runner.
+- Recorded Phase 2 example build reports and synthetic 1/5/20-module measurements.
