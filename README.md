@@ -2,7 +2,9 @@
 
 # RustClamp
 
-**Compose. Run. Scale.** A composable application framework for Rust.
+**RustClamp is a composable application framework for Rust.** This is its main
+framework repository. The `core`, `kernel`, and `runtime` repositories are planned
+companion components, not separate products.
 
 A small synchronous entrypoint for Clamp applications.
 
@@ -27,6 +29,23 @@ disabled until licensing, registry ownership and the prototype API are reviewed.
 See the [Pico results](docs/evidence/phase1.md) for measured costs and limitations.
 The example and source are available in the `rustclamp` repository. Package checks
 run in independent repositories and in the combined developer checkout.
+
+## Project Map
+
+| Repository | Responsibility | Status |
+| --- | --- | --- |
+| [`rustclamp`](https://github.com/rustclamp/rustclamp) | Main framework facade and application entry point | Pico is implemented and measured |
+| [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts | Scaffold; no public contracts |
+| [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Scaffold; no public behavior |
+| [`runtime`](https://github.com/rustclamp/runtime) | Execution-environment contracts | Scaffold; no public contracts |
+| [`docs.rustclamp.com`](https://github.com/rustclamp/docs.rustclamp.com) | User and architecture documentation | Supporting repository, not a framework component |
+| [`rustclamp.com`](https://github.com/rustclamp/rustclamp.com) | Project website | Supporting repository, not a framework component |
+
+Today, the demonstrated framework path is only `Clamp::run`: it runs a closure
+synchronously on the current thread. Core, Kernel, and Runtime are independent
+package scaffolds; the target architecture below is a design direction, not a
+working end-to-end pipeline. “Application modules” means modules in a user's
+application, not these companion repositories.
 
 ## Target Architecture
 
