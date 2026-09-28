@@ -38,14 +38,17 @@ path. This prevents parent workspace discovery from hiding isolated build failur
 Python powers the dependency harness; it adds no Rust package dependency.
 
 For a single repository, clone it outside the ecosystem workspace and run the
-commands in its README. Each package has its own manifest, toolchain, lockfile
-and CI. No package inherits Cargo settings from the generated root manifest.
+commands in its README. Each package has its own manifest, toolchain and lockfile.
+No package inherits Cargo settings from the generated root manifest. Workflow
+files are in the local source but cannot be uploaded with the current GitHub token;
+the pushed source snapshot omits them.
 The root lockfile is local coordination state; package lockfiles are committed.
-Both the combined and independent workflows run the actual Cargo test targets.
-Combined CI tests the current repository revision against the other repositories'
-`main` branches; coordinated breaking changes require checking out matching
-revisions locally before merging. Each remote began with a README-only commit; the
-source publication preserves that commit and the local package history.
+Once published, the combined and independent workflows will run the actual Cargo
+test targets. Combined CI will test the current repository revision against the
+other repositories' `main` branches; coordinated breaking changes require checking
+out matching revisions locally before merging. Each remote began with a README-only
+commit followed by a source snapshot. Detailed local development commits remain
+in the original local histories.
 
 ## Dependency and code policy
 

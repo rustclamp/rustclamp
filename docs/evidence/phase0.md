@@ -62,9 +62,16 @@ Pico. No framework-overhead claim is made.
 
 The four repository workflows each check their own checkout and a combined
 checkout, including isolated consumers. Each remote first received a commit
-containing only `README.md`. The owner subsequently authorized source publication;
-the complete local histories are being joined to those README commits. Hosted run
-results are recorded after the source pushes and workflows finish.
+containing only `README.md`. The owner subsequently authorized source publication.
+Source snapshots are on the four package remotes; both site repositories remain
+README-only because site work is out of scope. Detailed local development commits
+remain in the checkouts.
+
+GitHub rejected all four `.github/workflows/ci.yml` pushes: the authenticated token
+has `repo` permission but lacks the `workflow` scope. The workflow files remain
+local. Hosted CI has not run. The GitHub CLI token needs the `workflow` scope
+before the workflows can be published and run.
+Local combined and independent checks pass.
 
 All manifests disable publishing; license selection,
 registry availability/ownership and registry-based publish dry runs remain release

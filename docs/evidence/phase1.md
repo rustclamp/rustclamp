@@ -1,7 +1,9 @@
 # Phase 1: Pico and plain Rust
 
-Date: 2026-09-28. Local CI-equivalent checks pass. Hosted CI runs after the
-authorized source publication and is recorded when the workflows finish.
+Date: 2026-09-28. Local CI-equivalent checks pass. Source snapshots are published
+to the four package repositories. The CI workflow files remain local because the
+GitHub token lacks the `workflow` scope. No hosted checks have run; publish the
+workflow files after refreshing credentials for that scope.
 
 ## Finding
 
@@ -101,7 +103,8 @@ plain control and allocation fixture, checks metadata and output, and runs the
 allocation probes in both profiles. The allocation fixture receives explicit
 rustfmt and Clippy checks. Formatting, Clippy, tests, rustdoc, independent-package
 checks, relative consumers and archive verification run through the existing
-Phase 0 tooling. Hosted run results will be recorded after initial publication.
+Phase 0 tooling. Hosted results remain pending while the token lacks the `workflow`
+scope.
 
 Capability resolution remains Phase 2 work. No additional framework package,
 integration or composition subsystem was introduced.
