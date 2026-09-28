@@ -40,3 +40,11 @@
   for roots in the frozen process projection and stops independently.
 - Added lifecycle outcome inspection for dependency edges, actual resource
   owners, participant phases, and cleanup state, with example output.
+- Added optional Axum/Tower HTTP route integration, bounded streaming and
+  graceful listener shutdown, plus qualified SQLx PostgreSQL pools and explicit
+  migrations.
+- Added the shared Users domain, console and HTTP adapters, optional
+  transaction-scoped PostgreSQL adapter, isolated dependency checks, and Phase 6
+  architecture/evidence documentation.
+- Added release workload comparisons for direct Axum and SQLx paths, including
+  measurement-only allocation instrumentation and dependency/build/binary reports.

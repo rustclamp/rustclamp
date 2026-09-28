@@ -71,6 +71,17 @@ Core now provides opt-in phase traits and an identity-only lifecycle context;
 they add no dispatcher or runtime, and modules that implement only `Module`
 remain unchanged.
 
+`examples/06-users` demonstrates one Users operation used directly, from a
+console command, through optional Axum HTTP, and with memory or PostgreSQL
+repositories. `rustclamp-http` owns HTTP routing, middleware, representations,
+streaming, and listener drain while exposing Axum types. `rustclamp-postgres`
+owns qualified SQLx pools and explicit migration planning; application adapters
+keep SQL and execution transactions. The console-only build excludes HTTP,
+PostgreSQL, and Tokio. See the [Phase 6 evidence](docs/evidence/phase6-progress.md)
+and [integration boundary decision](docs/adr/0005-phase6-integration-boundaries.md).
+Release build, dependency, binary, process, and paired workload measurements
+are recorded in the [Phase 6 evidence](docs/evidence/phase6-progress.md).
+
 ## Project Map
 
 | Repository | Responsibility | Status |
@@ -79,6 +90,8 @@ remain unchanged.
 | [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts | Capabilities, modules, contributions, and application/process identities |
 | [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Typed resolution, contribution assembly, and process-root reachability prototype |
 | [`runtime`](https://github.com/rustclamp/runtime) | Execution-environment contracts | Executor-neutral task supervision; optional Tokio adapter |
+| [`http`](https://github.com/rustclamp/http) | Optional HTTP integration | Axum/Tower routing, context, presentation, streaming, and graceful listener service |
+| [`postgres`](https://github.com/rustclamp/postgres) | Optional PostgreSQL integration | Qualified SQLx pools, ownership, health probes, and explicit migrations |
 | [`docs.rustclamp.com`](https://github.com/rustclamp/docs.rustclamp.com) | User and architecture documentation | Supporting repository, not a framework component |
 | [`rustclamp.com`](https://github.com/rustclamp/rustclamp.com) | Project website | Supporting repository, not a framework component |
 

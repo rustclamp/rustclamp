@@ -32,6 +32,8 @@ def main():
     parser.add_argument("--example", help="Optional executable Cargo example to build and run")
     parser.add_argument("--bin", help="Optional named Cargo binary to build and run")
     parser.add_argument("--features", default="", help="Comma-separated features; defaults are disabled")
+    parser.add_argument("--run-arg", action="append", default=[],
+                        help="One argument passed to the measured executable; repeat as needed")
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -78,7 +80,7 @@ def main():
                 binary_dir = "examples" if args.example else ""
                 binary = target / host / "release" / binary_dir / (binary_name + (".exe" if os.name == "nt" else ""))
                 sizes.append(binary.stat().st_size)
-                startup.append(timed([str(binary)], cwd, env))
+                startup.append(timed([str(binary), *args.run_arg], cwd, env))
     source_root = Path(package["manifest_path"]).parent
     workspace_manifest = Path(data["workspace_root"]) / "Cargo.toml"
     workspace_settings = tomllib.loads(workspace_manifest.read_text())
@@ -105,7 +107,10 @@ def main():
         "workspace_manifest_sha256": hashlib.sha256(workspace_manifest.read_bytes()).hexdigest(),
         "lockfile_sha256": hashlib.sha256((workspace_manifest.parent / "Cargo.lock").read_bytes()).hexdigest(),
         "cache": "Fresh target directory per clean sample; OS page cache uncontrolled; immediate unchanged rebuild; CARGO_INCREMENTAL=1",
-        "repetitions": args.repetitions, "commands": {"build": command, "metadata": metadata_command},
+        "repetitions": args.repetitions, "commands": {
+            "build": command, "metadata": metadata_command,
+            "run": [str(binary), *args.run_arg] if args.example or args.bin else None,
+        },
         "dependency_count": len(reached),
         "clean_seconds": clean, "clean_median_seconds": statistics.median(clean),
         "incremental_noop_seconds": incremental, "incremental_noop_median_seconds": statistics.median(incremental),

@@ -19,6 +19,8 @@ PACKAGE_TO_REPO = {
     "rustclamp-core": "core",
     "rustclamp-kernel": "kernel",
     "rustclamp-runtime": "runtime",
+    "rustclamp-http": "http",
+    "rustclamp-postgres": "postgres",
 }
 
 
@@ -127,6 +129,7 @@ def check_examples(root):
         ("03-contribution", "rustclamp-example-contribution"),
         ("04-process", "rustclamp-example-process"),
         ("05-lifecycle", "rustclamp-example-lifecycle"),
+        ("06-users", "rustclamp-example-users"),
     )
     for example, package_name in examples:
         example_root = root / "rustclamp/examples" / example
@@ -142,8 +145,9 @@ def check_examples(root):
         run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
             "--all-targets", "--", "-D", "warnings", cwd=root)
         run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest), cwd=root)
-        run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
-            "--example", example, cwd=root)
+        if example != "06-users":
+            run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--example", example, cwd=root)
         if example == "05-lifecycle":
             assert "tokio" not in dependencies, "Tokio activated in the default lifecycle example"
             feature_metadata = json.loads(subprocess.check_output(
@@ -156,6 +160,20 @@ def check_examples(root):
                 "--all-targets", "--all-features", "--", "-D", "warnings", cwd=root)
             run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--all-features", cwd=root)
+        if example == "06-users":
+            assert {"rustclamp-http", "rustclamp-postgres", "tokio"}.isdisjoint(dependencies), (
+                "console-only Users graph activated an optional integration"
+            )
+            run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--bin", "users-console", "--", "create", "Ada", cwd=root)
+            for feature in (
+                "http", "postgres", "tracing", "measure-allocations",
+                "http,postgres,tracing,measure-allocations",
+            ):
+                run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
+                    "--features", feature, "--all-targets", "--", "-D", "warnings", cwd=root)
+                run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest),
+                    "--features", feature, "--all-targets", cwd=root)
         if example == "03-contribution":
                 run("cargo", "bench", "--offline", "--locked", "--manifest-path", str(manifest),
                     "--bench", "assembly", cwd=root)
@@ -224,7 +242,7 @@ def main():
         run("python3", str(root / "rustclamp/tools/workspace.py"), "--root", str(root), cwd=root)
         run("cargo", "generate-lockfile", "--offline", cwd=root)
         run("python3", str(root / "rustclamp/tools/boundaries.py"), "--manifest",
-            str(root / "Cargo.toml"), "--expect-four", cwd=root)
+            str(root / "Cargo.toml"), "--expect-six", cwd=root)
         check(root)
         check_pico_runtime_absence(root)
         check_examples(root)
