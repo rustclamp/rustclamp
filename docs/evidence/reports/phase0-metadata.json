@@ -1,0 +1,17 @@
+{
+  "workspace_members": [
+    "rustclamp",
+    "rustclamp-core",
+    "rustclamp-kernel",
+    "rustclamp-runtime"
+  ],
+  "dependencies": {
+    "rustclamp": [],
+    "rustclamp-core": [],
+    "rustclamp-kernel": [],
+    "rustclamp-runtime": []
+  },
+  "architecture_targets": [
+    "architecture"
+  ]
+}

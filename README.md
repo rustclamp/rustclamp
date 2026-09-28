@@ -21,7 +21,8 @@ Rust 1.96.1 is the tested minimum; the facade has no dependencies. Publishing is
 disabled until licensing, registry ownership and the prototype API are reviewed.
 
 See the [Pico results](docs/evidence/phase1.md) for measured costs and limitations.
-Source changes remain local; hosted CI and remote source checkout are deferred.
+The example and source are available in the `rustclamp` repository. Package checks
+run in independent repositories and in the combined developer checkout.
 
 ```sh
 cargo fmt --all -- --check
