@@ -1,8 +1,13 @@
 //! Synchronous fake-resource proof for process-scoped lifecycle coordination.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
-use rustclamp_core::{ApplicationId, CapabilityId, ExecutionId, ModuleId, ProcessId};
+use rustclamp_core::{
+    ApplicationId, Capability, CapabilityId, Drain, ExecutionId, Initialize, LifecycleContext,
+    Module, ModuleId, ProcessId, Provides, Ready, Requires, Start, Stop,
+};
 use rustclamp_kernel::{ApplicationBlueprint, FrozenProcess, ProjectionError};
 
 pub const APPLICATION: ApplicationId = ApplicationId::new("example.lifecycle.application");
@@ -14,6 +19,208 @@ pub const DATABASE: ModuleId = ModuleId::new("example.lifecycle.database");
 
 const USERS_CAPABILITY: CapabilityId = CapabilityId::new("example.lifecycle.users-service");
 const DATABASE_CAPABILITY: CapabilityId = CapabilityId::new("example.lifecycle.database");
+
+type SharedResources = Rc<RefCell<FakeResources>>;
+
+pub struct DatabaseCapability;
+
+impl Capability for DatabaseCapability {
+    type Value = FakeDatabase;
+
+    const ID: CapabilityId = DATABASE_CAPABILITY;
+}
+
+pub struct UsersCapability;
+
+impl Capability for UsersCapability {
+    type Value = FakeUsers;
+
+    const ID: CapabilityId = USERS_CAPABILITY;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FakeDatabase {
+    resources: SharedResources,
+}
+
+impl Module for FakeDatabase {
+    const ID: ModuleId = DATABASE;
+}
+
+impl Provides<DatabaseCapability> for FakeDatabase {
+    fn provided_value(&self) -> &FakeDatabase {
+        self
+    }
+}
+
+impl Initialize for FakeDatabase {
+    type Error = &'static str;
+
+    fn initialize(&mut self, context: &LifecycleContext) -> Result<(), Self::Error> {
+        if !valid_context(context) {
+            return Err("unexpected application or process");
+        }
+        self.resources.borrow_mut().database_open = true;
+        Ok(())
+    }
+}
+
+impl Ready for FakeDatabase {
+    type Error = &'static str;
+
+    fn ready(&mut self, context: &LifecycleContext) -> Result<(), Self::Error> {
+        if valid_context(context) && self.resources.borrow().database_open {
+            Ok(())
+        } else {
+            Err("database is not initialized for this process")
+        }
+    }
+}
+
+impl Stop for FakeDatabase {
+    type Error = &'static str;
+
+    fn stop(&mut self, _context: &LifecycleContext) -> Result<(), Self::Error> {
+        let mut resources = self.resources.borrow_mut();
+        if resources.users_initialized {
+            return Err("Users must stop before Database");
+        }
+        resources.database_open = false;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FakeUsers {
+    resources: SharedResources,
+}
+
+impl Module for FakeUsers {
+    const ID: ModuleId = USERS;
+}
+
+impl Requires<DatabaseCapability> for FakeUsers {}
+
+impl Provides<UsersCapability> for FakeUsers {
+    fn provided_value(&self) -> &FakeUsers {
+        self
+    }
+}
+
+impl Initialize for FakeUsers {
+    type Error = &'static str;
+
+    fn initialize(&mut self, _context: &LifecycleContext) -> Result<(), Self::Error> {
+        let mut resources = self.resources.borrow_mut();
+        if !resources.database_open {
+            return Err("Database must initialize before Users");
+        }
+        resources.users_initialized = true;
+        Ok(())
+    }
+}
+
+impl Start for FakeUsers {
+    type Error = &'static str;
+
+    fn start(&mut self, _context: &LifecycleContext) -> Result<(), Self::Error> {
+        let mut resources = self.resources.borrow_mut();
+        if !resources.users_initialized || !resources.database_open {
+            return Err("Users cannot start before Database is available");
+        }
+        resources.users_started = true;
+        Ok(())
+    }
+}
+
+impl Ready for FakeUsers {
+    type Error = &'static str;
+
+    fn ready(&mut self, _context: &LifecycleContext) -> Result<(), Self::Error> {
+        if self.resources.borrow().users_started {
+            Ok(())
+        } else {
+            Err("Users has not started")
+        }
+    }
+}
+
+impl Drain for FakeUsers {
+    type Error = &'static str;
+
+    fn drain(&mut self, _context: &LifecycleContext) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl Stop for FakeUsers {
+    type Error = &'static str;
+
+    fn stop(&mut self, _context: &LifecycleContext) -> Result<(), Self::Error> {
+        let mut resources = self.resources.borrow_mut();
+        resources.users_started = false;
+        resources.users_initialized = false;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Worker {
+    resources: SharedResources,
+}
+
+impl Module for Worker {
+    const ID: ModuleId = WORKER_ROOT;
+}
+
+impl Requires<UsersCapability> for Worker {}
+
+impl Start for Worker {
+    type Error = &'static str;
+
+    fn start(&mut self, _context: &LifecycleContext) -> Result<(), Self::Error> {
+        let users_started = self.resources.borrow().users_started;
+        if users_started {
+            self.resources.borrow_mut().worker_started = true;
+            Ok(())
+        } else {
+            Err("Worker cannot start before Users")
+        }
+    }
+}
+
+impl Ready for Worker {
+    type Error = &'static str;
+
+    fn ready(&mut self, _context: &LifecycleContext) -> Result<(), Self::Error> {
+        if self.resources.borrow().worker_started {
+            Ok(())
+        } else {
+            Err("Worker has not started")
+        }
+    }
+}
+
+impl Drain for Worker {
+    type Error = &'static str;
+
+    fn drain(&mut self, _context: &LifecycleContext) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl Stop for Worker {
+    type Error = &'static str;
+
+    fn stop(&mut self, _context: &LifecycleContext) -> Result<(), Self::Error> {
+        self.resources.borrow_mut().worker_started = false;
+        Ok(())
+    }
+}
+
+fn valid_context(context: &LifecycleContext) -> bool {
+    context.application() == APPLICATION && context.process() == WORKER
+}
 
 pub fn application() -> ApplicationBlueprint {
     let mut app = ApplicationBlueprint::new(APPLICATION);
@@ -122,14 +329,81 @@ pub struct Outcome {
     elapsed_ms: u64,
     initialized: Vec<Step>,
     started: Vec<Step>,
+    shared: SharedResources,
+    participants: Vec<Participant>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LifecycleFailure {
     Projection(ProjectionError),
-    PhaseDeadline { phase: Phase, module: ModuleId },
-    Injected { phase: Phase, module: ModuleId },
+    PhaseDeadline {
+        phase: Phase,
+        module: ModuleId,
+    },
+    Injected {
+        phase: Phase,
+        module: ModuleId,
+    },
     RequiredHealth(ModuleId),
+    Hook {
+        phase: Phase,
+        module: ModuleId,
+        message: &'static str,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Participant {
+    Database(FakeDatabase),
+    Users(FakeUsers),
+    Worker(Worker),
+}
+
+impl Participant {
+    fn new(module: ModuleId, resources: &SharedResources) -> Option<Self> {
+        Some(match module {
+            DATABASE => Self::Database(FakeDatabase {
+                resources: resources.clone(),
+            }),
+            USERS => Self::Users(FakeUsers {
+                resources: resources.clone(),
+            }),
+            WORKER_ROOT => Self::Worker(Worker {
+                resources: resources.clone(),
+            }),
+            _ => return None,
+        })
+    }
+
+    fn invoke(
+        &mut self,
+        phase: Phase,
+        context: &LifecycleContext,
+    ) -> Option<Result<(), &'static str>> {
+        Some(match (self, phase) {
+            (Self::Database(module), Phase::Initialize) => Initialize::initialize(module, context),
+            (Self::Database(module), Phase::Ready) => Ready::ready(module, context),
+            (Self::Database(module), Phase::Stop) => Stop::stop(module, context),
+            (Self::Users(module), Phase::Initialize) => Initialize::initialize(module, context),
+            (Self::Users(module), Phase::Start) => Start::start(module, context),
+            (Self::Users(module), Phase::Ready) => Ready::ready(module, context),
+            (Self::Users(module), Phase::Drain) => Drain::drain(module, context),
+            (Self::Users(module), Phase::Stop) => Stop::stop(module, context),
+            (Self::Worker(module), Phase::Start) => Start::start(module, context),
+            (Self::Worker(module), Phase::Ready) => Ready::ready(module, context),
+            (Self::Worker(module), Phase::Drain) => Drain::drain(module, context),
+            (Self::Worker(module), Phase::Stop) => Stop::stop(module, context),
+            _ => return None,
+        })
+    }
+
+    fn cancel(&mut self) {
+        match self {
+            Self::Users(module) => module.resources.borrow_mut().users_started = false,
+            Self::Worker(module) => module.resources.borrow_mut().worker_started = false,
+            Self::Database(_) => {}
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -232,7 +506,8 @@ pub fn shutdown(outcome: Outcome, reason: ShutdownReason) -> Outcome {
         control: outcome.control,
         elapsed_ms: outcome.elapsed_ms,
         events: outcome.events,
-        resources: outcome.resources,
+        shared: outcome.shared,
+        participants: outcome.participants,
         initialized: outcome.initialized,
         started: outcome.started,
         status: outcome.status,
@@ -252,7 +527,8 @@ struct Driver {
     initialized: Vec<Step>,
     started: Vec<Step>,
     status: ProcessStatus,
-    resources: FakeResources,
+    shared: SharedResources,
+    participants: Vec<Participant>,
     failure: Option<LifecycleFailure>,
     cleanup_failures: Vec<(Phase, ModuleId)>,
     shutdown_reason: Option<ShutdownReason>,
@@ -260,9 +536,15 @@ struct Driver {
 
 impl Driver {
     fn new(frozen: FrozenProcess, control: TestControl) -> Self {
-        let ordered = lifecycle_order(&frozen)
+        let modules = lifecycle_order(&frozen);
+        let shared = Rc::new(RefCell::new(FakeResources::default()));
+        let ordered = modules
             .into_iter()
             .filter_map(|module| step(module, control))
+            .collect();
+        let participants = lifecycle_order(&frozen)
+            .into_iter()
+            .filter_map(|module| Participant::new(module, &shared))
             .collect();
         Self {
             ordered,
@@ -281,7 +563,8 @@ impl Driver {
                 accepting_work: false,
                 health: Health::Healthy,
             },
-            resources: FakeResources::default(),
+            shared,
+            participants,
             failure: None,
             cleanup_failures: Vec::new(),
             shutdown_reason: None,
@@ -360,6 +643,9 @@ impl Driver {
         for step in self.started.clone().into_iter().rev() {
             if step.cancel {
                 self.record(Phase::Cancel, step.module);
+                if let Some(participant) = self.participant_mut(step.module) {
+                    participant.cancel();
+                }
             }
         }
         self.status.state = LifecycleState::Stopping;
@@ -408,7 +694,13 @@ impl Driver {
                 module: step.module,
             });
         }
-        self.apply_resource_state(phase, step.module);
+        if let Some(Err(message)) = self.invoke(step.module, phase) {
+            return Err(LifecycleFailure::Hook {
+                phase,
+                module: step.module,
+                message,
+            });
+        }
         Ok(())
     }
 
@@ -427,27 +719,25 @@ impl Driver {
         if self.control.cleanup_failure == Some((phase, step.module)) {
             self.cleanup_failures.push((phase, step.module));
         } else {
-            self.apply_resource_state(phase, step.module);
+            if let Some(Err(_)) = self.invoke(step.module, phase) {
+                self.cleanup_failures.push((phase, step.module));
+            }
         }
     }
 
-    fn apply_resource_state(&mut self, phase: Phase, module: ModuleId) {
-        match (phase, module) {
-            (Phase::Initialize, DATABASE) => self.resources.database_open = true,
-            (Phase::Initialize, USERS) => self.resources.users_initialized = true,
-            (Phase::Start, USERS) => self.resources.users_started = true,
-            (Phase::Start, WORKER_ROOT) => self.resources.worker_started = true,
-            (Phase::Cancel, WORKER_ROOT) | (Phase::Stop, WORKER_ROOT) => {
-                self.resources.worker_started = false;
-            }
-            (Phase::Cancel, USERS) => self.resources.users_started = false,
-            (Phase::Stop, USERS) => {
-                self.resources.users_started = false;
-                self.resources.users_initialized = false;
-            }
-            (Phase::Stop, DATABASE) => self.resources.database_open = false,
-            _ => {}
-        }
+    fn participant_mut(&mut self, module: ModuleId) -> Option<&mut Participant> {
+        self.participants
+            .iter_mut()
+            .find(|participant| match participant {
+                Participant::Database(_) => module == DATABASE,
+                Participant::Users(_) => module == USERS,
+                Participant::Worker(_) => module == WORKER_ROOT,
+            })
+    }
+
+    fn invoke(&mut self, module: ModuleId, phase: Phase) -> Option<Result<(), &'static str>> {
+        let context = LifecycleContext::new(APPLICATION, WORKER);
+        self.participant_mut(module)?.invoke(phase, &context)
     }
 
     fn record(&mut self, phase: Phase, module: ModuleId) {
@@ -459,9 +749,10 @@ impl Driver {
     }
 
     fn outcome(self) -> Outcome {
+        let resources = *self.shared.borrow();
         Outcome {
             status: self.status,
-            resources: self.resources,
+            resources,
             shutdown_reason: self.shutdown_reason,
             events: self.events,
             failure: self.failure,
@@ -470,6 +761,8 @@ impl Driver {
             elapsed_ms: self.elapsed_ms,
             initialized: self.initialized,
             started: self.started,
+            shared: self.shared,
+            participants: self.participants,
         }
     }
 }
@@ -551,6 +844,8 @@ fn failed_projection(error: ProjectionError) -> Outcome {
         events: Vec::new(),
         failure: Some(LifecycleFailure::Projection(error)),
         cleanup_failures: Vec::new(),
+        shared: Rc::new(RefCell::new(FakeResources::default())),
+        participants: Vec::new(),
         control: TestControl::default(),
         elapsed_ms: 0,
         initialized: Vec::new(),
