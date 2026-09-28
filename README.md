@@ -42,13 +42,24 @@ are consumed, and the CLI target owns duplicate-name validation, deterministic
 ordering, empty-tree behavior, and runtime command execution. This is a focused
 target prototype, not a production console package or process projection.
 
+`examples/04-process` prototypes the Phase 4 composition boundary: one
+application blueprint resolves separate CLI and Worker projections; required
+and optional providers, defaults, explicit selection, replacement, qualified
+contributions, and exclusions are validated only when reachable. Worker-only
+configuration is read only for Worker. The immutable freeze result provides
+both a compact runtime plan and structured inspection metadata, including
+inclusion paths and exclusion reasons. This remains a small in-memory
+prototype, not full runtime or lifecycle integration. Its
+[Phase 4 evidence](docs/evidence/phase4.md) records architecture checks,
+process-specific build targets, and scale measurements.
+
 ## Project Map
 
 | Repository | Responsibility | Status |
 | --- | --- | --- |
 | [`rustclamp`](https://github.com/rustclamp/rustclamp) | Main framework facade and application entry point | Pico is implemented and measured |
-| [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts | `Clock` and additive module/capability declarations |
-| [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Typed capability resolution and generic contribution-target assembly; no automated whole-app composition |
+| [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts | Capabilities, modules, contributions, and application/process identities |
+| [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Typed resolution, contribution assembly, and process-root reachability prototype |
 | [`runtime`](https://github.com/rustclamp/runtime) | Execution-environment contracts | Scaffold; no public contracts |
 | [`docs.rustclamp.com`](https://github.com/rustclamp/docs.rustclamp.com) | User and architecture documentation | Supporting repository, not a framework component |
 | [`rustclamp.com`](https://github.com/rustclamp/rustclamp.com) | Project website | Supporting repository, not a framework component |
@@ -56,10 +67,11 @@ target prototype, not a production console package or process projection.
 Today, the demonstrated facade path is `Clamp::run`: it runs a closure
 synchronously on the current thread. Core defines `Clock` and additive module
 contracts; Kernel resolves declared typed requirements, reports composition
-errors, and validates cycles. These are reusable prototypes, not automatic
-whole-application discovery. Process projection and runtime integration are
-not implemented. The target architecture below is a design direction, not a
-working end-to-end pipeline.
+errors, validates cycles, and now prototypes process-root reachability. These
+are reusable prototypes, not automatic whole-application discovery. Full
+process composition and runtime integration are not implemented. The target
+architecture below remains a design direction, not a working end-to-end
+pipeline.
 “Application modules” means modules in a user's application, not these companion
 repositories.
 

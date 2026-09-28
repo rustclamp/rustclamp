@@ -1,0 +1,33 @@
+[package]
+name = "rustclamp-process-build-targets"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.1"
+publish = false
+
+[features]
+default = []
+runtime-selected = ["dep:rustclamp-kernel"]
+cli-target = []
+worker-target = ["dep:rustclamp-kernel"]
+
+[dependencies]
+rustclamp-core = { version = "0.1.0", path = "../../../../core" }
+rustclamp-kernel = { version = "0.1.0", path = "../../../../kernel", optional = true }
+
+[[bin]]
+name = "runtime-selected"
+path = "src/bin/runtime-selected.rs"
+required-features = ["runtime-selected"]
+
+[[bin]]
+name = "cli-target"
+path = "src/bin/cli-target.rs"
+required-features = ["cli-target"]
+
+[[bin]]
+name = "worker-target"
+path = "src/bin/worker-target.rs"
+required-features = ["worker-target"]
+
+[workspace]
