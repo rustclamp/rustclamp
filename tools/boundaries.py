@@ -12,6 +12,10 @@ ALLOWED = {
     "rustclamp": {"rustclamp-core", "rustclamp-kernel", "rustclamp-runtime"},
     "rustclamp-core": set(),
     "rustclamp-kernel": {"rustclamp-core"},
+    "rustclamp-messaging": {
+        "itoa", "memchr", "proc-macro2", "quote", "serde", "serde_core",
+        "serde_derive", "serde_json", "syn", "unicode-ident", "zmij",
+    },
     "rustclamp-runtime": {
     'bytes',
     'errno',
@@ -331,12 +335,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--self-test", action="store_true")
-    parser.add_argument("--expect-six", action="store_true")
+    parser.add_argument("--expect-current-members", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         self_test()
     data = metadata(args.manifest)
-    if args.expect_six:
+    if args.expect_current_members:
         members = {p["name"] for p in data["packages"] if p["id"] in data["workspace_members"]}
         if members != set(ALLOWED):
             parser.error(f"unexpected workspace members: {sorted(members)}")

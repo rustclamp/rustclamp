@@ -21,6 +21,7 @@ PACKAGE_TO_REPO = {
     "rustclamp-runtime": "runtime",
     "rustclamp-http": "http",
     "rustclamp-postgres": "postgres",
+    "rustclamp-messaging": "messaging",
 }
 
 
@@ -242,7 +243,7 @@ def main():
         run("python3", str(root / "rustclamp/tools/workspace.py"), "--root", str(root), cwd=root)
         run("cargo", "generate-lockfile", "--offline", cwd=root)
         run("python3", str(root / "rustclamp/tools/boundaries.py"), "--manifest",
-            str(root / "Cargo.toml"), "--expect-six", cwd=root)
+            str(root / "Cargo.toml"), "--expect-current-members", cwd=root)
         check(root)
         check_pico_runtime_absence(root)
         check_examples(root)

@@ -1,9 +1,9 @@
 # Contributing
 
 RustClamp is the ecosystem; Clamp is the framework. The facade now implements the
-Pico closure entrypoint in `examples/00-pico/`; all four libraries remain free of
-dependencies. Runtime, lifecycle and integration contracts must be justified by
-subsequent prototypes.
+Pico closure entrypoint in `examples/00-pico/`; the base facade/Core/Kernel/Runtime
+closure remains small, while optional integrations add only their selected
+ecosystem dependencies.
 
 ## Decision and Change Flow
 
@@ -35,6 +35,9 @@ git clone https://github.com/rustclamp/rustclamp.git
 git clone https://github.com/rustclamp/core.git
 git clone https://github.com/rustclamp/kernel.git
 git clone https://github.com/rustclamp/runtime.git
+git clone https://github.com/rustclamp/http.git
+git clone https://github.com/rustclamp/postgres.git
+git clone https://github.com/rustclamp/messaging.git
 rustup toolchain install 1.96.1 --profile minimal --component clippy --component rustfmt
 python3 rustclamp/tools/workspace.py
 cargo metadata --offline --format-version 1
@@ -57,7 +60,7 @@ be forced with `--color always`. The benchmark is advisory on an uncontrolled
 host; its warning does not mean the command failed.
 
 `workspace.py` creates the root **virtual Cargo manifest**, never a root Git
-repository. The four siblings remain independently owned, versioned repositories.
+repository. The package siblings remain independently owned, versioned repositories.
 It refuses to overwrite a differing coordination manifest or toolchain file.
 `workspace/` holds local coordination notes; `experiments/` holds architectural
 experiments; `playground/` holds disposable apps. Their contents are local.
