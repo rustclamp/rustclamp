@@ -62,6 +62,15 @@ pre-effect failure, and timeout-as-unknown. Only a definite decline releases the
 inventory reservation; an ambiguous timeout records `payment_unknown` without
 retrying, while later reconciliation can settle that state explicitly.
 
+The new `rustclamp-scheduler` target validates unique names, positive fixed
+intervals, and a 128-job capacity. It defines skip/run-once misfire behavior,
+sequential tick execution, and process-local overlap suppression; it does not
+claim distributed locking. The `10-scheduler` example composes an unchanged job
+operation and advances an injected Core `Clock` through regular and missed
+intervals without Tokio or cron. The scheduler crate and example compile cleanly,
+pass Clippy with warnings denied, and the controlled-clock example runs. Focused
+clock/misfire tests remain pending.
+
 ## Verification so far
 
 - `cargo check --offline --locked` passes for an isolated copy of the messaging
@@ -87,5 +96,6 @@ retrying, while later reconciliation can settle that state explicitly.
 
 ## Next
 
-Add crash-window, duplicate, poison-message, and retry-exhaustion evidence, then
-run the process projections against live PostgreSQL and JetStream services.
+Add failure tests for clock/misfire and outbox/inbox crash windows; define the
+scheduler's stop-and-drain lifecycle; then run the process projections against
+live PostgreSQL and JetStream services.

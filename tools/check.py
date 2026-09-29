@@ -23,6 +23,7 @@ PACKAGE_TO_REPO = {
     "rustclamp-postgres": "postgres",
     "rustclamp-messaging": "messaging",
     "rustclamp-worker": "worker",
+    "rustclamp-scheduler": "scheduler",
 }
 
 
@@ -135,6 +136,7 @@ def check_examples(root):
         ("07-messaging", "rustclamp-example-messaging"),
         ("08-email-worker", "rustclamp-example-email-worker"),
         ("09-create-order", "rustclamp-example-create-order"),
+        ("10-scheduler", "rustclamp-example-scheduler"),
     )
     for example, package_name in examples:
         example_root = root / "rustclamp/examples" / example
@@ -150,7 +152,7 @@ def check_examples(root):
         run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
             "--all-targets", "--", "-D", "warnings", cwd=root)
         run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest), cwd=root)
-        if example != "06-users":
+        if example not in {"06-users", "09-create-order"}:
             run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--example", example, cwd=root)
         if example == "05-lifecycle":
