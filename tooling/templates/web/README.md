@@ -51,8 +51,9 @@ redirects with the errors and input kept; `request.render(...)` then passes
 `csrf` (`{!! csrf !!}`), `errors` (a list), `flash` (from `session.flash(...)`)
 and `old` (`{{ old.email }}`) once.
 Uploads need `enctype="multipart/form-data"` on the form; `request.form(...)`
-and validation read its text fields as usual. `request.file("photo")` is the
-upload, and `file.store(request.storage().disk("public"), "photos", &["jpg", "png"])`
+and validation read its text fields as usual; `("photo", "required|image|max:2048")`
+checks the upload (`image`: JPEG, PNG, GIF or WebP by content; `mimes:pdf,txt`;
+`max`/`min` in kilobytes). `request.file("photo")` is the upload, and `file.store(request.storage().disk("public"), "photos", &["jpg", "png"])`
 saves it under a new name and returns its path, refusing other extensions;
 `disk.url(&path)` links to it. Multipart bodies may be up to 10 MiB
 (`MAX_UPLOAD`), other bodies 1 MiB.

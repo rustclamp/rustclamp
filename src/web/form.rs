@@ -3,7 +3,7 @@
 
 use super::request::{decode, encode};
 use super::session::{ERRORS, FLASH, OLD};
-use super::{Request, Response, ToValue, Value, redirect, render};
+use super::{Request, Response, ToValue, UploadedFile, Value, redirect, render};
 
 /// Input that passed [`Request::validate`]: each field trimmed.
 #[derive(Debug)]
@@ -68,6 +68,11 @@ impl Request {
     /// or `https` only, so a stored link can never be `javascript:`). A field that
     /// is empty and not `required` passes. Values are trimmed.
     ///
+    /// A field with `file`, `image` or `mimes:...` is an upload
+    /// ([`Request::file`]): `image` is a JPEG, PNG, GIF or WebP by extension
+    /// and by content, `mimes:pdf,txt` limits the extension, and `min:N`/`max:N`
+    /// count kilobytes. Its value in the [`Form`] is the name the browser sent.
+    ///
     /// ```
     /// use rustclamp::web::Request;
     ///
@@ -86,10 +91,29 @@ impl Request {
     pub fn validate(&self, rules: &[(&str, &str)]) -> Result<Form, Invalid> {
         let mut values = Vec::new();
         let mut errors = Vec::new();
+        let mut files = Vec::new();
         for (name, field_rules) in rules {
-            let value = self.form(name).unwrap_or_default().trim().to_owned();
             let label = name.replace('_', " ");
             let required = field_rules.split('|').any(|rule| rule == "required");
+            let is_file = field_rules
+                .split('|')
+                .any(|rule| matches!(rule, "file" | "image") || rule.starts_with("mimes:"));
+            if is_file {
+                match self.file(name) {
+                    None if required => errors.push(format!("The {label} field is required.")),
+                    None => {}
+                    Some(file) => errors.extend(
+                        field_rules
+                            .split('|')
+                            .filter_map(|rule| check_file(rule, &file, &label, name)),
+                    ),
+                }
+                let sent = self.file(name).map(|file| file.name).unwrap_or_default();
+                values.push(((*name).to_owned(), sent));
+                files.push(*name);
+                continue;
+            }
+            let value = self.form(name).unwrap_or_default().trim().to_owned();
             if value.is_empty() {
                 if required {
                     errors.push(format!("The {label} field is required."));
@@ -106,10 +130,11 @@ impl Request {
         if errors.is_empty() {
             return Ok(Form { values });
         }
-        // Passwords are never kept for refilling the form.
+        // Passwords are never kept for refilling the form, and a browser
+        // cannot refill a file input.
         let old = values
             .iter()
-            .filter(|(name, _)| !name.contains("password"))
+            .filter(|(name, _)| !name.contains("password") && !files.contains(&name.as_str()))
             .map(|(name, value)| format!("{}={}", encode(name), encode(value)))
             .collect::<Vec<_>>()
             .join("&");
@@ -191,6 +216,50 @@ fn check(rule: &str, value: &str, label: &str, name: &str) -> Option<String> {
             format!("The {label} field must be a link starting with http:// or https://.")
         }),
         _ => panic!("unknown validation rule {rule} for {name}"),
+    }
+}
+
+/// One rule for an uploaded file. Sizes are kilobytes, as in Laravel.
+fn check_file(rule: &str, file: &UploadedFile, label: &str, name: &str) -> Option<String> {
+    let (rule, argument) = rule.split_once(':').unwrap_or((rule, ""));
+    let kilobytes = || {
+        argument
+            .parse::<usize>()
+            .unwrap_or_else(|_| panic!("rule {rule} for {name} needs a number"))
+    };
+    let extension = file.extension().unwrap_or_default();
+    match rule {
+        "required" | "file" => None,
+        "max" => (file.size() > kilobytes() * 1024).then(|| {
+            format!(
+                "The {label} field must not be greater than {} kilobytes.",
+                kilobytes()
+            )
+        }),
+        "min" => (file.size() < kilobytes() * 1024).then(|| {
+            format!(
+                "The {label} field must be at least {} kilobytes.",
+                kilobytes()
+            )
+        }),
+        "mimes" => (!argument
+            .split(',')
+            .any(|allowed| allowed.trim().eq_ignore_ascii_case(&extension)))
+        .then(|| format!("The {label} field must be a file of type: {argument}.")),
+        "image" => {
+            // The content must match the extension: a renamed page is not an
+            // image. SVG is left out on purpose: it can carry script.
+            let bytes = &file.bytes;
+            let valid = match extension.as_str() {
+                "jpg" | "jpeg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+                "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+                "gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+                "webp" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
+                _ => false,
+            };
+            (!valid).then(|| format!("The {label} field must be an image."))
+        }
+        _ => panic!("unknown validation rule {rule} for file field {name}"),
     }
 }
 
@@ -300,5 +369,67 @@ mod tests {
         let request = Request::post("/").with_body("");
         let invalid = request.validate(&[("a", "required")]).unwrap_err();
         assert_eq!(invalid.back(&request, "/").status, 422);
+    }
+
+    fn upload(parts: &[(&str, &str, &[u8])]) -> Request {
+        let mut body = Vec::new();
+        for (name, filename, bytes) in parts {
+            body.extend_from_slice(b"--b\r\nContent-Disposition: form-data; name=\"");
+            body.extend_from_slice(name.as_bytes());
+            if !filename.is_empty() {
+                body.extend_from_slice(b"\"; filename=\"");
+                body.extend_from_slice(filename.as_bytes());
+            }
+            body.extend_from_slice(b"\"\r\n\r\n");
+            body.extend_from_slice(bytes);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(b"--b--\r\n");
+        Request::post("/")
+            .with_header("content-type", "multipart/form-data; boundary=b")
+            .with_body(body)
+    }
+
+    #[test]
+    fn validates_uploads() {
+        let png: &[u8] = b"\x89PNG\r\n\x1a\nrest";
+        let rules = [
+            ("title", "required|max:5"),
+            ("photo", "required|image|max:1"),
+            ("doc", "mimes:pdf,txt"),
+        ];
+        let ok = upload(&[("title", "", b"Beach"), ("photo", "a.PNG", png)]);
+        let form = ok.validate(&rules).unwrap();
+        assert_eq!(form.get("photo"), "a.PNG");
+        assert_eq!(form.get("doc"), "");
+
+        // A page renamed to .png, a file over 1 KB, a wrong type, a missing
+        // required file; the text field's max still counts characters.
+        let bad = upload(&[
+            ("title", "", b"Beaches"),
+            ("photo", "x.png", b"<script>"),
+            ("doc", "d.exe", b"MZ"),
+        ]);
+        assert_eq!(
+            bad.validate(&rules).unwrap_err().errors,
+            [
+                "The title field must not be longer than 5 characters.",
+                "The photo field must be an image.",
+                "The doc field must be a file of type: pdf,txt.",
+            ]
+        );
+        let big = [png, &[0; 1024]].concat();
+        let invalid = upload(&[("title", "", b"a"), ("photo", "a.png", &big)])
+            .validate(&rules)
+            .unwrap_err();
+        assert_eq!(
+            invalid.errors,
+            ["The photo field must not be greater than 1 kilobytes."]
+        );
+        let invalid = upload(&[("title", "", b"a")]).validate(&rules).unwrap_err();
+        assert_eq!(invalid.errors, ["The photo field is required."]);
+        assert!(!invalid.old.contains("photo"));
+        let svg = upload(&[("title", "", b"a"), ("photo", "a.svg", b"<svg/>")]);
+        assert!(svg.validate(&rules).is_err());
     }
 }

@@ -51,7 +51,9 @@
   `UploadedFile`s; `Request::form` and validation read the form's text fields,
   CSRF token included. `UploadedFile::store(disk, folder, allowed)` saves under
   a new UUIDv7 name and keeps only the listed extensions, so an upload cannot
-  put `.html` or `.svg` on a public disk.
+  put `.html` or `.svg` on a public disk. Validation rules for uploads, as in
+  Laravel: `file`, `image` (JPEG, PNG, GIF or WebP, checked by content; no
+  SVG), `mimes:pdf,txt`, and `min`/`max` in kilobytes on file fields.
 - Views are templates (ADR 0012): a std-only Blade subset rendered at request
   time from the Vite-built HTML. `{{ name }}` escapes, `{!! name !!}` does
   not; `@if`/`@else`, `@foreach`, `@extends`/`@section`/`@yield`,
