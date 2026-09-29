@@ -5,6 +5,8 @@ use rustclamp_messaging::MessageEnvelope;
 use rustclamp_postgres::{Database, Primary, sqlx};
 use serde_json::json;
 use std::error::Error;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 const STREAM: &str = "RUSTCLAMP_ORDERS";
@@ -21,8 +23,10 @@ pub async fn migrate(database: &Database<Primary>) -> Result<(), sqlx::Error> {
             id BIGSERIAL PRIMARY KEY,
             sku TEXT NOT NULL,
             quantity INTEGER NOT NULL CHECK (quantity > 0),
+            status TEXT NOT NULL DEFAULT 'created',
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'created';
         CREATE TABLE IF NOT EXISTS outbox (
             id BIGSERIAL PRIMARY KEY,
             message_id TEXT NOT NULL UNIQUE,
@@ -175,3 +179,104 @@ pub async fn ensure_stream(jetstream: &Context) -> Result<(), Box<dyn Error + Se
 
 /// Delay between supervised publisher polls when no rows are pending.
 pub const PUBLISH_POLL: Duration = Duration::from_millis(500);
+
+/// Future returned by the application-owned payment gateway port.
+pub type PaymentFuture<'a> = Pin<Box<dyn Future<Output = Result<(), PaymentFailure>> + Send + 'a>>;
+
+/// Application boundary for one payment attempt.
+pub trait PaymentGateway: Send + Sync {
+    /// Charges one order or returns a classified failure.
+    fn charge(&self, order_id: i64) -> PaymentFuture<'_>;
+}
+
+/// Failure known to happen before a payment side effect, or a definite decline.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PaymentFailure {
+    /// The payment provider definitively declined the charge.
+    Declined,
+    /// The provider guarantees the charge was not attempted and can be retried by policy.
+    Retryable,
+}
+
+impl std::fmt::Display for PaymentFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Declined => f.write_str("payment declined"),
+            Self::Retryable => f.write_str("payment failed before the side effect"),
+        }
+    }
+}
+
+impl Error for PaymentFailure {}
+
+/// Result of one payment attempt, including an ambiguous timeout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PaymentDecision {
+    /// The provider confirmed the charge.
+    Authorized,
+    /// The provider definitively declined the charge.
+    Declined,
+    /// The provider guaranteed no side effect, so application policy may retry.
+    Retryable,
+    /// The attempt timed out and may already have charged the customer.
+    UnknownOutcome,
+}
+
+/// Runs one bounded payment attempt without retrying ambiguous outcomes.
+pub async fn payment_attempt<G: PaymentGateway>(
+    gateway: &G,
+    order_id: i64,
+    timeout: Duration,
+) -> PaymentDecision {
+    match tokio::time::timeout(timeout, gateway.charge(order_id)).await {
+        Ok(Ok(())) => PaymentDecision::Authorized,
+        Ok(Err(PaymentFailure::Declined)) => PaymentDecision::Declined,
+        Ok(Err(PaymentFailure::Retryable)) => PaymentDecision::Retryable,
+        Err(_) => PaymentDecision::UnknownOutcome,
+    }
+}
+
+/// Persists a payment decision and compensates inventory only after a definite decline.
+pub async fn settle_payment(
+    database: &Database<Primary>,
+    order_id: i64,
+    decision: PaymentDecision,
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
+    if decision == PaymentDecision::Retryable {
+        return Ok(false);
+    }
+    let mut transaction = database.begin().await?;
+    let reservation: Option<(String, i32, String)> =
+        sqlx::query_as("SELECT sku, quantity, status FROM orders WHERE id = $1 FOR UPDATE")
+            .bind(order_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+    let Some((sku, quantity, status)) = reservation else {
+        return Err(std::io::Error::other("order not found").into());
+    };
+    if !matches!(status.as_str(), "created" | "payment_unknown") {
+        transaction.commit().await?;
+        return Ok(false);
+    }
+
+    let next_status = match decision {
+        PaymentDecision::Authorized => "paid",
+        PaymentDecision::Declined => "declined",
+        PaymentDecision::UnknownOutcome => "payment_unknown",
+        PaymentDecision::Retryable => unreachable!("handled before opening transaction"),
+    };
+    sqlx::query("UPDATE orders SET status = $1 WHERE id = $2")
+        .bind(next_status)
+        .bind(order_id)
+        .execute(&mut *transaction)
+        .await?;
+    if decision == PaymentDecision::Declined {
+        sqlx::query("UPDATE inventory SET available = available + $1 WHERE sku = $2")
+            .bind(quantity)
+            .bind(sku)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    transaction.commit().await?;
+    Ok(true)
+}

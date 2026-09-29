@@ -57,6 +57,10 @@ It commits the inbox ID and fulfillment record atomically, then ACKs the broker
 delivery. Duplicate message IDs skip the effect; a transaction failure rolls
 both records back. The example compiles and passes Clippy, but concurrency and
 crash windows still need executable failure evidence.
+The order example also models payment approval, definite decline, retryable
+pre-effect failure, and timeout-as-unknown. Only a definite decline releases the
+inventory reservation; an ambiguous timeout records `payment_unknown` without
+retrying, while later reconciliation can settle that state explicitly.
 
 ## Verification so far
 

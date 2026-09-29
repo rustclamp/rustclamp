@@ -17,7 +17,16 @@ cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/
 cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin outbox-publisher
 cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin orders-worker
 cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin orders-api -- create widget 2
+cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin orders-api -- payment 1 timeout
 ```
+
+The payment command uses a local gateway stub with `approve`, `decline`,
+`timeout`, and `retryable` outcomes. A timeout is treated as unknown because the
+provider may have charged before its response was lost; the order keeps its
+inventory reservation and is not charged again automatically. A definite decline
+updates the order and restores inventory in one compensation transaction. A
+retryable pre-effect failure leaves the order unchanged for an explicitly
+authorized retry policy.
 
 If publishing succeeds but the database transaction cannot commit its
 `published_at` update, the row remains pending and may be published again.
