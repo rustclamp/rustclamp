@@ -19,6 +19,10 @@ PACKAGE_TO_REPO = {
     "rustclamp-core": "core",
     "rustclamp-kernel": "kernel",
     "rustclamp-runtime": "runtime",
+    "rustclamp-http": "http",
+    "rustclamp-postgres": "postgres",
+    "rustclamp-messaging": "messaging",
+    "rustclamp-worker": "worker",
 }
 
 
@@ -59,6 +63,20 @@ def allowed_package_closure(package):
                 packages.add(dependency)
                 pending.append(dependency)
     return packages
+
+
+def resolved_dependencies(metadata, package_name):
+    packages = {package["id"]: package["name"] for package in metadata["packages"]}
+    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+    package_id = next(key for key, name in packages.items() if name == package_name)
+    pending = [dependency["pkg"] for dependency in nodes[package_id]["deps"]]
+    reached = set()
+    while pending:
+        dependency = pending.pop()
+        if dependency not in reached:
+            reached.add(dependency)
+            pending.extend(item["pkg"] for item in nodes[dependency]["deps"])
+    return {packages[item] for item in reached}
 
 
 CHECKS_PASSED = 0
@@ -113,6 +131,8 @@ def check_examples(root):
         ("03-contribution", "rustclamp-example-contribution"),
         ("04-process", "rustclamp-example-process"),
         ("05-lifecycle", "rustclamp-example-lifecycle"),
+        ("06-users", "rustclamp-example-users"),
+        ("07-messaging", "rustclamp-example-messaging"),
     )
     for example, package_name in examples:
         example_root = root / "rustclamp/examples" / example
@@ -120,17 +140,7 @@ def check_examples(root):
         metadata = json.loads(subprocess.check_output(
             ["cargo", "metadata", "--offline", "--locked", "--format-version", "1",
              "--manifest-path", str(manifest)], cwd=root, text=True))
-        packages = {package["id"]: package["name"] for package in metadata["packages"]}
-        nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
-        package_id = next(key for key, name in packages.items() if name == package_name)
-        pending = [dependency["pkg"] for dependency in nodes[package_id]["deps"]]
-        reached = set()
-        while pending:
-            dependency = pending.pop()
-            if dependency not in reached:
-                reached.add(dependency)
-                pending.extend(item["pkg"] for item in nodes[dependency]["deps"])
-        dependencies = {packages[item] for item in reached}
+        dependencies = resolved_dependencies(metadata, package_name)
         assert "rustclamp" not in dependencies, f"{example} unexpectedly depends on the facade"
         print(f"{example} dependency graph: {', '.join(sorted(dependencies))}; facade absent")
 
@@ -138,8 +148,35 @@ def check_examples(root):
         run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
             "--all-targets", "--", "-D", "warnings", cwd=root)
         run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest), cwd=root)
-        run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
-            "--example", example, cwd=root)
+        if example != "06-users":
+            run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--example", example, cwd=root)
+        if example == "05-lifecycle":
+            assert "tokio" not in dependencies, "Tokio activated in the default lifecycle example"
+            feature_metadata = json.loads(subprocess.check_output(
+                ["cargo", "metadata", "--offline", "--locked", "--format-version", "1",
+                 "--manifest-path", str(manifest), "--features", "tokio-runtime"],
+                cwd=root, text=True))
+            feature_dependencies = resolved_dependencies(feature_metadata, package_name)
+            assert "tokio" in feature_dependencies, "Tokio feature did not activate Tokio"
+            run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--all-targets", "--all-features", "--", "-D", "warnings", cwd=root)
+            run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--all-features", cwd=root)
+        if example == "06-users":
+            assert {"rustclamp-http", "rustclamp-postgres", "tokio"}.isdisjoint(dependencies), (
+                "console-only Users graph activated an optional integration"
+            )
+            run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--bin", "users-console", "--", "create", "Ada", cwd=root)
+            for feature in (
+                "http", "postgres", "tracing", "measure-allocations",
+                "http,postgres,tracing,measure-allocations",
+            ):
+                run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
+                    "--features", feature, "--all-targets", "--", "-D", "warnings", cwd=root)
+                run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest),
+                    "--features", feature, "--all-targets", cwd=root)
         if example == "03-contribution":
                 run("cargo", "bench", "--offline", "--locked", "--manifest-path", str(manifest),
                     "--bench", "assembly", cwd=root)
@@ -187,6 +224,18 @@ def check_process_build_targets(root):
         print(f"{feature} build dependency graph: {', '.join(names) or '(none)'}")
 
 
+def check_pico_runtime_absence(root):
+    manifest = root / "rustclamp/Cargo.toml"
+    graph = subprocess.check_output(
+        ["cargo", "tree", "--offline", "--locked", "--manifest-path", str(manifest), "-e", "features"],
+        cwd=root, text=True,
+    )
+    assert "tokio" not in graph.lower(), f"Pico activated Tokio:\n{graph}"
+    run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+        "--example", "00-pico", cwd=root)
+    print("isolated Pico: Tokio feature absent")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
@@ -196,8 +245,9 @@ def main():
         run("python3", str(root / "rustclamp/tools/workspace.py"), "--root", str(root), cwd=root)
         run("cargo", "generate-lockfile", "--offline", cwd=root)
         run("python3", str(root / "rustclamp/tools/boundaries.py"), "--manifest",
-            str(root / "Cargo.toml"), "--expect-four", cwd=root)
+            str(root / "Cargo.toml"), "--expect-current-members", cwd=root)
         check(root)
+        check_pico_runtime_absence(root)
         check_examples(root)
         check_process_build_targets(root)
         # Copy each package and only its declared internal dependency closure out of the
@@ -216,6 +266,8 @@ def main():
                         ignore=shutil.ignore_patterns(".git", "target", "__pycache__"),
                     )
                 check(isolated)
+                if repo == "rustclamp":
+                    check_pico_runtime_absence(isolated_root)
                 if local_dependencies:
                     # Unpublished internal path dependencies cannot be resolved from
                     # the registry during cargo package's archive verification.

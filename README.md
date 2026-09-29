@@ -55,16 +55,32 @@ process-specific build targets, and scale measurements.
 
 `examples/05-lifecycle` begins Phase 5 with a synchronous fake-resource proof:
 it derives Database → Users startup and reverse cleanup from the frozen process
-requirements, exercises failure cleanup and programmatic shutdown, and uses a
-deterministic test clock for lifecycle measurements. These are simulated
-durations, not production benchmarks. Tokio and production lifecycle APIs remain
-out of scope until the synchronous coordination contract is established.
+requirements, exercises failure cleanup and programmatic shutdown, and compares
+managed with caller-owned Database lifetimes. Bounded fake-clock lifecycle
+operations include task stop and final diagnostic flush with an in-memory
+fallback. Coexisting projections prove shared application database lifetime and
+isolated process state; explicit execution handles demonstrate execution scope.
+The lifecycle outcome exposes dependency edges, owners, phase participation,
+and cleanup state. The separate Runtime package defines executor-neutral task
+supervision and an optional Tokio adapter selected per process. These remain prototype contracts; the base task contract is synchronous, and
+the optional Tokio adapter also supports native async tasks.
 The [Phase 5 progress report](docs/evidence/phase5-lifecycle.md) compares its
 build footprint with the Phase 4 process example and separates measured process
 wall time from deterministic fake-clock readiness durations.
 Core now provides opt-in phase traits and an identity-only lifecycle context;
 they add no dispatcher or runtime, and modules that implement only `Module`
 remain unchanged.
+
+`examples/06-users` demonstrates one Users operation used directly, from a
+console command, through optional Axum HTTP, and with memory or PostgreSQL
+repositories. `rustclamp-http` owns HTTP routing, middleware, representations,
+streaming, and listener drain while exposing Axum types. `rustclamp-postgres`
+owns qualified SQLx pools and explicit migration planning; application adapters
+keep SQL and execution transactions. The console-only build excludes HTTP,
+PostgreSQL, and Tokio. See the [Phase 6 evidence](docs/evidence/phase6-progress.md)
+and [integration boundary decision](docs/adr/0005-phase6-integration-boundaries.md).
+Release build, dependency, binary, process, and paired workload measurements
+are recorded in the [Phase 6 evidence](docs/evidence/phase6-progress.md).
 
 ## Project Map
 
@@ -73,7 +89,9 @@ remain unchanged.
 | [`rustclamp`](https://github.com/rustclamp/rustclamp) | Main framework facade and application entry point | Pico is implemented and measured |
 | [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts | Capabilities, modules, contributions, and application/process identities |
 | [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution | Typed resolution, contribution assembly, and process-root reachability prototype |
-| [`runtime`](https://github.com/rustclamp/runtime) | Execution-environment contracts | Scaffold; no public contracts |
+| [`runtime`](https://github.com/rustclamp/runtime) | Execution-environment contracts | Executor-neutral task supervision; optional Tokio adapter |
+| [`http`](https://github.com/rustclamp/http) | Optional HTTP integration | Axum/Tower routing, context, presentation, streaming, and graceful listener service |
+| [`postgres`](https://github.com/rustclamp/postgres) | Optional PostgreSQL integration | Qualified SQLx pools, ownership, health probes, and explicit migrations |
 | [`docs.rustclamp.com`](https://github.com/rustclamp/docs.rustclamp.com) | User and architecture documentation | Supporting repository, not a framework component |
 | [`rustclamp.com`](https://github.com/rustclamp/rustclamp.com) | Project website | Supporting repository, not a framework component |
 

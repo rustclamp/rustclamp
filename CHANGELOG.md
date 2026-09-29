@@ -30,3 +30,21 @@
   build-footprint comparisons against the Phase 4 process example.
 - Documented Core's opt-in synchronous lifecycle participation contracts in
   the lifecycle example and Phase 5 evidence.
+- Added an external fake Database owner path that preserves caller ownership
+  through process shutdown, with managed/external behavior and fake-clock
+  comparisons in the lifecycle docs.
+- Added a coexisting Worker/Reporter projection proof: application-owned fake
+  Database state is shared and survives process shutdown, while process state
+  remains isolated.
+- Added an execution-scoped fake resource handle that can be constructed only
+  for roots in the frozen process projection and stops independently.
+- Added lifecycle outcome inspection for dependency edges, actual resource
+  owners, participant phases, and cleanup state, with example output.
+- Added optional Axum/Tower HTTP route integration, bounded streaming and
+  graceful listener shutdown, plus qualified SQLx PostgreSQL pools and explicit
+  migrations.
+- Added the shared Users domain, console and HTTP adapters, optional
+  transaction-scoped PostgreSQL adapter, isolated dependency checks, and Phase 6
+  architecture/evidence documentation.
+- Added release workload comparisons for direct Axum and SQLx paths, including
+  measurement-only allocation instrumentation and dependency/build/binary reports.
