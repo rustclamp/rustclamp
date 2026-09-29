@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      # tooling depends on ../../core and ../../kernel: check the repos out side by side.
+      - uses: actions/checkout@v7
+        with:
+          path: rustclamp
+      - uses: actions/checkout@v7
+        with:
+          repository: rustclamp/core
+          path: core
+      - uses: actions/checkout@v7
+        with:
+          repository: rustclamp/kernel
+          path: kernel
+      # rust-toolchain.toml pins 1.96.1 with clippy and rustfmt; rustup installs it on first use.
+      # ponytail: facade and tooling only; the examples need the full coordinated checkout (tools/check.py)
+      - name: Facade
+        working-directory: rustclamp
+        run: |
+          cargo fmt --check
+          cargo clippy --all-features --all-targets -- -D warnings
+          cargo test --all-features
+          RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+      - name: Tooling
+        working-directory: rustclamp/tooling
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
