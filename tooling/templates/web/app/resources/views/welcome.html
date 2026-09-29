@@ -72,19 +72,17 @@
       <h2 class="text-4xl leading-none tracking-tight sm:text-6xl">Routes are <span class="bg-linear-to-r from-orange-600 to-pink-600 bg-clip-text text-transparent dark:from-orange-300 dark:to-pink-300">plain Rust.</span></h2>
       <div class="mt-10 overflow-hidden rounded-2xl border border-black/10 dark:border-white/10 dark:bg-black">
         <p class="border-b border-black/10 bg-neutral-50 px-5 py-3 font-mono text-xs tracking-wide text-neutral-500 uppercase dark:border-white/10 dark:bg-neutral-900">app/routes/api.rs</p>
-        <pre class="overflow-x-auto p-5 font-mono text-sm leading-7 text-neutral-600 dark:text-neutral-400"><span class="text-indigo-500 dark:text-indigo-300">use</span> rustclamp::db::Db;
-<span class="text-indigo-500 dark:text-indigo-300">use</span> rustclamp::web::Router;
+        <pre class="overflow-x-auto p-5 font-mono text-sm leading-7 text-neutral-600 dark:text-neutral-400"><span class="text-indigo-500 dark:text-indigo-300">use</span> rustclamp::web::Router;
 
 <span class="text-indigo-500 dark:text-indigo-300">use</span> crate::config::Settings;
 <span class="text-indigo-500 dark:text-indigo-300">use</span> crate::http::controllers::health;
 
 <span class="text-neutral-400 dark:text-neutral-500">/// JSON endpoints, rate limited per client.</span>
-<span class="text-indigo-500 dark:text-indigo-300">pub fn</span> routes(router: Router, settings: &amp;Settings, db: &amp;Db) -&gt; Router {
+<span class="text-indigo-500 dark:text-indigo-300">pub fn</span> routes(router: Router, settings: &amp;Settings) -&gt; Router {
     <span class="text-indigo-500 dark:text-indigo-300">let</span> throttle = settings.per_minute(settings.api_per_minute);
-    <span class="text-indigo-500 dark:text-indigo-300">let</span> db = db.clone();
     router.group(|api| {
         api.middleware(throttle.middleware())
-            .get(<span class="text-orange-600 dark:text-orange-400">"/api/health"</span>, <span class="text-indigo-500 dark:text-indigo-300">move</span> |request| health::show(request, &amp;db))
+            .get(<span class="text-orange-600 dark:text-orange-400">"/api/health"</span>, health::show)
     })
 }</pre>
       </div>

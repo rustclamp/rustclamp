@@ -13,6 +13,13 @@
   `Seeder` structs and `Db::seed`; a `Schema` builder (`create`, `table`,
   `drop`); a `db.table(...)` query builder; `db::command` for `migrate`,
   `migrate:rollback` and `db:seed`.
+- Web: `Router::state` and `Request::state` share app values with handlers
+  (`request.db()` with `db`); `Request::validate` with `required`, `min`,
+  `max`, `email` and `integer` rules, and `Invalid::back` redirecting with
+  errors and old input; `Session::flash`; `Request::render` fills
+  `<!--csrf-->`, `<!--flash-->`, `<!--errors-->` and `<!--old:field-->`.
+- `db::Model`: a table as a struct (`TABLE`, `from_row`) with `query`,
+  `all` and `find`.
 - `rustclamp::build` (optional `build` feature): `build.rs` discovery of
   `app/database/migrations/` and `app/database/seeders/`. `clamp init NAME
   --web` ships the `build.rs`, so a new file there is all it takes (ADR 0009).

@@ -55,10 +55,12 @@ pub fn routes(config: &Config) -> Router {
     let db = Db::open(config);
     db.migrate(&database::migrations())
         .unwrap_or_else(|error| panic!("migration failed: {error}"));
+    // Handlers reach the database with `request.db()`.
     let router = Router::new()
+        .state(db)
         .middleware(security_headers)
         .middleware(http::middleware::request_log);
     // Packages (`clamp init --package`) add their routes here, e.g.
     // `let router = router.package(blog::Blog::from(config));`
-    routes::api::routes(routes::web::routes(router), &settings, &db)
+    routes::api::routes(routes::web::routes(router), &settings)
 }

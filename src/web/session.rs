@@ -9,6 +9,11 @@ use super::{Next, Request, Response, error};
 pub const COOKIE: &str = "clamp_session";
 /// The session key holding the CSRF token, and the form field that carries it.
 pub const CSRF_FIELD: &str = "_token";
+/// Session keys for the one-time flash message, validation errors and old
+/// input that [`Request::render`](super::Request::render) shows.
+pub(super) const FLASH: &str = "_flash";
+pub(super) const ERRORS: &str = "_errors";
+pub(super) const OLD: &str = "_old";
 /// Most sessions kept at once. At the cap, expired sessions are pruned, then
 /// the least recently used one is dropped, so a flood of cookieless requests
 /// cannot exhaust memory. The cost of a flood is logging out idle visitors.
@@ -42,6 +47,13 @@ impl Session {
     /// Removes and returns the value under `key`, such as a one-time flash message.
     pub fn take(&self, key: &str) -> Option<String> {
         self.lock().remove(key)
+    }
+
+    /// A one-time message for the next page, such as "Thanks, your message
+    /// was received.": [`Request::render`](super::Request::render) shows it
+    /// at `<!--flash-->` once.
+    pub fn flash(&self, message: &str) {
+        self.put(FLASH, message);
     }
 
     /// This session's CSRF token, created on first use.

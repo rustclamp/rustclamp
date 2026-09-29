@@ -219,6 +219,59 @@ impl Db {
     }
 }
 
+/// A table's rows as a Rust type, like a Laravel model: name the table and
+/// say how a row becomes `Self` once, then query with the builder.
+///
+/// ```
+/// use rustclamp::config::Config;
+/// use rustclamp::db::{Db, Model, sqlite::{Result, Row, params}};
+///
+/// struct Post {
+///     id: i64,
+///     title: String,
+/// }
+///
+/// impl Model for Post {
+///     const TABLE: &'static str = "posts";
+///
+///     fn from_row(row: &Row<'_>) -> Result<Self> {
+///         Ok(Self { id: row.get("id")?, title: row.get("title")? })
+///     }
+/// }
+///
+/// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+/// db.with(|sql| sql.execute_batch("CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT)"))
+///     .unwrap();
+/// let id = Post::query(&db).insert(&["title"], params!["Hello"]).unwrap();
+/// assert_eq!(Post::find(&db, id).unwrap().unwrap().title, "Hello");
+/// let titles: Vec<Post> = Post::query(&db).order_by_desc("id").get(Post::from_row).unwrap();
+/// assert_eq!(titles[0].id, id);
+/// assert_eq!(Post::all(&db).unwrap().len(), 1);
+/// ```
+pub trait Model: Sized {
+    /// The table the rows live in.
+    const TABLE: &'static str;
+
+    /// Builds `Self` from one row, reading columns by name.
+    fn from_row(row: &sqlite::Row<'_>) -> sqlite::Result<Self>;
+
+    /// A query on [`TABLE`](Self::TABLE); finish it with
+    /// `.get(Self::from_row)` or `.first(Self::from_row)`.
+    fn query(db: &Db) -> Query<'_> {
+        db.table(Self::TABLE)
+    }
+
+    /// Every row.
+    fn all(db: &Db) -> sqlite::Result<Vec<Self>> {
+        Self::query(db).get(Self::from_row)
+    }
+
+    /// The row whose `id` is `id`.
+    fn find(db: &Db, id: i64) -> sqlite::Result<Option<Self>> {
+        Self::query(db).where_eq("id", &id).first(Self::from_row)
+    }
+}
+
 /// Fills the database with data, like a Laravel seeder class: one struct
 /// per file in `app/database/seeders/`, run by `cargo run -- db:seed`.
 pub trait Seeder {
@@ -261,6 +314,19 @@ pub fn command(
             eprintln!("{command} failed: {error}");
             1
         }
+    }
+}
+
+#[cfg(feature = "web")]
+impl crate::web::Request {
+    /// The app's database, added with `Router::state(db)`.
+    ///
+    /// # Panics
+    ///
+    /// When the router has no [`Db`] state: that is a wiring bug in the app.
+    pub fn db(&self) -> &Db {
+        self.state::<Db>()
+            .expect("no database: add .state(db) to the router")
     }
 }
 

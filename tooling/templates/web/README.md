@@ -37,11 +37,17 @@ The server itself is `rustclamp::web`, the framework's `web` feature: `Router`,
 `view` and `render` (fills `<!--key-->` markers, `escape` the values),
 `Sessions` and `csrf()`, `Throttle`, `security_headers`, and `error(status)`, which
 fills `<!--status-->` and `<!--reason-->` in the error views.
+Forms work like Laravel's: `request.validate(&[("email", "required|email|max:200")])`
+returns the trimmed fields or an `Invalid` whose `.back(request, "/contact")`
+redirects with the errors and input kept; `request.render(...)` then fills
+`<!--csrf-->`, `<!--errors-->`, `<!--flash-->` (from `session.flash(...)`) and
+`<!--old:email-->` once.
 Packages made with `clamp init --package` bring their own routes, views and
 tests; add one with `.package(...)` in `app/lib.rs`, and override its views in
 `app/resources/views/vendor/{package}/`.
 The database is `rustclamp::db`, the `db` feature: SQLite compiled in, opened
-from `DB_CONNECTION` and `DB_DATABASE`. `db.table("posts")` builds queries and
+from `DB_CONNECTION` and `DB_DATABASE`. Handlers reach it with `request.db()`;
+`Model` maps a table to a struct, `request.db().table("posts")` builds queries and
 `Db::with` lends the connection for anything else; use `rustclamp::db::sqlite`
 (rusqlite) for its types rather than adding `rusqlite`.
 
