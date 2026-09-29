@@ -154,7 +154,13 @@ coordinated runner generates a `--package` crate, checks that it emits the Git
 dependency, then checks and tests it against the local facade; its three tests
 run on a bare `Router`. A generated `--web` app with a generated package mounted
 also served the package route with the app's security headers, and served a
-`vendor/` override in place of the embedded view. Package migrations, workers,
+`vendor/` override in place of the embedded view. `npm run build` in that app
+compiled an override copied into `app/resources/views/vendor/my-blog/` to
+`public/build/views/vendor/my-blog/index.html`, keeping its `<!--title-->`
+markers and the package stylesheet link. Package names that match framework
+types (`config`, `router`, `response`, `request`, `web`) generate and pass.
+No CI workflow runs the facade's `web` tests yet; these results are local.
+Package migrations, workers,
 scheduled jobs, commands and a publish command are deferred.
 
 ## Remaining release work
