@@ -304,8 +304,8 @@ def check_tooling_generator(root):
             run("cargo", "check", "--offline", "--manifest-path", str(manifest), cwd=root)
             run("cargo", "test", "--offline", "--manifest-path", str(manifest), cwd=root)
             if template == "web":
-                for name in ("package.json", "vite.config.ts", "app/routes.rs", "tests/routes.rs",
-                             "resources/views/welcome.html", "public/robots.txt"):
+                for name in ("package.json", "vite.config.ts", "app/routes/web.rs", "app/routes/api.rs", "tests/routes.rs",
+                             "app/resources/views/welcome.html", "public/robots.txt", ".env.example"):
                     assert (project / name).exists(), f"web template omitted {name}"
             if expected:
                 output = subprocess.check_output(

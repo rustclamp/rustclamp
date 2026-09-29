@@ -12,3 +12,11 @@ fn health_returns_json() {
 fn unknown_path_is_not_found() {
     assert_eq!(routes().handle(&Request::get("/nope")).status, 404);
 }
+
+#[test]
+fn every_response_carries_security_headers() {
+    for path in ["/api/health", "/nope"] {
+        let response = routes().handle(&Request::get(path));
+        assert_eq!(response.header("x-frame-options"), Some("DENY"), "{path}");
+    }
+}

@@ -11,7 +11,11 @@ autoexamples = false
 
 [features]
 # Optional std-only HTTP server for `clamp init --web` apps.
-web = []
+web = ["config", "log"]
+# Optional `.env` and environment configuration (`rustclamp::config`).
+config = []
+# Optional leveled logging to `storage/logs/app.log` (`rustclamp::log`).
+log = ["config"]
 
 [[example]]
 name = "00-pico"
@@ -23,3 +27,5 @@ missing_docs = "deny"
 
 [lints.rustdoc]
 broken_intra_doc_links = "deny"
+
+[dependencies]
