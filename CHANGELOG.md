@@ -4,6 +4,9 @@
 
 ### Added
 
+- The CLI is 0.3.0 (release tag `clamp-v0.3.0`): database, crypto and `.env`
+  commands, and `clamp init --web` apps with `db` and `crypto`.
+
 - Web packages: `web::Package`, `Router::package` (package middleware stays on
   package routes), `web::package_view` with app overrides under
   `views/vendor/{package}/`, and `clamp init NAME --package` (ADR 0008).
