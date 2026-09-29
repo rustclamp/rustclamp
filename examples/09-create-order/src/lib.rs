@@ -30,6 +30,15 @@ pub async fn migrate(database: &Database<Primary>) -> Result<(), sqlx::Error> {
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             published_at TIMESTAMPTZ
         );
+        CREATE TABLE IF NOT EXISTS inbox (
+            message_id TEXT PRIMARY KEY,
+            received_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS fulfillments (
+            message_id TEXT PRIMARY KEY REFERENCES inbox(message_id),
+            order_id BIGINT NOT NULL UNIQUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
         INSERT INTO inventory (sku, available) VALUES ('widget', 100)
             ON CONFLICT (sku) DO NOTHING;",
     )
@@ -109,6 +118,44 @@ pub async fn publish_pending(
     }
     transaction.commit().await?;
     Ok(rows.len())
+}
+
+/// Applies the order-created database effect once per message identity.
+///
+/// Inbox insertion and the protected effect share one transaction. Concurrent
+/// duplicates serialize on the inbox primary key; a rollback removes both.
+pub async fn fulfill_order_once(
+    database: &Database<Primary>,
+    message: &MessageEnvelope,
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
+    if message.name != SUBJECT || message.schema_version != 1 {
+        return Err(std::io::Error::other("unsupported order message route or version").into());
+    }
+    let order_id = message
+        .payload
+        .get("order_id")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| std::io::Error::other("order message has no integer order_id"))?;
+
+    let mut transaction = database.begin().await?;
+    let inserted: Option<String> = sqlx::query_scalar(
+        "INSERT INTO inbox (message_id) VALUES ($1)
+         ON CONFLICT (message_id) DO NOTHING RETURNING message_id",
+    )
+    .bind(&message.id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if inserted.is_none() {
+        transaction.commit().await?;
+        return Ok(false);
+    }
+    sqlx::query("INSERT INTO fulfillments (message_id, order_id) VALUES ($1, $2)")
+        .bind(&message.id)
+        .bind(order_id)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(true)
 }
 
 /// Creates the bounded stream used by the supervised publisher.

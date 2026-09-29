@@ -52,6 +52,11 @@ message to a bounded JetStream stream, and marks it sent only after broker
 confirmation. If the publish succeeds but the database commit fails, the row
 remains pending and can publish again. The example compiles cleanly; live
 database/broker execution and crash-window evidence are still pending.
+The same example now includes an `orders-worker` with a durable PostgreSQL inbox.
+It commits the inbox ID and fulfillment record atomically, then ACKs the broker
+delivery. Duplicate message IDs skip the effect; a transaction failure rolls
+both records back. The example compiles and passes Clippy, but concurrency and
+crash windows still need executable failure evidence.
 
 ## Verification so far
 
@@ -78,5 +83,5 @@ database/broker execution and crash-window evidence are still pending.
 
 ## Next
 
-Implement explicit retry, rejection, and dead-letter policies; run the process
-projections against a live JetStream server when one is available.
+Add crash-window, duplicate, poison-message, and retry-exhaustion evidence, then
+run the process projections against live PostgreSQL and JetStream services.

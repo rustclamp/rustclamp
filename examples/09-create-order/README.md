@@ -15,12 +15,20 @@ docker run --rm --name rustclamp-orders-nats -p 4222:4222 nats:2-alpine -js
 export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/orders
 cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin orders-api -- migrate
 cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin outbox-publisher
+cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin orders-worker
 cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin orders-api -- create widget 2
 ```
 
 If publishing succeeds but the database transaction cannot commit its
 `published_at` update, the row remains pending and may be published again.
-Delivery is at least once; P7-14 adds a durable inbox before claiming duplicate
-effects are bounded. The polling loop logs failures and retries at 500 ms
+Delivery is at least once; the transactional inbox bounds duplicate database
+effects. The polling loop logs failures and retries at 500 ms
 intervals; the stream itself rejects new messages after reaching 10,000 messages
 or 64 MiB, leaving the outbox row pending for a later attempt.
+
+The Worker inserts each message ID into a durable PostgreSQL inbox and records
+one fulfillment in the same transaction. Duplicate or concurrent deliveries
+that lose the inbox primary-key race skip the effect and are acknowledged. A
+database failure rolls the inbox and fulfillment back together, leaving the
+broker delivery unacknowledged for redelivery. Inbox IDs are retained without
+expiry; pruning them would weaken deduplication for older redeliveries.
