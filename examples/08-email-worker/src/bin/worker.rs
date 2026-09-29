@@ -5,8 +5,9 @@ use futures_util::StreamExt;
 use rustclamp_core::ModuleId;
 use rustclamp_kernel::TargetComposition;
 use rustclamp_messaging::MessageEnvelope;
-use rustclamp_worker::{HandlerDeclaration, HandlerError, HandlerTarget, WorkerHandlers};
+use rustclamp_worker::{HandlerDeclaration, HandlerFailure, HandlerTarget, WorkerHandlers};
 use serde::Deserialize;
+use serde_json::{Value, json};
 use std::error::Error;
 use std::time::Duration;
 
@@ -20,7 +21,10 @@ enum DeliveryOutcome {
     Ack,
     Retry(Duration),
     Reject,
-    DeadLetter,
+    DeadLetter {
+        classification: &'static str,
+        reason: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -59,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let handler = HandlerDeclaration::new(SUBJECT, 1, |message: MessageEnvelope| async move {
         let email: EmailPayload = serde_json::from_value(message.payload)
-            .map_err(|error| Box::new(error) as HandlerError)?;
+            .map_err(|error| HandlerFailure::Permanent(Box::new(error)))?;
         println!(
             "delivered email to {}: {} — {}",
             email.to, email.subject, email.body
@@ -80,15 +84,40 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let message = message?;
         let attempts = message.info()?.delivered;
         let outcome = match serde_json::from_slice::<MessageEnvelope>(&message.payload) {
-            Err(_) => DeliveryOutcome::DeadLetter,
+            Err(error) => DeliveryOutcome::DeadLetter {
+                classification: "invalid_envelope",
+                reason: error.to_string(),
+            },
             Ok(envelope) => match registry.dispatch(envelope).await {
                 Ok(()) => DeliveryOutcome::Ack,
                 Err(rustclamp_worker::DispatchError::NoHandler { .. }) => DeliveryOutcome::Reject,
-                Err(rustclamp_worker::DispatchError::Decode(_)) => DeliveryOutcome::DeadLetter,
-                Err(rustclamp_worker::DispatchError::Handler(_)) if attempts >= MAX_ATTEMPTS => {
-                    DeliveryOutcome::DeadLetter
+                Err(rustclamp_worker::DispatchError::Decode(error)) => {
+                    DeliveryOutcome::DeadLetter {
+                        classification: "invalid_envelope",
+                        reason: error.to_string(),
+                    }
                 }
-                Err(rustclamp_worker::DispatchError::Handler(_)) => {
+                Err(rustclamp_worker::DispatchError::Handler(HandlerFailure::Permanent(error))) => {
+                    DeliveryOutcome::DeadLetter {
+                        classification: "permanent_failure",
+                        reason: error.to_string(),
+                    }
+                }
+                Err(rustclamp_worker::DispatchError::Handler(HandlerFailure::UnknownOutcome(
+                    error,
+                ))) => DeliveryOutcome::DeadLetter {
+                    classification: "unknown_outcome",
+                    reason: error.to_string(),
+                },
+                Err(rustclamp_worker::DispatchError::Handler(HandlerFailure::Retryable(error)))
+                    if attempts >= MAX_ATTEMPTS =>
+                {
+                    DeliveryOutcome::DeadLetter {
+                        classification: "retry_exhausted",
+                        reason: error.to_string(),
+                    }
+                }
+                Err(rustclamp_worker::DispatchError::Handler(HandlerFailure::Retryable(_))) => {
                     DeliveryOutcome::Retry(retry_delay(attempts))
                 }
             },
@@ -99,9 +128,21 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 message.ack_with(AckKind::Nak(Some(delay))).await?;
             }
             DeliveryOutcome::Reject => message.ack_with(AckKind::Term).await?,
-            DeliveryOutcome::DeadLetter => {
+            DeliveryOutcome::DeadLetter {
+                classification,
+                reason,
+            } => {
+                let original: Value = serde_json::from_slice(&message.payload).unwrap_or_else(
+                    |_| json!({ "raw": String::from_utf8_lossy(&message.payload) }),
+                );
+                let dead_letter = serde_json::to_vec(&json!({
+                    "classification": classification,
+                    "attempts": attempts,
+                    "reason": reason,
+                    "original": original,
+                }))?;
                 let published = jetstream
-                    .publish(DEAD_LETTER_SUBJECT, message.payload.clone())
+                    .publish(DEAD_LETTER_SUBJECT, dead_letter.into())
                     .await?;
                 published.await?;
                 message.ack().await?;

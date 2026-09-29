@@ -3,7 +3,7 @@
 use rustclamp_core::ModuleId;
 use rustclamp_kernel::TargetComposition;
 use rustclamp_messaging::{InMemoryMessageBus, MessageBus, MessageEnvelope};
-use rustclamp_worker::{HandlerDeclaration, HandlerError, HandlerTarget, WorkerHandlers};
+use rustclamp_worker::{HandlerDeclaration, HandlerFailure, HandlerTarget, WorkerHandlers};
 use serde::Deserialize;
 use serde_json::json;
 use std::error::Error;
@@ -125,8 +125,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let gateway = worker_gateway.clone();
         async move {
             let payload: EmailPayload = serde_json::from_value(message.payload)
-                .map_err(|error| Box::new(error) as HandlerError)?;
-            send_email(payload.into(), &gateway).map_err(|error| Box::new(error) as HandlerError)
+                .map_err(|error| HandlerFailure::Permanent(Box::new(error)))?;
+            send_email(payload.into(), &gateway)
+                .map_err(|error| HandlerFailure::Permanent(Box::new(error)))
         }
     });
     let registry =

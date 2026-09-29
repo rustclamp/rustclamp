@@ -32,7 +32,10 @@ daemon is unavailable. Delivery outcomes are explicit: success ACKs; transient
 handler errors retry with bounded backoff for five total attempts; invalid
 envelopes are copied to a dead-letter subject before source ACK; and a valid
 message without a route is terminally rejected. The consumer lease is 30 seconds
-with at most one unacknowledged delivery.
+with at most one unacknowledged delivery. Worker handlers classify failures as
+retryable, permanent, or unknown outcome. Only retryable failures are authorized
+to retry; unknown outcomes are preserved in dead-letter records and are not
+retried automatically.
 
 ## Verification so far
 

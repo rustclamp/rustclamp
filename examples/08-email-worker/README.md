@@ -38,3 +38,10 @@ go directly to the dead-letter subject. A valid envelope with no matching
 handler is rejected with a terminal acknowledgement and remains in the source
 stream for inspection. JetStream delivery is at least once, including the
 publish-to-dead-letter/ack gap.
+
+Handlers must classify failures as retryable, permanent, or unknown outcome.
+Only retryable failures are authorized for another attempt. An unknown outcome
+is dead-lettered with its classification because retrying after a possible
+remote side effect could duplicate that effect. An application that wants to
+retry unknown outcomes must first protect the side effect with an idempotency
+key or durable inbox.
