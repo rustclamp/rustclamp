@@ -25,7 +25,10 @@ panics keep ordinary Rust behavior. This path needs no Core, Kernel or Runtime.
 Run Pico from this repository with `cargo run --offline --example 00-pico`.
 Rust 1.96.1 is the tested minimum; the facade has no dependencies.
 The optional `web` feature adds `rustclamp::web`, a std-only HTTP server with
-routes, JSON and static files from `public/`; `clamp init --web` projects use it. Publishing is
+routes, JSON and static files from `public/`; `clamp init --web` projects use it.
+Reusable features ship as packages: a crate implementing `web::Package` brings its
+own routes, middleware, views and tests, and an app adds it with
+`Router::package` ([ADR 0008](docs/adr/0008-web-packages.md)). Publishing is
 disabled until licensing, registry ownership and the prototype API are reviewed.
 
 See the [Pico results](docs/evidence/phase1.md) for measured costs and limitations.
@@ -99,10 +102,13 @@ a direct response comparison; it is a hosting proof, not a rewrite of the
 Python generator. See the [Phase 9 progress evidence](docs/evidence/phase9-progress.md).
 
 The standalone [`clamp` developer tool](tooling/README.md) installs with
-`cargo install --path tooling`. It can create a minimal Hello World or a larger
-Rust app, pass Cargo
-commands through, and inspect versioned JSON exported from a resolved Kernel
-process projection. Inspection is architecture metadata; it does not discover
+`curl -fsSL https://rustclamp.com/install.sh | sh`, which downloads the latest
+[release binary](https://github.com/rustclamp/rustclamp/releases) (`clamp-v*`
+tags), or from a checkout with `cargo install --path tooling`. `clamp init`
+creates a blank, app, web or TUI project, or a package with `--package`; `clamp
+dev` runs `Procfile.dev`; `clamp self-update` and `clamp --version` manage the
+install. It also passes Cargo commands through and inspects versioned JSON
+exported from a resolved Kernel process projection. Inspection is architecture metadata; it does not discover
 source declarations or report configuration evaluation and lifecycle state.
 The separate [starter kits](starter-kits/README.md) include a Vue 3 todo demo
 using Vite+.

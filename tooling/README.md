@@ -58,7 +58,8 @@ which an app adds with `Router::package` (ADR 0008). Every other project gets
 line of `Procfile.dev` at once with `[name]`-prefixed output; a command that
 fails stops the rest. All manifests use the RustClamp facade from its public Git repository so a
 starter app can build before the crates.io publication gate is cleared.
-Frontend starter kits are separate under `starter-kits/`.
+Frontend starter kits are separate under `starter-kits/`. `clamp --version` prints
+the installed version, which matches the `clamp-v*` release tag.
 
 ## Schema version 1
 
