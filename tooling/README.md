@@ -16,6 +16,9 @@ clamp tree architecture.json --process web
 clamp graph architecture.json --json
 clamp why architecture.json storage.postgres --process web
 clamp doctor architecture.json
+clamp check --all-targets
+clamp test
+clamp run --example my_app
 ```
 
 Exit status is 0 for a valid document, 1 when `doctor` reports an invalid
@@ -24,6 +27,10 @@ structured JSON. The output includes stable semantic IDs, sorted process and
 relationship collections, resolved inclusion paths, provider selection,
 replacements, exclusions, contributions, and structural counts. Counts are
 descriptive; they are not estimates of memory or runtime cost.
+
+The `check`, `test`, `build`, and `run` commands pass their arguments and exit
+status through to Cargo in the current directory. Project generation will be
+added after the framework packages have a publishable dependency target.
 
 ## Schema version 1
 

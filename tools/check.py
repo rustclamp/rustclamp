@@ -268,6 +268,8 @@ def check_tooling(root):
         "--no-deps", cwd=root, env={**os.environ, "RUSTDOCFLAGS": "-D warnings"})
     run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
         "--", "--help", cwd=root)
+    run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+        "--", "check", "--offline", "--manifest-path", str(manifest), cwd=root)
 
 
 def main():

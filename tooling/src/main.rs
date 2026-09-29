@@ -1,7 +1,7 @@
 //! Command-line interface for resolved Clamp process inspection.
 
 use serde_json::{Value, json};
-use std::{env, fs, process::ExitCode};
+use std::{env, fs, process::Command, process::ExitCode};
 
 use rustclamp_tooling::{
     doctor_text, graph_text, inspect_text, tree_text, validate_document, why_text,
@@ -22,6 +22,14 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     if command == "--help" || command == "help" {
         println!("{}", usage());
         return Ok(0);
+    }
+    if ["check", "test", "build", "run"].contains(&command) {
+        let status = Command::new("cargo")
+            .arg(command)
+            .args(&args[1..])
+            .status()
+            .map_err(|error| format!("cannot start Cargo: {error}"))?;
+        return Ok(status.code().unwrap_or(1).clamp(0, 255) as u8);
     }
     let (mut positional, mut process_id, mut json_output) = (Vec::new(), None, false);
     let mut index = 1;
@@ -104,5 +112,5 @@ fn run(args: Vec<String>) -> Result<u8, String> {
 }
 
 fn usage() -> &'static str {
-    "Usage: clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n\nInspect a versioned resolved process projection exported by an application."
+    "Usage:\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp <check|test|build|run> [Cargo arguments]\n\nInspect a versioned resolved process projection or run a Cargo command."
 }
