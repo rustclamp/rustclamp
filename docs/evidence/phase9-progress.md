@@ -58,19 +58,34 @@ arguments and exit status through to Cargo; the check wrapper has a smoke run.
 `cargo install --path tooling --root /tmp/clamp-global-install` installed the
 binary successfully, and the installed command ran from `/tmp`. The no-argument
 menu and `clamp init` flow both ran. The generated app compiled and ran against
-the local facade; fetching its public Git dependency could not be verified in
-this network-restricted environment.
+the public facade Git dependency and printed `Hello from Clamp!`.
 The marketing site owns the single installer at `rustclamp.com/install.sh` and
 shows its copyable command on the home page; docs link to that canonical URL.
-The script builds from the three public Git repositories on Linux/macOS. Its
-GitHub main-branch source is ready to become usable when the tooling branch is
-merged; live deployment remains unverified.
+The script builds from the three public Git repositories on Linux/macOS. It
+uses `phase9-site-hosting` for RustClamp because `main` does not yet contain the
+CLI. The exact Bash command has now run from the live URL in an isolated Cargo
+home; `clamp --help`, `clamp init`, and `cargo run` from `/tmp` all passed.
+
+The production deploy uploaded the RustClamp site, and live checks returned
+HTTP 200 for `/install.sh` with bytes matching the tested script. The live
+homepage includes the copyable install command. A separate docs-only deploy
+first failed during SSH connection setup (port 22 timeout), then succeeded on
+retry. The live getting-started page now shows the canonical Bash command.
+
+The deployed installer was rerun with an isolated `HOME` and zsh setting. It
+added the Cargo bin path to `.zshrc`; the installed binary ran from a different
+directory. The real user's `.zshrc` also now contains that PATH entry. The
+current terminal must reload it with `source ~/.zshrc; rehash`.
 
 No prebuilt binary release exists yet: there are no release tags or binary
 release workflow in this checkout. The source installer compiles `clamp` on
 each machine. A local Linux installation was verified under `/tmp`; it is not a
 published artifact. Cross-platform binary packaging and release verification
-remain open.
+remain open. The installer now adds `~/.cargo/bin` to the user's zsh or bash
+startup file when that directory is missing from `PATH`; a new terminal or
+reloading the startup file makes `clamp` available from any folder. The public
+site deployment and the docs deployment are complete; Search Console and
+broader site QA remain open.
 Output still needs comparison against every reference example; required
 configuration and lifecycle boundaries need fuller presentation. Project
 generation is implemented, while its ordinary registry build remains gated on
@@ -79,6 +94,6 @@ a publishable dependency target.
 ## Remaining release work
 
 Package publication is blocked on the recorded license and registry ownership
-decisions. Search Console verification and production deployment are separate
-external gates. Optional AI/MCP work has no concrete provider use case yet and
-remains independent from package/site release.
+decisions. Search Console verification is an external gate. Optional AI/MCP
+work has no concrete provider use case yet and remains independent from
+package/site release.
