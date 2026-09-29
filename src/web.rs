@@ -297,7 +297,9 @@ pub fn security_headers(request: &Request, next: Next) -> Response {
 }
 
 /// An error page for `status`: the app's built view `errors/{status}`, else
-/// `errors/{class}xx` (such as `errors/4xx`), else a built-in page.
+/// `errors/{class}xx` (such as `errors/4xx`), else a built-in page. In the
+/// app's view, `<!--status-->` and `<!--reason-->` become the code and its
+/// reason phrase, so one `4xx` view serves every client error.
 pub fn error(status: u16) -> Response {
     for name in [
         format!("errors/{status}"),
@@ -306,8 +308,11 @@ pub fn error(status: u16) -> Response {
         let file = Path::new(PUBLIC)
             .join("build/views")
             .join(format!("{name}.html"));
-        if let Ok(body) = fs::read(file) {
-            return html(status, body);
+        if let Ok(body) = fs::read_to_string(file) {
+            let body = body
+                .replace("<!--status-->", &status.to_string())
+                .replace("<!--reason-->", reason(status));
+            return html(status, body.into_bytes());
         }
     }
     page(status, "")
