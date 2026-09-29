@@ -6,8 +6,9 @@
 //! let routes = Router::new().package(__STRUCT__::from(&config));
 //! ```
 
-use rustclamp::config::Config;
-use rustclamp::web::{self, Response, Router, escape, package_view};
+// Framework types are written as paths, so a package named `config` or `router`
+// can call its struct `Config` or `Router`.
+use rustclamp::web::{self, escape, package_view};
 
 /// The package name: its URL prefix and the folder the app overrides views in,
 /// `app/resources/views/vendor/__NAME__/`.
@@ -18,9 +19,9 @@ pub struct __STRUCT__ {
     title: String,
 }
 
-impl From<&Config> for __STRUCT__ {
+impl From<&rustclamp::config::Config> for __STRUCT__ {
     /// Reads `__ENV___TITLE` from the app's `.env`.
-    fn from(config: &Config) -> Self {
+    fn from(config: &rustclamp::config::Config) -> Self {
         Self {
             title: config.get("__ENV___TITLE").unwrap_or(NAME).to_owned(),
         }
@@ -29,7 +30,7 @@ impl From<&Config> for __STRUCT__ {
 
 impl web::Package for __STRUCT__ {
     /// Handlers are `'static`: move owned settings into them.
-    fn routes(self, router: Router) -> Router {
+    fn routes(self, router: web::Router) -> web::Router {
         let title = escape(&self.title);
         router
             .get("/__NAME__", move |_| {
@@ -41,7 +42,7 @@ impl web::Package for __STRUCT__ {
                 )
             })
             .get("/__NAME__/__NAME__.css", |_| {
-                Response::new(200, "text/css", include_str!("../resources/css/__NAME__.css"))
+                web::Response::new(200, "text/css", include_str!("../resources/css/__NAME__.css"))
             })
     }
 }

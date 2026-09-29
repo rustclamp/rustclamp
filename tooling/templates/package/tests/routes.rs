@@ -1,11 +1,10 @@
 //! The package tests itself on a bare router: no app needed.
 
-use __CRATE__::__STRUCT__;
 use rustclamp::config::Config;
 use rustclamp::web::{Request, Router};
 
 fn app(env: &str) -> Router {
-    Router::new().package(__STRUCT__::from(&Config::parse(env)))
+    Router::new().package(__CRATE__::__STRUCT__::from(&Config::parse(env)))
 }
 
 #[test]
