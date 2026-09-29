@@ -258,6 +258,18 @@ def check_pico_runtime_absence(root):
     print("isolated Pico: Tokio feature absent")
 
 
+def check_tooling(root):
+    manifest = root / "rustclamp/tooling/Cargo.toml"
+    run("cargo", "fmt", "--manifest-path", str(manifest), "--", "--check", cwd=root)
+    run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
+        "--all-targets", "--", "-D", "warnings", cwd=root)
+    run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest), cwd=root)
+    run("cargo", "doc", "--offline", "--locked", "--manifest-path", str(manifest),
+        "--no-deps", cwd=root, env={**os.environ, "RUSTDOCFLAGS": "-D warnings"})
+    run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+        "--", "--help", cwd=root)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
@@ -272,6 +284,7 @@ def main():
         check_pico_runtime_absence(root)
         check_examples(root)
         check_process_build_targets(root)
+        check_tooling(root)
         # Copy each package and only its declared internal dependency closure out of the
         # coordination workspace. Unrelated siblings cannot mask a package failure.
         for repo in REPOS:

@@ -39,9 +39,26 @@ public HTTP access are available.
 This is a local hosting prototype. Static file reads are synchronous, production
 deployment is not switched to Rust, and the page generator remains Python.
 
+## Developer inspection tooling
+
+Added the standalone `rustclamp-tooling` package with the `clamp` binary and a
+version 1 JSON document API over Kernel's resolved `ProcessProjection`. It
+provides `inspect`, `tree`, `graph`, `why`, and `doctor`, process selection,
+structured JSON output, stable diagnostic codes mapped from projection errors,
+and count-only structural cost. Inspection reads a document and does not
+initialize or execute the application. The schema guide records identity,
+ordering, compatibility, and configuration redaction rules.
+
+Focused formatting, Clippy, unit, rustdoc, and CLI smoke checks pass. A unit
+test constructs a Kernel blueprint, resolves a provider, and verifies that the
+exported document and `why` output reflect that projection. CLI smoke runs
+covered human tree/why output and JSON inspect output. `tools/check.py` now
+includes this standalone package. Output still needs comparison against every
+reference example; required configuration and lifecycle boundaries need fuller
+presentation. Cargo-backed project commands and generation remain open.
+
 ## Remaining release work
 
-The developer inspection CLI and versioned inspection/error schema remain open.
 Package publication is blocked on the recorded license and registry ownership
 decisions. Search Console verification and production deployment are separate
 external gates. Optional AI/MCP work has no concrete provider use case yet and
