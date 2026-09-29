@@ -45,6 +45,14 @@ delivery after process loss is left for lease-based redelivery.
 The example's opt-in tracing feature emits an API publish event and a Worker
 handler span with the same correlation and message IDs.
 
+The `09-create-order` example adds an atomic PostgreSQL transaction for
+inventory decrement, order insert, and serialized outbox intent. A supervised
+publisher claims at most ten rows with `FOR UPDATE SKIP LOCKED`, publishes each
+message to a bounded JetStream stream, and marks it sent only after broker
+confirmation. If the publish succeeds but the database commit fails, the row
+remains pending and can publish again. The example compiles cleanly; live
+database/broker execution and crash-window evidence are still pending.
+
 ## Verification so far
 
 - `cargo check --offline --locked` passes for an isolated copy of the messaging
@@ -60,6 +68,13 @@ handler span with the same correlation and message IDs.
   denied.
 - Both JetStream process projections compile and pass Clippy with warnings
   denied; live execution still needs a running NATS server.
+- The combined email example still runs successfully after the deadline and
+  handler-classification changes.
+- The optional tracing and default email-worker feature sets compile and pass
+  Clippy with warnings denied.
+- The CreateOrder/outbox example passes offline Cargo check, Clippy with warnings
+  denied, and Cargo metadata resolution. No database or broker was available for
+  live execution.
 
 ## Next
 
