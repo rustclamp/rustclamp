@@ -199,26 +199,35 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     }
     if command == "self-update" || command == "global-update" {
         // Reinstall from the checkout this binary was built from, else from GitHub main.
-        let source = env!("CARGO_MANIFEST_DIR");
-        let mut install = Command::new("cargo");
-        install.args(["install", "--force", "--locked"]);
-        if std::path::Path::new(source).join("Cargo.toml").exists() {
-            println!("Updating clamp from {source}");
-            install.args(["--path", source]);
+        let mut source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        // tooling depends on ../../core and ../../kernel, so a GitHub install
+        // clones all three repos side by side, as install.sh does.
+        let work = std::env::temp_dir().join(format!("clamp-update-{}", std::process::id()));
+        if source.join("Cargo.toml").exists() {
+            println!("Updating clamp from {}", source.display());
         } else {
-            println!("Updating clamp from github.com/rustclamp/rustclamp (main)");
-            install.args([
-                "--git",
-                "https://github.com/rustclamp/rustclamp",
-                "--branch",
-                "main",
-                "rustclamp-tooling",
-            ]);
+            println!("Updating clamp from github.com/rustclamp (main)");
+            for repo in ["core", "kernel", "rustclamp"] {
+                let status = Command::new("git")
+                    .args(["clone", "--quiet", "--depth", "1"])
+                    .arg(format!("https://github.com/rustclamp/{repo}"))
+                    .arg(work.join(repo))
+                    .status()
+                    .map_err(|error| format!("cannot start git: {error}"))?;
+                if !status.success() {
+                    let _ = fs::remove_dir_all(&work);
+                    return Err(format!("cannot clone rustclamp/{repo}"));
+                }
+            }
+            source = work.join("rustclamp/tooling");
         }
-        let status = install
+        let status = Command::new("cargo")
+            .args(["install", "--force", "--locked", "--path"])
+            .arg(&source)
             .status()
-            .map_err(|error| format!("cannot start Cargo: {error}"))?;
-        return Ok(status.code().unwrap_or(1).clamp(0, 255) as u8);
+            .map_err(|error| format!("cannot start Cargo: {error}"));
+        let _ = fs::remove_dir_all(&work);
+        return Ok(status?.code().unwrap_or(1).clamp(0, 255) as u8);
     }
     if command == "dev" {
         return dev();
