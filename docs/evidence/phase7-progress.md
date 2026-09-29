@@ -11,7 +11,9 @@ The boundary and JSON payload choice are recorded in
 local workspace and isolated-package tooling. Its `MessageBus` capability is
 typed through Core, while transport and serialization remain outside Core and
 Kernel. The bounded in-memory bus is for tests and development; it does not
-claim cross-process delivery.
+claim cross-process delivery. NATS JetStream is selected as the real transport,
+using durable pull consumers, explicit acknowledgments, and bounded batches.
+Its delivery is at least once, so duplicate-safe handling is required.
 
 ## Verification so far
 
@@ -25,5 +27,5 @@ claim cross-process delivery.
 
 ## Next
 
-Select a real transport for the separate-process proof, then prove handler
-contributions and the API-to-worker path.
+Implement the optional JetStream adapter, then prove handler contributions and
+the API-to-worker path.
