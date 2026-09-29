@@ -7,6 +7,7 @@
 
 use rustclamp::config::Config;
 use rustclamp::db::Db;
+use rustclamp::storage::Storage;
 use rustclamp::web::{Router, security_headers};
 
 /// Everything that handles HTTP.
@@ -38,10 +39,16 @@ pub mod database {
     include!(concat!(env!("OUT_DIR"), "/states.rs"));
 }
 
-/// Typed settings from `.env`.
+/// Typed settings from `.env`, one file per area, like Laravel's `config/`.
 pub mod config {
     mod app;
+    mod database;
+    mod filesystems;
+    mod logging;
     pub use app::Settings;
+    pub use database::database;
+    pub use filesystems::filesystems;
+    pub use logging::logging;
 }
 
 /// Route definitions.
@@ -54,12 +61,14 @@ pub mod routes {
 /// Opens the database from `.env` and runs pending migrations first.
 pub fn routes(config: &Config) -> Router {
     let settings = config::Settings::from(config);
-    let db = Db::open(config);
+    let db = Db::connect(&config::database(config));
     db.migrate(&database::migrations())
         .unwrap_or_else(|error| panic!("migration failed: {error}"));
-    // Handlers reach the database with `request.db()`.
+    // Handlers reach the database with `request.db()` and files with
+    // `request.storage()`.
     let router = Router::new()
         .state(db)
+        .state(Storage::new(config::filesystems(config)))
         .middleware(security_headers)
         .middleware(http::middleware::request_log);
     // Packages (`clamp init --package`) add their routes here, e.g.

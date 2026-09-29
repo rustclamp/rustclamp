@@ -74,23 +74,52 @@ impl std::fmt::Debug for Db {
     }
 }
 
+/// Which database to open. An app builds it in `app/config/database.rs`.
+#[derive(Debug, Clone)]
+pub struct Settings {
+    /// The engine; only `sqlite` so far.
+    pub connection: String,
+    /// The SQLite file, or `:memory:`.
+    pub database: String,
+}
+
+impl Settings {
+    /// `DB_CONNECTION` (`sqlite`) and `DB_DATABASE`
+    /// (`storage/database.sqlite`).
+    pub fn from_config(config: &Config) -> Self {
+        // ponytail: the same defaults as the web template's
+        // `app/config/database.rs`, for apps without one
+        Self {
+            connection: config.get("DB_CONNECTION").unwrap_or("sqlite").into(),
+            database: config
+                .get("DB_DATABASE")
+                .unwrap_or("storage/database.sqlite")
+                .into(),
+        }
+    }
+}
+
 impl Db {
-    /// Opens the database named by `DB_CONNECTION` and `DB_DATABASE`,
-    /// creating the file and its folder when missing.
+    /// Opens the database named by `DB_CONNECTION` and `DB_DATABASE`; see
+    /// [`Db::connect`].
+    pub fn open(config: &Config) -> Self {
+        Self::connect(&Settings::from_config(config))
+    }
+
+    /// Opens the database `settings` names, creating the file and its folder
+    /// when missing.
     ///
     /// # Panics
     ///
-    /// When `DB_CONNECTION` is not `sqlite` or the database cannot be opened:
+    /// When the connection is not `sqlite` or the database cannot be opened:
     /// the app should stop at startup rather than run without its data.
-    pub fn open(config: &Config) -> Self {
-        let engine = config.get("DB_CONNECTION").unwrap_or("sqlite");
+    pub fn connect(settings: &Settings) -> Self {
+        let engine = settings.connection.as_str();
         assert!(
             engine == "sqlite",
             "config key DB_CONNECTION is {engine}; only sqlite is supported"
         );
-        let path = config
-            .get("DB_DATABASE")
-            .unwrap_or("storage/database.sqlite");
+        let path = settings.database.as_str();
         let connection = if path == ":memory:" {
             Connection::open_in_memory()
         } else {

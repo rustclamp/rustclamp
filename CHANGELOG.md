@@ -24,6 +24,17 @@
   route's own policy wins), HSTS and a Permissions-Policy.
   `Session::regenerate()` moves a session to a new ID and CSRF token (call it
   on login). A `url` validation rule accepts only `http`/`https` links.
+- Web apps keep config in one file per area, like Laravel's `config/`:
+  `app/config/app.rs`, `database.rs` and `logging.rs` name every key and its
+  default. The framework takes them as `db::Settings` (`Db::connect`) and
+  `log::Settings` (`Logger::new`); `Log::init` installs the app's logger at
+  startup. `Db::open` and `Logger::from_config` still read `.env` directly.
+- `rustclamp::storage` (`storage` feature, in `web`), like Laravel's
+  `Storage`: named disks with `put`, `get`, `exists`, `delete` and `url`,
+  refusing paths that leave the disk. Web apps configure `local`
+  (`storage/app/private`) and `public` (`storage/app/public`, served at
+  `/storage`) in `app/config/filesystems.rs`, reach them with
+  `request.storage()`, and link `public/storage` at startup.
 - Views are templates (ADR 0012): a std-only Blade subset rendered at request
   time from the Vite-built HTML. `{{ name }}` escapes, `{!! name !!}` does
   not; `@if`/`@else`, `@foreach`, `@extends`/`@section`/`@yield`,
