@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.96.1"
 description = "A minimal synchronous entrypoint for Clamp applications."
 repository = "https://github.com/rustclamp/rustclamp"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 publish = false
 autoexamples = false

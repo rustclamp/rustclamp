@@ -514,7 +514,8 @@ fn create_web(root: &std::path::Path, name: &str) -> Result<(), String> {
     fs::write(&manifest, cargo_toml).map_err(|error| format!("cannot write manifest: {error}"))?;
     let gitignore = root.join(".gitignore");
     let mut ignored = fs::read_to_string(&gitignore).unwrap_or_default();
-    ignored.push_str("/node_modules\n/public/build\n/storage\n.env\n");
+    // Every .env is secret except the example and the encrypted ones.
+    ignored.push_str("/node_modules\n/public/build\n/storage\n.env\n.env.*\n!.env.example\n!.env.encrypted\n!.env.*.encrypted\n");
     fs::write(&gitignore, ignored).map_err(|error| format!("cannot update .gitignore: {error}"))?;
     Ok(())
 }

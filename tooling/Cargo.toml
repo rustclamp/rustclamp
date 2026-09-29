@@ -3,6 +3,7 @@ name = "rustclamp-tooling"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.96.1"
+license = "MIT OR Apache-2.0"
 publish = false
 description = "Developer inspection commands for resolved Clamp process models."
 
