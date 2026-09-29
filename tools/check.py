@@ -133,6 +133,7 @@ def check_examples(root):
         ("05-lifecycle", "rustclamp-example-lifecycle"),
         ("06-users", "rustclamp-example-users"),
         ("07-messaging", "rustclamp-example-messaging"),
+        ("08-email-worker", "rustclamp-example-email-worker"),
     )
     for example, package_name in examples:
         example_root = root / "rustclamp/examples" / example
