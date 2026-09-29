@@ -115,6 +115,10 @@ ___           _    ___ _
 
 fn run(args: Vec<String>) -> Result<u8, String> {
     let command = args.first().map(String::as_str).ok_or("missing command")?;
+    if command == "--version" || command == "-V" {
+        println!("clamp {}", env!("CARGO_PKG_VERSION"));
+        return Ok(0);
+    }
     if command == "--help" || command == "help" {
         println!("{}", usage());
         return Ok(0);
@@ -331,7 +335,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp self-update\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, reinstall clamp, or run a Cargo command."
+    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, reinstall clamp, or run a Cargo command."
 }
 
 fn create_application(root: &std::path::Path) -> Result<(), String> {
