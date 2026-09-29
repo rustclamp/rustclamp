@@ -28,7 +28,11 @@ the versioned envelope over JetStream. The API waits for the broker's publish
 acknowledgement; the Worker uses a durable pull consumer with one in-flight
 message and ACKs only after handler success. The example README documents a
 two-terminal run. Live broker execution is pending because the local Docker
-daemon is unavailable.
+daemon is unavailable. Delivery outcomes are explicit: success ACKs; transient
+handler errors retry with bounded backoff for five total attempts; invalid
+envelopes are copied to a dead-letter subject before source ACK; and a valid
+message without a route is terminally rejected. The consumer lease is 30 seconds
+with at most one unacknowledged delivery.
 
 ## Verification so far
 

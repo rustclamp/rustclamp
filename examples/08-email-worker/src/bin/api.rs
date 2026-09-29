@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const STREAM: &str = "RUSTCLAMP_EMAIL";
 const SUBJECT: &str = "email.send";
+const DEAD_LETTER_SUBJECT: &str = "email.dead";
 
 struct Email {
     to: String,
@@ -55,7 +56,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     jetstream
         .get_or_create_stream(Config {
             name: STREAM.into(),
-            subjects: vec![SUBJECT.into()],
+            subjects: vec![SUBJECT.into(), DEAD_LETTER_SUBJECT.into()],
             max_messages: 10_000,
             ..Default::default()
         })

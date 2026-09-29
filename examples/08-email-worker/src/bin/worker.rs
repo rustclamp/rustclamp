@@ -1,6 +1,6 @@
 //! Runs the email handler in its own process and acknowledges successful work.
 
-use async_nats::jetstream::{self, consumer::pull::Config, stream};
+use async_nats::jetstream::{self, AckKind, consumer::pull::Config, stream};
 use futures_util::StreamExt;
 use rustclamp_core::ModuleId;
 use rustclamp_kernel::TargetComposition;
@@ -12,7 +12,16 @@ use std::time::Duration;
 
 const STREAM: &str = "RUSTCLAMP_EMAIL";
 const SUBJECT: &str = "email.send";
+const DEAD_LETTER_SUBJECT: &str = "email.dead";
+const MAX_ATTEMPTS: i64 = 5;
 const EMAIL_MODULE: ModuleId = ModuleId::new("example.phase7.email-worker");
+
+enum DeliveryOutcome {
+    Ack,
+    Retry(Duration),
+    Reject,
+    DeadLetter,
+}
 
 #[derive(Deserialize)]
 struct EmailPayload {
@@ -29,7 +38,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let stream = jetstream
         .get_or_create_stream(stream::Config {
             name: STREAM.into(),
-            subjects: vec![SUBJECT.into()],
+            subjects: vec![SUBJECT.into(), DEAD_LETTER_SUBJECT.into()],
             max_messages: 10_000,
             ..Default::default()
         })
@@ -40,6 +49,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             Config {
                 durable_name: Some("email-worker".into()),
                 ack_wait: Duration::from_secs(30),
+                max_deliver: MAX_ATTEMPTS,
                 max_ack_pending: 1,
                 filter_subject: SUBJECT.into(),
                 ..Default::default()
@@ -68,9 +78,44 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut messages = consumer.messages().await?;
     while let Some(message) = messages.next().await {
         let message = message?;
-        let envelope: MessageEnvelope = serde_json::from_slice(&message.payload)?;
-        registry.dispatch(envelope).await?;
-        message.ack().await?;
+        let attempts = message.info()?.delivered;
+        let outcome = match serde_json::from_slice::<MessageEnvelope>(&message.payload) {
+            Err(_) => DeliveryOutcome::DeadLetter,
+            Ok(envelope) => match registry.dispatch(envelope).await {
+                Ok(()) => DeliveryOutcome::Ack,
+                Err(rustclamp_worker::DispatchError::NoHandler { .. }) => DeliveryOutcome::Reject,
+                Err(rustclamp_worker::DispatchError::Decode(_)) => DeliveryOutcome::DeadLetter,
+                Err(rustclamp_worker::DispatchError::Handler(_)) if attempts >= MAX_ATTEMPTS => {
+                    DeliveryOutcome::DeadLetter
+                }
+                Err(rustclamp_worker::DispatchError::Handler(_)) => {
+                    DeliveryOutcome::Retry(retry_delay(attempts))
+                }
+            },
+        };
+        match outcome {
+            DeliveryOutcome::Ack => message.ack().await?,
+            DeliveryOutcome::Retry(delay) => {
+                message.ack_with(AckKind::Nak(Some(delay))).await?;
+            }
+            DeliveryOutcome::Reject => message.ack_with(AckKind::Term).await?,
+            DeliveryOutcome::DeadLetter => {
+                let published = jetstream
+                    .publish(DEAD_LETTER_SUBJECT, message.payload.clone())
+                    .await?;
+                published.await?;
+                message.ack().await?;
+            }
+        }
     }
     Ok(())
+}
+
+fn retry_delay(attempt: i64) -> Duration {
+    match attempt {
+        1 => Duration::from_secs(1),
+        2 => Duration::from_secs(5),
+        3 => Duration::from_secs(15),
+        _ => Duration::from_secs(30),
+    }
 }

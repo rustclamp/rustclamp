@@ -30,3 +30,11 @@ durable pull consumer with one unacknowledged message at a time and a 30-second
 acknowledgement lease. It acknowledges only after its handler succeeds. A
 worker crash or expired lease can result in redelivery; the email operation
 must be idempotent before this example is used with an external mail service.
+
+Handler errors retry at 1, 5, 15, then 30 seconds, up to five total deliveries.
+The final failed attempt is copied to `email.dead`; the source is acknowledged
+only after JetStream confirms the dead-letter publish. Invalid envelope bytes
+go directly to the dead-letter subject. A valid envelope with no matching
+handler is rejected with a terminal acknowledgement and remains in the source
+stream for inspection. JetStream delivery is at least once, including the
+publish-to-dead-letter/ack gap.
