@@ -7,6 +7,11 @@ start services.
 
 ## Install the command
 
+`curl -fsSL https://rustclamp.com/install.sh | sh` installs the latest release
+binary (`clamp-v*` tags; Linux x86_64 and macOS) into `~/.cargo/bin`, verifying
+its SHA-256 checksum. Other platforms build from GitHub `main`. Windows uses the
+`.zip` from the GitHub release.
+
 From the coordinated source checkout, install it into Cargo's global binary
 directory:
 
@@ -15,7 +20,8 @@ cargo install --path rustclamp/tooling
 ```
 
 After pulling or changing the source, `clamp self-update` reinstalls it from
-the checkout it was built from (or from GitHub `main` if that checkout is gone).
+the checkout it was built from. A release binary on Linux or macOS reruns the
+installer instead; elsewhere it rebuilds from GitHub `main`.
 
 Make sure `~/.cargo/bin` is on `PATH`. After installation, `clamp` works from
 any current directory. It uses Cargo in that directory for project commands.
