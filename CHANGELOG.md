@@ -24,6 +24,17 @@
   route's own policy wins), HSTS and a Permissions-Policy.
   `Session::regenerate()` moves a session to a new ID and CSRF token (call it
   on login). A `url` validation rule accepts only `http`/`https` links.
+- Less app code: handlers may return `web::Result` and use `?` (the error is
+  logged, the visitor gets `500`); `Sessions::from_config` reads
+  `SESSION_MINUTES`/`SESSION_SECURE` and refuses an insecure cookie in
+  production (`Config::is_production`); `web::markdown::to_html` behind the
+  new `markdown` feature (pulldown-cmark) escapes raw HTML and unsafe link
+  schemes; `web::App` runs a web app's startup; `Router::up` health check;
+  `Request::flash`; `db::timestamp::{date, iso8601}`. The web template uses
+  them and drops its health controller.
+- `web::serve` answers on a fixed pool of `WEB_THREADS` threads (default 32)
+  instead of one request at a time; accepted connections queue four per
+  thread, so a flood cannot grow threads or memory without bound.
 - Web apps keep config in one file per area, like Laravel's `config/`:
   `app/config/app.rs`, `database.rs` and `logging.rs` name every key and its
   default. The framework takes them as `db::Settings` (`Db::connect`) and
