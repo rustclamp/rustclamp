@@ -38,6 +38,9 @@
   `Hash::make`/`check`, `Key` (`APP_KEY`, `base64:`) and `Crypt`
   (XChaCha20-Poly1305), `sha256`, `hmac_sha256` and constant-time
   `hmac_verify` (ADR 0010).
+- `clamp key:generate`, `clamp env:encrypt` and `clamp env:decrypt`
+  (`--key=`, `--env=`, `--force`, `CLAMP_ENV_KEY`); `clamp init --web` turns on
+  `crypto` and lists `APP_KEY` in `.env.example`.
 - `db::Model`: a table as a struct (`TABLE`, `from_row`) with `query`,
   `all` and `find`.
 - `rustclamp::build` (optional `build` feature): `build.rs` discovery of

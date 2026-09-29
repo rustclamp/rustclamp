@@ -4,6 +4,7 @@ Created with `clamp init --web`: a Rust server with a Vite+ and Tailwind 4 front
 
 ```sh
 cp .env.example .env
+clamp key:generate
 clamp dev
 ```
 
@@ -93,6 +94,12 @@ impl Seeder for PostsSeeder {
     }
 }
 ```
+
+Passwords and secrets use `rustclamp::crypto`, the `crypto` feature:
+`Hash::make`/`Hash::check` (Argon2id) and `Crypt::new(&Key::from_config(&config))`
+for values encrypted with `APP_KEY`. `clamp env:encrypt --env=production`
+writes `.env.production.encrypted`, safe to commit; the server runs
+`clamp env:decrypt --env=production` with the key in `CLAMP_ENV_KEY`.
 
 Migrations run when the server starts. From the console:
 `cargo run -- migrate`, `cargo run -- migrate:rollback` (the last batch) and

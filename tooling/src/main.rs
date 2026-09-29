@@ -1,5 +1,6 @@
 //! Command-line interface for resolved Clamp process inspection.
 
+mod envfile;
 mod make;
 
 use serde_json::{Value, json};
@@ -125,6 +126,17 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         println!("{}", usage());
         return Ok(0);
     }
+    if matches!(command, "key:generate" | "env:encrypt" | "env:decrypt") {
+        let root = env::current_dir().map_err(|error| format!("cannot read folder: {error}"))?;
+        let options = envfile::Options::parse(&args[1..])?;
+        let message = match command {
+            "key:generate" => envfile::key_generate(&root, &options),
+            "env:encrypt" => envfile::encrypt(&root, &options),
+            _ => envfile::decrypt(&root, &options, std::env::var(envfile::KEY_VARIABLE).ok()),
+        }?;
+        println!("{message}");
+        return Ok(0);
+    }
     if let Some(kind) = command.strip_prefix("make:") {
         let root = env::current_dir().map_err(|error| format!("cannot read folder: {error}"))?;
         let path = make::make(&root, kind, args.get(1))?;
@@ -174,7 +186,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         fs::create_dir_all(root.join("src"))
             .map_err(|error| format!("cannot create project directory: {error}"))?;
         let features = match template {
-            "web" => ", features = [\"web\", \"db\"]",
+            "web" => ", features = [\"web\", \"db\", \"crypto\"]",
             "package" => ", features = [\"web\"]",
             _ => "",
         };
@@ -365,7 +377,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, make migrations and seeders, run database commands, reinstall clamp, or run a Cargo command."
+    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp key:generate [--force]\n  clamp env:encrypt | env:decrypt [--key=KEY] [--env=NAME] [--force]\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, make migrations and seeders, run database commands, manage APP_KEY and encrypted .env files, reinstall clamp, or run a Cargo command."
 }
 
 fn create_application(root: &std::path::Path) -> Result<(), String> {

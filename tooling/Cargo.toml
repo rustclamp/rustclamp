@@ -13,6 +13,7 @@ resolver = "3"
 rustclamp-core = { version = "0.1.0", path = "../../core" }
 rustclamp-kernel = { version = "0.1.0", path = "../../kernel" }
 serde_json = "1"
+rustclamp = { version = "0.1.0", path = "..", features = ["crypto"] }
 
 [[bin]]
 name = "clamp"
