@@ -19,7 +19,9 @@ log = ["config"]
 # Optional build-script helpers (`rustclamp::build`), such as migration discovery.
 build = []
 # Optional SQLite database from `.env` (`rustclamp::db`); compiles SQLite in.
-db = ["config", "dep:rusqlite"]
+db = ["config", "uuid", "dep:rusqlite"]
+# Optional std-only UUID v4 and v7 (`rustclamp::uuid`).
+uuid = []
 
 [[example]]
 name = "00-pico"

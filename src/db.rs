@@ -382,6 +382,22 @@ impl crate::web::Request {
     }
 }
 
+/// Stored as its hyphenated text, so it reads well in the database and in
+/// `public_id` columns.
+impl sqlite::types::ToSql for crate::uuid::Uuid {
+    fn to_sql(&self) -> sqlite::Result<sqlite::types::ToSqlOutput<'_>> {
+        Ok(self.to_string().into())
+    }
+}
+
+impl sqlite::types::FromSql for crate::uuid::Uuid {
+    fn column_result(value: sqlite::types::ValueRef<'_>) -> sqlite::types::FromSqlResult<Self> {
+        let text = value.as_str()?;
+        Self::parse(text)
+            .ok_or_else(|| sqlite::types::FromSqlError::Other(format!("not a UUID: {text}").into()))
+    }
+}
+
 /// The migration name for a source file: `file!()` without its folders and
 /// `.rs`. Keeps a migration's recorded name equal to its file name, so a
 /// file named `2026_09_29_000001_create_posts.rs` (loaded with

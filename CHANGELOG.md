@@ -29,6 +29,9 @@
 - Log channels as in Laravel: `single` (`file` still works), `daily`
   (`app-YYYY-MM-DD.log`, newest `LOG_DAILY_DAYS` kept), `stderr` and `stack`
   (`LOG_STACK=daily,stderr`); `Logger::daily`.
+- `rustclamp::uuid` (optional std-only `uuid` feature, included by `db`):
+  `Uuid::v7` (time-ordered, strictly increasing per process) and `Uuid::v4`,
+  `parse`, SQLite mapping as text, and `Schema`'s `table.public_id()`.
 - `db::Model`: a table as a struct (`TABLE`, `from_row`) with `query`,
   `all` and `find`.
 - `rustclamp::build` (optional `build` feature): `build.rs` discovery of

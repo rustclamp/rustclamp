@@ -18,6 +18,8 @@ pub mod config;
 pub mod db;
 #[cfg(feature = "log")]
 pub mod log;
+#[cfg(feature = "uuid")]
+pub mod uuid;
 #[cfg(feature = "web")]
 pub mod web;
 

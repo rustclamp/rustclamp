@@ -98,6 +98,13 @@ impl Table {
         self.column("id", "INTEGER PRIMARY KEY");
     }
 
+    /// `public_id`: a unique UUID, the only ID shown outside the app (URLs,
+    /// API payloads, mail links) while `id` stays internal. Fill it with
+    /// [`Uuid::v7`](crate::uuid::Uuid::v7) on insert.
+    pub fn public_id(&mut self) -> &mut Column {
+        self.column("public_id", "TEXT").unique()
+    }
+
     /// A text column, for short values such as names.
     pub fn string(&mut self, name: &str) -> &mut Column {
         self.column(name, "TEXT")
@@ -245,6 +252,7 @@ mod tests {
                 "0001",
                 Schema::create("posts", |table| {
                     table.id();
+                    table.public_id();
                     table.string("slug").unique();
                     table.real("score").default("0");
                     table.timestamps();
@@ -272,7 +280,13 @@ mod tests {
         let all: Vec<&dyn Migration> = migrations.iter().map(|m| m as &dyn Migration).collect();
         db.migrate(&all).unwrap();
         db.with(|sql| {
-            sql.execute("INSERT INTO posts (slug) VALUES ('a')", [])?;
+            sql.execute(
+                "INSERT INTO posts (public_id, slug) VALUES (?1, 'a')",
+                [crate::uuid::Uuid::v7()],
+            )?;
+            let stored: crate::uuid::Uuid =
+                sql.query_row("SELECT public_id FROM posts", [], |row| row.get(0))?;
+            assert_eq!(stored.version(), 7);
             sql.execute("INSERT INTO comments (post_id, body) VALUES (1, 'hi')", [])?;
             sql.execute("DELETE FROM posts", [])
         })
