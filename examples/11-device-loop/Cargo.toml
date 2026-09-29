@@ -18,6 +18,15 @@ rustclamp-runtime = { version = "0.1.0", path = "../../../runtime" }
 name = "11-device-loop"
 path = "examples/run.rs"
 
+[[example]]
+name = "11-device-loop-direct"
+path = "examples/direct.rs"
+
+[[bench]]
+name = "loop"
+path = "benches/loop.rs"
+harness = false
+
 [workspace]
 
 [lints.rust]

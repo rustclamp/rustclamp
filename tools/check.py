@@ -138,6 +138,7 @@ def check_examples(root):
         ("09-create-order", "rustclamp-example-create-order"),
         ("10-scheduler", "rustclamp-example-scheduler"),
         ("11-device-loop", "rustclamp-example-device-loop"),
+        ("12-platform-neutral", "rustclamp-example-platform-neutral"),
     )
     for example, package_name in examples:
         example_root = root / "rustclamp/examples" / example
@@ -149,6 +150,8 @@ def check_examples(root):
         assert "rustclamp" not in dependencies, f"{example} unexpectedly depends on the facade"
         if example == "11-device-loop":
             assert "tokio" not in dependencies, "default device loop activated Tokio"
+        if example == "12-platform-neutral":
+            assert "rustclamp-kernel" not in dependencies, "platform-neutral consumer activated Kernel"
         print(f"{example} dependency graph: {', '.join(sorted(dependencies))}; facade absent")
 
         run("cargo", "fmt", "--manifest-path", str(manifest), "--", "--check", cwd=root)
@@ -160,6 +163,12 @@ def check_examples(root):
                 "--all-targets", "--all-features", "--", "-D", "warnings", cwd=root)
             run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--all-features", cwd=root)
+            run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--example", "11-device-loop-direct", cwd=root)
+            run("cargo", "build", "--offline", "--locked", "--release", "--manifest-path",
+                str(manifest), "--examples", cwd=root)
+            run("cargo", "bench", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--bench", "loop", cwd=root)
         if example not in {"06-users", "09-create-order"}:
             run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--example", example, cwd=root)

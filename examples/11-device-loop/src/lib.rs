@@ -3,12 +3,15 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rustclamp_core::{
-    Clock, Contribution, ContributionId, ContributionTarget, ContributionTargetId, ModuleId,
+    Capability, CapabilityId, Clock, Contribution, ContributionId, ContributionTarget,
+    ContributionTargetId, Module, ModuleId, ProcessId, Provides,
 };
+use rustclamp_runtime::TaskContext;
 
 /// Domain unit for a validated sensor temperature in milli-degrees Celsius.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,6 +45,62 @@ pub enum SensorError {
     Overloaded,
     /// The device link is disconnected.
     Disconnected,
+    /// The managed device process has shut down.
+    Shutdown,
+}
+
+/// Errors returned while selecting or applying a CAN frame decoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanError {
+    /// Frame payload does not match the decoder's expected shape.
+    MalformedFrame,
+    /// No decoder is registered for the frame identifier.
+    UnknownFrame(u16),
+    /// The raw CAN value failed sensor-domain validation.
+    Sensor(SensorError),
+}
+
+/// Sensor capability consumed by a device process.
+pub struct SensorCapability;
+impl Capability for SensorCapability {
+    type Value = dyn Sensor;
+    const ID: CapabilityId = CapabilityId::new("example.device.sensor");
+}
+
+/// Display capability consumed by a device process.
+pub struct DisplayCapability;
+impl Capability for DisplayCapability {
+    type Value = dyn Display;
+    const ID: CapabilityId = CapabilityId::new("example.device.display");
+}
+
+/// Hardware link capability consumed by a device process.
+pub struct HardwareIoCapability;
+impl Capability for HardwareIoCapability {
+    type Value = dyn HardwareIo;
+    const ID: CapabilityId = CapabilityId::new("example.device.hardware-io");
+}
+
+/// Fake or hardware-backed sensor interface.
+pub trait Sensor {
+    /// Reads one fresh semantic sample.
+    fn read(&self, now: Duration, max_age: Duration) -> Result<MilliCelsius, SensorError>;
+    /// Releases process-managed input buffers during shutdown.
+    fn shutdown(&self) {}
+}
+
+/// Fake or hardware-backed display interface.
+pub trait Display {
+    /// Renders a validated sample.
+    fn render(&mut self, value: MilliCelsius);
+    /// Returns the displayed value when available.
+    fn value(&self) -> Option<MilliCelsius>;
+}
+
+/// Replaceable board I/O connectivity interface.
+pub trait HardwareIo {
+    /// Reports whether the hardware link is connected.
+    fn connected(&self) -> bool;
 }
 
 /// Last validated reading and its sample time.
@@ -75,6 +134,15 @@ impl SimClock {
 impl Clock for SimClock {
     fn now(&self) -> SystemTime {
         SystemTime::UNIX_EPOCH + self.0
+    }
+}
+
+impl Module for SimClock {
+    const ID: ModuleId = ModuleId::new("example.device.sim-clock");
+}
+impl Provides<rustclamp_core::ClockCapability> for SimClock {
+    fn provided_value(&self) -> &(dyn Clock + 'static) {
+        self
     }
 }
 
@@ -132,30 +200,128 @@ impl Simulation {
     }
 }
 
+/// Runtime report for an explicitly driven simulation loop.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LoopReport {
+    /// Number of inputs applied before completion or cancellation.
+    pub ticks: usize,
+    /// Whether the supplied runtime context was cancelled.
+    pub cancelled: bool,
+}
+
+/// Small synchronous loop driver that borrows caller state and runtime context.
+#[derive(Clone, Debug)]
+pub struct LoopRuntime {
+    clock: SimClock,
+    random: Seeded,
+    stopped: bool,
+}
+
+/// Runtime selected by this application's process configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessRuntime {
+    /// Direct synchronous fixed-step driver.
+    DeterministicLoop,
+    /// Optional asynchronous service adapter.
+    AsyncService,
+}
+
+/// Selects runtime policy for this example's declared process identities.
+pub fn process_runtime(process: ProcessId) -> Option<ProcessRuntime> {
+    match process.as_str() {
+        "example.device-loop.simulation" => Some(ProcessRuntime::DeterministicLoop),
+        "example.device-loop.service" => Some(ProcessRuntime::AsyncService),
+        _ => None,
+    }
+}
+
+impl LoopRuntime {
+    /// Creates a loop with controlled time and random seed.
+    pub const fn new(seed: u64) -> Self {
+        Self {
+            clock: SimClock::new(),
+            random: Seeded::new(seed),
+            stopped: false,
+        }
+    }
+
+    /// Applies input ticks until exhausted or the runtime context is cancelled.
+    pub fn run(
+        &mut self,
+        state: &mut State,
+        inputs: &mut impl Iterator<Item = Input>,
+        context: &TaskContext,
+    ) -> LoopReport {
+        let mut ticks = 0;
+        while !self.stopped && !context.is_cancelled() {
+            let Some(input) = inputs.next() else { break };
+            Simulation::step(state, input, &mut self.random);
+            self.clock.advance(Duration::from_millis(16));
+            ticks += 1;
+        }
+        LoopReport {
+            ticks,
+            cancelled: context.is_cancelled(),
+        }
+    }
+
+    /// Requests orderly loop shutdown; subsequent runs perform no work.
+    pub fn shutdown(&mut self) {
+        self.stopped = true;
+    }
+
+    /// Returns controlled elapsed time.
+    pub const fn clock(&self) -> SimClock {
+        self.clock
+    }
+}
+
 /// Testable stream of validated sensor samples.
-#[derive(Clone, Debug, Default)]
-pub struct FakeSensor(VecDeque<Sample>);
+#[derive(Debug, Default)]
+pub struct FakeSensor(RefCell<VecDeque<Sample>>);
 
 impl FakeSensor {
     /// Queues one raw reading at the supplied simulation time.
-    pub fn push(&mut self, at: Duration, raw: i32) -> Result<(), SensorError> {
-        if self.0.len() == 8 {
+    pub fn push(&self, at: Duration, raw: i32) -> Result<(), SensorError> {
+        let mut queue = self.0.borrow_mut();
+        if queue.len() == 8 {
             return Err(SensorError::Overloaded);
         }
-        self.0.push_back(Sample {
+        queue.push_back(Sample {
             value: MilliCelsius::from_raw(raw)?,
             at,
         });
         Ok(())
     }
 
-    /// Reads the latest sample, detecting missing and stale data.
-    pub fn read(&mut self, now: Duration, max_age: Duration) -> Result<MilliCelsius, SensorError> {
-        let sample = self.0.pop_front().ok_or(SensorError::Missing)?;
+    /// Reads the oldest queued sample, detecting missing and stale data.
+    pub fn read(&self, now: Duration, max_age: Duration) -> Result<MilliCelsius, SensorError> {
+        let sample = self
+            .0
+            .borrow_mut()
+            .pop_front()
+            .ok_or(SensorError::Missing)?;
         if now.saturating_sub(sample.at) > max_age {
             return Err(SensorError::Stale);
         }
         Ok(sample.value)
+    }
+}
+
+impl Sensor for FakeSensor {
+    fn read(&self, now: Duration, max_age: Duration) -> Result<MilliCelsius, SensorError> {
+        FakeSensor::read(self, now, max_age)
+    }
+    fn shutdown(&self) {
+        self.0.borrow_mut().clear();
+    }
+}
+impl Module for FakeSensor {
+    const ID: ModuleId = ModuleId::new("example.device.fake-sensor");
+}
+impl Provides<SensorCapability> for FakeSensor {
+    fn provided_value(&self) -> &(dyn Sensor + 'static) {
+        self
     }
 }
 
@@ -174,6 +340,53 @@ impl FakeDisplay {
     }
 }
 
+impl Display for FakeDisplay {
+    fn render(&mut self, value: MilliCelsius) {
+        FakeDisplay::render(self, value);
+    }
+    fn value(&self) -> Option<MilliCelsius> {
+        self.0
+    }
+}
+impl Module for FakeDisplay {
+    const ID: ModuleId = ModuleId::new("example.device.fake-display");
+}
+impl Provides<DisplayCapability> for FakeDisplay {
+    fn provided_value(&self) -> &(dyn Display + 'static) {
+        self
+    }
+}
+
+/// Fake replaceable hardware-I/O link state.
+#[derive(Debug)]
+pub struct FakeHardwareIo(Cell<bool>);
+
+impl Default for FakeHardwareIo {
+    fn default() -> Self {
+        Self(Cell::new(true))
+    }
+}
+
+impl FakeHardwareIo {
+    /// Sets link state for disconnect and recovery simulations.
+    pub fn set_connected(&self, connected: bool) {
+        self.0.set(connected);
+    }
+}
+impl HardwareIo for FakeHardwareIo {
+    fn connected(&self) -> bool {
+        self.0.get()
+    }
+}
+impl Module for FakeHardwareIo {
+    const ID: ModuleId = ModuleId::new("example.device.fake-hardware-io");
+}
+impl Provides<HardwareIoCapability> for FakeHardwareIo {
+    fn provided_value(&self) -> &(dyn HardwareIo + 'static) {
+        self
+    }
+}
+
 /// Device telemetry is optional and externally observable.
 pub trait Telemetry {
     /// Emits one temperature sample.
@@ -181,12 +394,12 @@ pub trait Telemetry {
 }
 
 /// CAN frame whose identifier and payload are supplied by the bus adapter.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanFrame {
     /// Arbitration identifier.
     pub id: u16,
     /// Little-endian raw temperature.
-    pub payload: [u8; 2],
+    pub payload: Vec<u8>,
 }
 
 /// Typed contribution decoded from a CAN frame.
@@ -194,16 +407,22 @@ pub trait CanDecoder {
     /// Frame identifier owned by this decoder.
     const FRAME_ID: u16;
     /// Parses a matching frame.
-    fn decode(frame: CanFrame) -> Result<MilliCelsius, SensorError>;
+    fn decode(frame: CanFrame) -> Result<MilliCelsius, CanError>;
 }
 
 /// Target that validates decoder identity and builds a runtime lookup table.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CanTarget;
 
+/// Function pointer retained by an assembled CAN decoder table.
+pub type DecoderFn = fn(CanFrame) -> Result<MilliCelsius, CanError>;
+
+/// Sorted runtime table from CAN ID to its typed decoder function.
+pub type DecoderTable = Vec<(u16, DecoderFn)>;
+
 impl ContributionTarget for CanTarget {
     type Contribution = CanDecoderDecl;
-    type Runtime = Vec<(u16, fn(CanFrame) -> Result<MilliCelsius, SensorError>)>;
+    type Runtime = DecoderTable;
     type Error = u16;
     const ID: ContributionTargetId = ContributionTargetId::new("example.device.can-decoders");
 
@@ -223,11 +442,24 @@ impl ContributionTarget for CanTarget {
     }
 }
 
+/// Dispatches one CAN frame through the composed runtime decoder table.
+pub fn decode_frame(table: &DecoderTable, frame: CanFrame) -> Result<MilliCelsius, CanError> {
+    let decode = table
+        .iter()
+        .find(|(id, _)| *id == frame.id)
+        .map(|(_, decode)| decode)
+        .ok_or(CanError::UnknownFrame(frame.id))?;
+    if frame.payload.len() != 2 {
+        return Err(CanError::MalformedFrame);
+    }
+    decode(frame)
+}
+
 /// Runtime decoder contribution.
 #[derive(Clone, Copy)]
 pub struct CanDecoderDecl {
     id: u16,
-    decode: fn(CanFrame) -> Result<MilliCelsius, SensorError>,
+    decode: DecoderFn,
 }
 
 impl Contribution for CanDecoderDecl {
@@ -236,7 +468,7 @@ impl Contribution for CanDecoderDecl {
 
 impl CanDecoderDecl {
     /// Declares a typed decoder function for a frame identifier.
-    pub const fn new(id: u16, decode: fn(CanFrame) -> Result<MilliCelsius, SensorError>) -> Self {
+    pub const fn new(id: u16, decode: DecoderFn) -> Self {
         Self { id, decode }
     }
 }
@@ -247,36 +479,60 @@ pub fn decoder<D: CanDecoder>() -> CanDecoderDecl {
 }
 
 /// Runs only bounded work from a device tick to model overload/backpressure.
-#[derive(Clone, Debug)]
-pub struct DeviceProcess {
-    sensor: FakeSensor,
-    display: FakeDisplay,
-    disconnected: bool,
+#[derive(Debug)]
+pub struct DeviceProcess<S = FakeSensor, D = FakeDisplay, H = FakeHardwareIo> {
+    sensor: S,
+    display: D,
+    hardware: H,
+    shutdown: bool,
 }
 
-impl DeviceProcess {
+impl DeviceProcess<FakeSensor, FakeDisplay, FakeHardwareIo> {
     /// Creates a fake device process with caller-owned sensor input.
-    pub const fn new(sensor: FakeSensor) -> Self {
+    pub fn new(sensor: FakeSensor) -> Self {
         Self {
             sensor,
             display: FakeDisplay(None),
-            disconnected: false,
+            hardware: FakeHardwareIo::default(),
+            shutdown: false,
         }
     }
     /// Marks the sensor link state; recovery resumes reads on the next tick.
     pub fn set_disconnected(&mut self, disconnected: bool) {
-        self.disconnected = disconnected;
+        self.hardware.set_connected(!disconnected);
+    }
+}
+
+impl<S: Sensor, D: Display, H: HardwareIo> DeviceProcess<S, D, H> {
+    /// Creates a device process from replaceable platform capabilities.
+    pub const fn with_capabilities(sensor: S, display: D, hardware: H) -> Self {
+        Self {
+            sensor,
+            display,
+            hardware,
+            shutdown: false,
+        }
+    }
+
+    /// Closes the managed process and releases queued sensor samples.
+    pub fn shutdown(&mut self) {
+        self.shutdown = true;
+        self.sensor.shutdown();
     }
     /// Reads, validates, and renders at most one sample per tick.
     pub fn tick(
         &mut self,
-        now: Duration,
+        clock: &dyn Clock,
         max_age: Duration,
         mut telemetry: Option<&mut dyn Telemetry>,
     ) -> Result<MilliCelsius, SensorError> {
-        if self.disconnected {
+        if self.shutdown {
+            return Err(SensorError::Shutdown);
+        }
+        if !self.hardware.connected() {
             return Err(SensorError::Disconnected);
         }
+        let now = clock.now().duration_since(UNIX_EPOCH).unwrap_or_default();
         let value = self.sensor.read(now, max_age)?;
         self.display.render(value);
         if let Some(sink) = telemetry.as_mut() {
@@ -285,7 +541,7 @@ impl DeviceProcess {
         Ok(value)
     }
     /// Returns the fake display output.
-    pub const fn display(&self) -> FakeDisplay {
-        self.display
+    pub fn display(&self) -> &D {
+        &self.display
     }
 }
