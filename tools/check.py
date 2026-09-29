@@ -22,6 +22,7 @@ PACKAGE_TO_REPO = {
     "rustclamp-http": "http",
     "rustclamp-postgres": "postgres",
     "rustclamp-messaging": "messaging",
+    "rustclamp-worker": "worker",
 }
 
 

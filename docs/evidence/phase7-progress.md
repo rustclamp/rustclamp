@@ -15,12 +15,19 @@ claim cross-process delivery. NATS JetStream is selected as the real transport,
 using durable pull consumers, explicit acknowledgments, and bounded batches.
 Its delivery is at least once, so duplicate-safe handling is required.
 
+The initial `rustclamp-worker` target compiles message-name/schema-version
+handlers, rejects invalid or duplicate declarations, decodes serialized
+envelopes, and preserves handler errors. It depends on public Core and Messaging
+contracts; routing has no broker-specific message type.
+
 ## Verification so far
 
 - `cargo check --offline --locked` passes for an isolated copy of the messaging
   package.
 - `cargo fmt -- --check` passes for the messaging package.
 - The messaging package's resolved dependency closure passes the boundary policy.
+- An isolated Worker package build with its Core and Messaging dependency closure
+  passes, and its resolved dependency closure passes the boundary policy.
 - The event-mapping example prints the explicit envelope's JSON representation.
 - The in-memory bus is bounded and returns a full-queue envelope to the caller
   for retry rather than dropping it.

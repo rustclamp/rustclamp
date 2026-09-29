@@ -38,6 +38,7 @@ git clone https://github.com/rustclamp/runtime.git
 git clone https://github.com/rustclamp/http.git
 git clone https://github.com/rustclamp/postgres.git
 git clone https://github.com/rustclamp/messaging.git
+git clone https://github.com/rustclamp/worker.git
 rustup toolchain install 1.96.1 --profile minimal --component clippy --component rustfmt
 python3 rustclamp/tools/workspace.py
 cargo metadata --offline --format-version 1

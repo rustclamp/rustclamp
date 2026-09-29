@@ -17,6 +17,11 @@ ALLOWED = {
         "serde_derive", "serde_json", "syn", "unicode-ident", "zmij",
         "rustclamp-core",
     },
+    "rustclamp-worker": {
+        "itoa", "memchr", "proc-macro2", "quote", "serde", "serde_core",
+        "serde_derive", "serde_json", "syn", "unicode-ident", "zmij",
+        "rustclamp-core", "rustclamp-messaging",
+    },
     "rustclamp-runtime": {
     'bytes',
     'errno',
