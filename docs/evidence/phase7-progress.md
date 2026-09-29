@@ -69,7 +69,9 @@ claim distributed locking. The `10-scheduler` example composes an unchanged job
 operation and advances an injected Core `Clock` through regular and missed
 intervals without Tokio or cron. The scheduler crate and example compile cleanly,
 pass Clippy with warnings denied, and the controlled-clock example runs. Focused
-clock/misfire tests remain pending.
+clock/misfire tests remain pending. Its shutdown demonstration closes the
+admission gate while one job is active, lets that job finish, then confirms the
+next due job does not start.
 
 ## Verification so far
 
@@ -96,6 +98,5 @@ clock/misfire tests remain pending.
 
 ## Next
 
-Add failure tests for clock/misfire and outbox/inbox crash windows; define the
-scheduler's stop-and-drain lifecycle; then run the process projections against
-live PostgreSQL and JetStream services.
+Add failure tests for clock/misfire and outbox/inbox crash windows; then run the
+process projections against live PostgreSQL and JetStream services.
