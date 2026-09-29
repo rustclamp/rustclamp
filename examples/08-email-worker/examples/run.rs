@@ -63,6 +63,7 @@ impl EmailSender for QueuedEmailSender {
             schema_version: 1,
             correlation_id: self.correlation_id.clone(),
             causation_id: None,
+            deadline_unix_ms: None,
             payload: json!({
                 "to": email.to,
                 "subject": email.subject,

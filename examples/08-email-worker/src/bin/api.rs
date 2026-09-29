@@ -1,6 +1,9 @@
 //! Publishes one email request through the shared JetStream stream.
 
-use async_nats::jetstream::{self, stream::Config};
+use async_nats::jetstream::{
+    self,
+    stream::{Config, DiscardPolicy},
+};
 use rustclamp_messaging::MessageEnvelope;
 use serde_json::json;
 use std::error::Error;
@@ -32,6 +35,7 @@ impl EmailSender for JetStreamEmailSender {
             schema_version: 1,
             correlation_id: format!("signup-{}", std::process::id()),
             causation_id: None,
+            deadline_unix_ms: Some(now_ms().saturating_add(20_000)),
             payload: json!({
                 "to": email.to,
                 "subject": email.subject,
@@ -58,6 +62,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             name: STREAM.into(),
             subjects: vec![SUBJECT.into(), DEAD_LETTER_SUBJECT.into()],
             max_messages: 10_000,
+            max_bytes: 64 * 1024 * 1024,
+            discard: DiscardPolicy::New,
             ..Default::default()
         })
         .await?;
@@ -77,4 +83,13 @@ fn timestamp() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }

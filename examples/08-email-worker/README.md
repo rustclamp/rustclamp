@@ -26,10 +26,18 @@ cargo run --offline --locked --manifest-path rustclamp/examples/08-email-worker/
 ```
 
 The API waits for JetStream's publish acknowledgement. The Worker uses a
-durable pull consumer with one unacknowledged message at a time and a 30-second
+durable pull consumer with one unacknowledged message at a time and a 45-second
 acknowledgement lease. It acknowledges only after its handler succeeds. A
 worker crash or expired lease can result in redelivery; the email operation
 must be idempotent before this example is used with an external mail service.
+The stream is bounded to 10,000 messages and 64 MiB with a new-message discard
+policy, so publishing fails when capacity is exhausted instead of deleting
+older queued work.
+The message carries a 20-second deadline, below the 45-second lease. The Worker
+checks it before starting and bounds any handler attempt to 25 seconds. If
+timeout drops an in-flight handler, its side effect is treated as unknown and
+sent to the dead-letter subject because it may already have happened. On Ctrl-C,
+the Worker stops fetching and finishes its current delivery before exiting.
 
 Handler errors retry at 1, 5, 15, then 30 seconds, up to five total deliveries.
 The final failed attempt is copied to `email.dead`; the source is acknowledged

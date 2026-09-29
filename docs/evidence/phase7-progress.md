@@ -35,7 +35,13 @@ message without a route is terminally rejected. The consumer lease is 30 seconds
 with at most one unacknowledged delivery. Worker handlers classify failures as
 retryable, permanent, or unknown outcome. Only retryable failures are authorized
 to retry; unknown outcomes are preserved in dead-letter records and are not
-retried automatically.
+retried automatically. The envelope propagates an optional Unix-millisecond
+deadline; the Worker checks it before execution and times out work at the
+deadline. A timeout during execution is recorded as unknown outcome. Queue depth,
+unacknowledged work, and concurrent handler execution are bounded by stream
+retention and a single in-flight delivery. The Worker stops fetching on Ctrl-C,
+then completes or times out its current delivery before exiting; an unacknowledged
+delivery after process loss is left for lease-based redelivery.
 
 ## Verification so far
 
