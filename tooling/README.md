@@ -49,7 +49,7 @@ The `check`, `test`, `build`, and `run` commands pass their arguments and exit
 status through to Cargo in the current directory. `clamp init <project-name>`
 creates a minimal Hello World project (`--blank`, the default). Add `--app` for a
 larger Rust project layout with a composition module and sample health module,
-`--web` for a Rust server with routes (`app/routes.rs`, Laravel-style `app/`, `resources/`, `public/`, `tests/`) and a Vite+ and Tailwind 4
+`--web` for a Rust server with routes (Laravel-style `app/` with `routes/` and `resources/`, `public/`, `tests/`) and a Vite+ and Tailwind 4
 frontend (needs Node/npm; `clamp dev` runs `vp build --watch` beside `cargo run`), or `--tui` for an
 interactive terminal loop. Every project gets `Procfile.dev` (`app: cargo run`)
 and a `cargo dev` alias for `cargo run`. `clamp dev` runs each `name: command`

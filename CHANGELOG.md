@@ -62,3 +62,26 @@
   and 1/5/20/50/100/500-module plus loop/footprint measurements.
 - Added a Phase 9 RustClamp HTTP site-hosting example and compared its responses
   byte-for-byte with both Python preview sites.
+- `web::error(status)` renders the app's `errors/{status}` or `errors/{N}xx`
+  view, else a built-in page; router 404s, missing files and the unbuilt-frontend
+  503 use it, and responses carry proper reason phrases.
+- `web` parses full requests (headers, query, `Content-Length` body, peer) with
+  size limits and a read timeout, adds response headers, `redirect`, and
+  `Router::middleware` / `Router::group`; a panicking handler answers 500.
+- `web::Throttle` / `throttle` fixed-window rate limiting (429 with
+  `Retry-After`, opt-in `X-Forwarded-For`), `web::Sessions` server-side sessions
+  and `web::csrf` (419); tokens come from `/dev/urandom`, keeping the facade
+  dependency-free.
+- `rustclamp::config` (`config` feature, included by `web`): `.env` plus
+  environment, typed getters, values hidden from `Debug`.
+- `web` routes accept `{name}` segments (`/blog/{slug}`), read with
+  `Request::param`.
+- `rustclamp::log` (`log` feature, included by `web`): `Log::debug` through
+  `Log::emergency` (PSR-3 levels) to `storage/logs/app.log` or stderr, set by
+  `LOG_LEVEL` (or `silent`), `LOG_CHANNEL` and `APP_ENV`; the web server logs
+  handler panics.
+- `web::render` (fills `<!--key-->` markers in a built view), `web::escape` and
+  the `web::security_headers` middleware; `Throttle::per_minute`, and
+  `Throttle::trust_forwarded` now takes a `bool`.
+- `clamp init --web` uses the my-site layout: `app/routes/{web,api}.rs`,
+  `app/resources/`, `.env.example`, with `/storage` and `.env` git-ignored.

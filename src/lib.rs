@@ -10,6 +10,10 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+#[cfg(feature = "config")]
+pub mod config;
+#[cfg(feature = "log")]
+pub mod log;
 #[cfg(feature = "web")]
 pub mod web;
 

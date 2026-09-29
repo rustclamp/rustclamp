@@ -347,28 +347,36 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
     ("app/main.rs", include_str!("../templates/web/app/main.rs")),
     ("app/lib.rs", include_str!("../templates/web/app/lib.rs")),
     (
-        "app/routes.rs",
-        include_str!("../templates/web/app/routes.rs"),
+        "app/routes/web.rs",
+        include_str!("../templates/web/app/routes/web.rs"),
+    ),
+    (
+        "app/routes/api.rs",
+        include_str!("../templates/web/app/routes/api.rs"),
     ),
     (
         "tests/routes.rs",
         include_str!("../templates/web/tests/routes.rs"),
     ),
     (
-        "resources/views/welcome.html",
-        include_str!("../templates/web/resources/views/welcome.html"),
+        "app/resources/views/welcome.html",
+        include_str!("../templates/web/app/resources/views/welcome.html"),
     ),
     (
-        "resources/css/app.css",
-        include_str!("../templates/web/resources/css/app.css"),
+        "app/resources/css/app.css",
+        include_str!("../templates/web/app/resources/css/app.css"),
     ),
     (
-        "resources/js/app.ts",
-        include_str!("../templates/web/resources/js/app.ts"),
+        "app/resources/js/app.ts",
+        include_str!("../templates/web/app/resources/js/app.ts"),
     ),
     (
         "public/robots.txt",
         include_str!("../templates/web/public/robots.txt"),
+    ),
+    (
+        ".env.example",
+        include_str!("../templates/web/.env.example"),
     ),
     (
         "package.json",
@@ -385,7 +393,7 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
     ("README.md", include_str!("../templates/web/README.md")),
 ];
 
-/// Laravel-style layout: Rust in `app/`, frontend in `resources/`, web root in
+/// Laravel-style layout: Rust and frontend sources in `app/`, web root in
 /// `public/`, tests in `tests/`.
 fn create_web(root: &std::path::Path, name: &str) -> Result<(), String> {
     let crate_name = name.replace('-', "_");
@@ -408,7 +416,7 @@ fn create_web(root: &std::path::Path, name: &str) -> Result<(), String> {
     fs::write(&manifest, cargo_toml).map_err(|error| format!("cannot write manifest: {error}"))?;
     let gitignore = root.join(".gitignore");
     let mut ignored = fs::read_to_string(&gitignore).unwrap_or_default();
-    ignored.push_str("/node_modules\n/public/build\n");
+    ignored.push_str("/node_modules\n/public/build\n/storage\n.env\n");
     fs::write(&gitignore, ignored).map_err(|error| format!("cannot update .gitignore: {error}"))?;
     Ok(())
 }
