@@ -22,9 +22,13 @@ contracts; routing has no broker-specific message type.
 
 The `08-email-worker` example wires the domain `EmailSender` port to a
 `QueuedEmailSender`, routes its envelope through the in-memory bus, and invokes
-the worker handler, which calls the email operation with a memory gateway. This
-is the combined development composition; the independent-process version is
-still pending.
+the worker handler, which calls the email operation with a memory gateway. It
+also defines independent `email-api` and `email-worker` executables that exchange
+the versioned envelope over JetStream. The API waits for the broker's publish
+acknowledgement; the Worker uses a durable pull consumer with one in-flight
+message and ACKs only after handler success. The example README documents a
+two-terminal run. Live broker execution is pending because the local Docker
+daemon is unavailable.
 
 ## Verification so far
 
@@ -39,8 +43,10 @@ still pending.
   for retry rather than dropping it.
 - The email-worker example runs successfully and passes Clippy with warnings
   denied.
+- Both JetStream process projections compile and pass Clippy with warnings
+  denied; live execution still needs a running NATS server.
 
 ## Next
 
-Implement the optional JetStream adapter and run the API and Worker as separate
-process projections over that transport.
+Implement explicit retry, rejection, and dead-letter policies; run the process
+projections against a live JetStream server when one is available.
