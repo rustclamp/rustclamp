@@ -23,6 +23,13 @@ ALLOWED = {
         "thiserror-impl", "unicode-ident", "vcpkg", "wasm-bindgen",
         "wasm-bindgen-macro", "wasm-bindgen-macro-support",
         "wasm-bindgen-shared",
+        # The optional `crypto` feature: RustCrypto argon2, chacha20poly1305,
+        # sha2, hmac and base64ct, with getrandom (ADR 0010). r-efi is UEFI only.
+        "aead", "argon2", "base64ct", "blake2", "block-buffer", "chacha20",
+        "chacha20poly1305", "cipher", "cmov", "const-oid", "cpufeatures",
+        "crypto-common", "ctutils", "digest", "getrandom", "hmac",
+        "hybrid-array", "inout", "libc", "password-hash", "phc", "poly1305",
+        "rand_core", "r-efi", "sha2", "typenum", "universal-hash",
     },
     "rustclamp-core": set(),
     "rustclamp-kernel": {"rustclamp-core"},
@@ -271,7 +278,10 @@ ALLOWED = {
     'zmij',
     },
 }
-OPTIONAL = {"rustclamp-runtime": {"tokio"}, "rustclamp": {"rusqlite"}}
+OPTIONAL = {
+    "rustclamp-runtime": {"tokio"},
+    "rustclamp": {"rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom"},
+}
 
 
 def metadata(manifest):

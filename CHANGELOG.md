@@ -34,6 +34,10 @@
 - `rustclamp::uuid` (optional std-only `uuid` feature, included by `db`):
   `Uuid::v7` (time-ordered, strictly increasing per process) and `Uuid::v4`,
   `parse`, SQLite mapping as text, and `Schema`'s `table.public_id()`.
+- `rustclamp::crypto` (optional `crypto` feature, RustCrypto): Argon2id
+  `Hash::make`/`check`, `Key` (`APP_KEY`, `base64:`) and `Crypt`
+  (XChaCha20-Poly1305), `sha256`, `hmac_sha256` and constant-time
+  `hmac_verify` (ADR 0010).
 - `db::Model`: a table as a struct (`TABLE`, `from_row`) with `query`,
   `all` and `find`.
 - `rustclamp::build` (optional `build` feature): `build.rs` discovery of

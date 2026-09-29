@@ -14,6 +14,8 @@
 pub mod build;
 #[cfg(feature = "config")]
 pub mod config;
+#[cfg(feature = "crypto")]
+pub mod crypto;
 #[cfg(feature = "db")]
 pub mod db;
 #[cfg(feature = "log")]
