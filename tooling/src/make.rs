@@ -160,7 +160,7 @@ fn seeder(stem: &str) -> String {
     let name_struct = struct_name(stem);
     let table = stem.strip_suffix("_seeder").unwrap_or(stem);
     format!(
-        "use rustclamp::db::sqlite::Result;\nuse rustclamp::db::{{Db, Seeder}};\n\npub struct {name_struct};\n\nimpl Seeder for {name_struct} {{\n    fn run(&self, db: &Db) -> Result<()> {{\n        // db.table(\"{table}\")\n        //     .insert(&[\"title\"], rustclamp::db::sqlite::params![\"Hello\"])?;\n        let _ = db;\n        Ok(())\n    }}\n}}\n"
+        "use rustclamp::db::{{Db, SeedError, Seeder}};\n\npub struct {name_struct};\n\nimpl Seeder for {name_struct} {{\n    fn run(&self, db: &Db) -> Result<(), SeedError> {{\n        // db.table(\"{table}\")\n        //     .insert(&[\"title\"], rustclamp::db::sqlite::params![\"Hello\"])?;\n        let _ = db;\n        Ok(())\n    }}\n}}\n"
     )
 }
 

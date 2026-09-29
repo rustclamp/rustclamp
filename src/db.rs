@@ -125,6 +125,33 @@ impl Db {
         work(&connection)
     }
 
+    /// Runs `work` in a transaction, like Laravel's `DB::transaction`: kept
+    /// when it returns `Ok`, undone when it returns `Err`. It nests: inside
+    /// another transaction, such as a seeder's, it is a savepoint. `work`
+    /// gets the connection; calling other `Db` methods inside it would wait
+    /// forever for the lock it holds.
+    ///
+    /// ```
+    /// use rustclamp::config::Config;
+    /// use rustclamp::db::{Db, sqlite};
+    ///
+    /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    /// db.with(|sql| sql.execute_batch("CREATE TABLE t (n INTEGER)")).unwrap();
+    /// let failed: Result<(), sqlite::Error> = db.transaction(|sql| {
+    ///     sql.execute("INSERT INTO t VALUES (1)", [])?;
+    ///     sql.execute("NOT SQL", [])?;
+    ///     Ok(())
+    /// });
+    /// assert!(failed.is_err());
+    /// assert_eq!(db.table("t").count().unwrap(), 0, "the insert was undone");
+    /// ```
+    pub fn transaction<T, E: From<sqlite::Error>>(
+        &self,
+        work: impl FnOnce(&Connection) -> Result<T, E>,
+    ) -> Result<T, E> {
+        self.with(|connection| savepoint(connection, work))
+    }
+
     /// A query on `table`; see [`Query`].
     pub fn table<'a>(&'a self, table: &str) -> Query<'a> {
         Query::new(self, table)
@@ -157,13 +184,13 @@ impl Db {
                 if ran {
                     continue;
                 }
-                let transaction = connection.unchecked_transaction()?;
-                transaction.execute_batch(&migration.up())?;
-                transaction.execute(
-                    "INSERT INTO migrations (name, batch) VALUES (?1, ?2)",
-                    rusqlite::params![name, batch],
-                )?;
-                transaction.commit()?;
+                savepoint(connection, |connection| {
+                    connection.execute_batch(&migration.up())?;
+                    connection.execute(
+                        "INSERT INTO migrations (name, batch) VALUES (?1, ?2)",
+                        rusqlite::params![name, batch],
+                    )
+                })?;
             }
             Ok(())
         })
@@ -205,7 +232,7 @@ impl Db {
 
     /// Runs each seeder in order, each in its own transaction, so a failing
     /// seeder leaves nothing half inserted.
-    pub fn seed(&self, seeders: &[&dyn Seeder]) -> sqlite::Result<()> {
+    pub fn seed(&self, seeders: &[&dyn Seeder]) -> Result<(), SeedError> {
         // ponytail: the transaction spans several `with` calls on the shared
         // connection, so run seeders from the console, not while serving.
         for seeder in seeders {
@@ -244,16 +271,11 @@ impl Db {
                     .iter()
                     .find(|migration| migration.name() == name)
                     .ok_or_else(|| format!("migration {name} ran but is not in the list"))?;
-                let transaction = connection
-                    .unchecked_transaction()
-                    .map_err(|error| error.to_string())?;
-                transaction
-                    .execute_batch(&migration.down())
-                    .and_then(|()| {
-                        transaction.execute("DELETE FROM migrations WHERE name = ?1", [&name])
-                    })
-                    .map_err(|error| format!("{name}: {error}"))?;
-                transaction.commit().map_err(|error| error.to_string())?;
+                savepoint(connection, |connection| {
+                    connection.execute_batch(&migration.down())?;
+                    connection.execute("DELETE FROM migrations WHERE name = ?1", [&name])
+                })
+                .map_err(|error: sqlite::Error| format!("{name}: {error}"))?;
                 undone.push(migration.name());
             }
             Ok(undone)
@@ -317,9 +339,14 @@ pub trait Model: Sized {
 /// Fills the database with data, like a Laravel seeder class: one struct
 /// per file in `app/database/seeders/`, run by `cargo run -- db:seed`.
 pub trait Seeder {
-    /// Inserts the data, usually with [`Db::table`].
-    fn run(&self, db: &Db) -> sqlite::Result<()>;
+    /// Inserts the data, usually with [`Db::table`]. Any error stops the
+    /// seeder and rolls back what it inserted; `?` works on database errors,
+    /// [`Transition`]s and I/O alike.
+    fn run(&self, db: &Db) -> Result<(), SeedError>;
 }
+
+/// Whatever stopped a [`Seeder`].
+pub type SeedError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Runs a database console command and returns the process exit code:
 /// `migrate`, `migrate:rollback`, `migrate:status` or `db:seed`. The web template's `main`
@@ -350,8 +377,8 @@ pub fn command(
         }),
         "db:seed" => db
             .migrate(migrations)
-            .and_then(|()| db.seed(seeders))
             .map_err(|error| error.to_string())
+            .and_then(|()| db.seed(seeders).map_err(|error| error.to_string()))
             .map(|()| println!("Seeded")),
         _ => {
             eprintln!(
@@ -395,6 +422,25 @@ impl sqlite::types::FromSql for crate::uuid::Uuid {
         let text = value.as_str()?;
         Self::parse(text)
             .ok_or_else(|| sqlite::types::FromSqlError::Other(format!("not a UUID: {text}").into()))
+    }
+}
+
+/// Runs `work` inside a savepoint: a transaction of its own, or a nested one
+/// inside a transaction already open.
+fn savepoint<T, E: From<sqlite::Error>>(
+    connection: &Connection,
+    work: impl FnOnce(&Connection) -> Result<T, E>,
+) -> Result<T, E> {
+    connection.execute_batch("SAVEPOINT clamp")?;
+    match work(connection) {
+        Ok(value) => {
+            connection.execute_batch("RELEASE clamp")?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK TO clamp; RELEASE clamp");
+            Err(error)
+        }
     }
 }
 
@@ -543,9 +589,10 @@ mod tests {
     struct Posts(&'static str);
 
     impl Seeder for Posts {
-        fn run(&self, db: &Db) -> sqlite::Result<()> {
+        fn run(&self, db: &Db) -> Result<(), SeedError> {
             db.table("posts").insert(&["title"], [&"one"])?;
-            db.with(|connection| connection.execute_batch(self.0))
+            db.with(|connection| connection.execute_batch(self.0))?;
+            Ok(())
         }
     }
 

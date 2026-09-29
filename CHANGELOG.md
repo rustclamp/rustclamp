@@ -41,6 +41,10 @@
 - `clamp key:generate`, `clamp env:encrypt` and `clamp env:decrypt`
   (`--key=`, `--env=`, `--force`, `CLAMP_ENV_KEY`); `clamp init --web` turns on
   `crypto` and lists `APP_KEY` in `.env.example`.
+- `Db::transaction`: kept on `Ok`, undone on `Err`, and nested as a
+  savepoint inside another transaction; migrations, rollbacks and state
+  transitions use it, so they work inside a seeder. `Seeder::run` returns
+  `SeedError` (any error), so `?` works on transitions and I/O too.
 - `db::Model`: a table as a struct (`TABLE`, `from_row`) with `query`,
   `all` and `find`.
 - `rustclamp::build` (optional `build` feature): `build.rs` discovery of

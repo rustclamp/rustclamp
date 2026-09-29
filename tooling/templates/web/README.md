@@ -83,12 +83,12 @@ impl Migration for CreatePosts {
 A seeder is a file in `app/database/seeders/`, such as `posts_seeder.rs`:
 
 ```rust
-use rustclamp::db::{Db, Seeder, sqlite::{Result, params}};
+use rustclamp::db::{Db, SeedError, Seeder, sqlite::params};
 
 pub struct PostsSeeder;
 
 impl Seeder for PostsSeeder {
-    fn run(&self, db: &Db) -> Result<()> {
+    fn run(&self, db: &Db) -> Result<(), SeedError> {
         db.table("posts").insert(&["title"], params!["Hello"])?;
         Ok(())
     }

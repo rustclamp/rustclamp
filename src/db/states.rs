@@ -136,10 +136,9 @@ impl States {
         by: Option<&str>,
     ) -> Result<(), Transition> {
         let (table, column) = (self.table, self.column);
-        db.with(|connection| {
-            create_history(connection)?;
-            let transaction = connection.unchecked_transaction()?;
-            let from: String = transaction
+        db.with(create_history)?;
+        db.transaction(|connection| {
+            let from: String = connection
                 .query_row(
                     &format!("SELECT {column} FROM {table} WHERE id = ?1"),
                     [id],
@@ -153,16 +152,15 @@ impl States {
                     to: to.to_owned(),
                 });
             }
-            transaction.execute(
+            connection.execute(
                 &format!("UPDATE {table} SET {column} = ?1 WHERE id = ?2"),
                 params![to, id],
             )?;
-            transaction.execute(
+            connection.execute(
                 "INSERT INTO state_history (model, model_id, field, from_state, to_state, by)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![table, id, column, from, to, by],
             )?;
-            transaction.commit()?;
             Ok(())
         })
     }
@@ -245,6 +243,18 @@ mod tests {
             .with(|sql| sql.query_row("SELECT status FROM posts", [], |row| row.get(0)))
             .unwrap();
         assert_eq!(status, "draft");
+    }
+
+    #[test]
+    fn transitions_nest_inside_an_open_transaction() {
+        let db = db();
+        db.with(|sql| sql.execute_batch("BEGIN")).unwrap();
+        POST.transition(&db, 1, "published", None).unwrap();
+        db.with(|sql| sql.execute_batch("ROLLBACK")).unwrap();
+        assert!(
+            POST.history(&db, 1).unwrap().is_empty(),
+            "undone with the outer one"
+        );
     }
 
     #[test]
