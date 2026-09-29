@@ -138,6 +138,14 @@ impl Router {
         self
     }
 
+    /// Adds `package`'s routes as a [`group`](Self::group), so middleware the
+    /// package declares wraps only its own routes. Routes match in the order
+    /// added: routes declared before `.package(...)` win over the package's.
+    #[must_use]
+    pub fn package(self, package: impl Package) -> Self {
+        self.group(|router| package.routes(router))
+    }
+
     /// Runs the middleware, then the first matching route, else a static file
     /// for `GET`, else `404`.
     pub fn handle(&self, request: &Request) -> Response {
@@ -160,6 +168,62 @@ impl Router {
             None => error(404),
         }
     }
+}
+
+/// A reusable feature in its own crate, like a Laravel package: its routes,
+/// middleware, views and config live in the package, and an app adds it with
+/// [`Router::package`].
+///
+/// Views ship inside the package (`include_str!`) and render with
+/// [`package_view`], which prefers the app's override. Settings come from the
+/// app's [`Config`](crate::config::Config), passed to the package's constructor.
+///
+/// ```
+/// use rustclamp::web::{Package, Request, Response, Router};
+///
+/// struct Hello {
+///     greeting: String,
+/// }
+///
+/// impl Package for Hello {
+///     fn routes(self, router: Router) -> Router {
+///         let greeting = self.greeting;
+///         router.get("/hello", move |_| Response::text(200, &greeting))
+///     }
+/// }
+///
+/// let app = Router::new().package(Hello { greeting: "hi".into() });
+/// assert_eq!(app.handle(&Request::get("/hello")).body, b"hi");
+/// ```
+pub trait Package {
+    /// Adds the package's routes and middleware to `router`.
+    fn routes(self, router: Router) -> Router;
+}
+
+/// The view `name` of `package`, with `<!--key-->` markers filled as in
+/// [`render`]. The app's built override, `public/build/views/vendor/{package}/{name}.html`
+/// (source `app/resources/views/vendor/{package}/{name}.html`), wins over
+/// `embedded`, the package's own copy.
+pub fn package_view(package: &str, name: &str, embedded: &str, slots: &[(&str, &str)]) -> Response {
+    package_view_in(Path::new(PUBLIC), package, name, embedded, slots)
+}
+
+fn package_view_in(
+    public: &Path,
+    package: &str,
+    name: &str,
+    embedded: &str,
+    slots: &[(&str, &str)],
+) -> Response {
+    let file = public
+        .join("build/views/vendor")
+        .join(package)
+        .join(format!("{name}.html"));
+    let mut page = fs::read_to_string(file).unwrap_or_else(|_| embedded.to_owned());
+    for (key, value) in slots {
+        page = page.replace(&format!("<!--{key}-->"), value);
+    }
+    html(200, page.into_bytes())
 }
 
 /// The `{name}` values when `path` matches `pattern`, segment by segment.
@@ -597,6 +661,45 @@ mod tests {
         let response = routes.handle(&Request::get("/"));
         assert_eq!(response.header("x-frame-options"), Some("DENY"));
         assert_eq!(response.header("x-content-type-options"), Some("nosniff"));
+    }
+
+    #[test]
+    fn package_middleware_stays_on_package_routes() {
+        struct Locked;
+        impl Package for Locked {
+            fn routes(self, router: Router) -> Router {
+                router
+                    .middleware(|_: &Request, _: Next| Response::text(401, "no"))
+                    .get("/locked", |_| json("{}"))
+            }
+        }
+        let routes = Router::new().package(Locked).get("/open", |_| json("{}"));
+        assert_eq!(routes.handle(&Request::get("/locked")).status, 401);
+        assert_eq!(routes.handle(&Request::get("/open")).status, 200);
+    }
+
+    #[test]
+    fn package_view_prefers_the_app_override() {
+        let public = std::env::temp_dir().join(format!("clamp-pkg-{}", std::process::id()));
+        let body = |response: Response| String::from_utf8(response.body).unwrap();
+        let slots = [("title", "Hi")];
+        assert_eq!(
+            body(package_view_in(
+                &public,
+                "blog",
+                "index",
+                "<h1><!--title--></h1>",
+                &slots
+            )),
+            "<h1>Hi</h1>"
+        );
+        let dir = public.join("build/views/vendor/blog");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("index.html"), "<h2><!--title--></h2>").unwrap();
+        let response = package_view_in(&public, "blog", "index", "<h1><!--title--></h1>", &slots);
+        fs::remove_dir_all(&public).unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(body(response), "<h2>Hi</h2>");
     }
 
     #[test]

@@ -73,7 +73,7 @@ ___           _    ___ _
         io::stdin()
             .read_line(&mut name)
             .map_err(|error| format!("cannot read project name: {error}"))?;
-        print!("Template [blank/app/web/tui] (blank): ");
+        print!("Template [blank/app/web/tui/package] (blank): ");
         io::stdout()
             .flush()
             .map_err(|error| format!("cannot write template prompt: {error}"))?;
@@ -127,7 +127,10 @@ fn run(args: Vec<String>) -> Result<u8, String> {
             ["--app"] | ["--template", "app" | "application"] => "app",
             ["--web"] | ["--template", "web"] => "web",
             ["--tui"] | ["--template", "tui"] => "tui",
-            _ => return Err("usage: clamp init NAME [--blank|--app|--web|--tui]".into()),
+            ["--package"] | ["--template", "package"] => "package",
+            _ => {
+                return Err("usage: clamp init NAME [--blank|--app|--web|--tui|--package]".into());
+            }
         };
         // Written directly rather than with `cargo new`, which would also add the
         // project to any workspace above it; `[workspace]` keeps it standalone.
@@ -147,7 +150,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         }
         fs::create_dir_all(root.join("src"))
             .map_err(|error| format!("cannot create project directory: {error}"))?;
-        let features = if template == "web" {
+        let features = if template == "web" || template == "package" {
             ", features = [\"web\"]"
         } else {
             ""
@@ -166,6 +169,13 @@ fn run(args: Vec<String>) -> Result<u8, String> {
             .args(["init", "--quiet"])
             .arg(root)
             .status();
+        if template == "package" {
+            // A library: nothing to run, so no `cargo dev` alias or Procfile.
+            create_package(root, name)?;
+            println!("Created RustClamp package at {}", root.display());
+            println!("Next: cd {} && cargo test", root.display());
+            return Ok(0);
+        }
         fs::create_dir_all(root.join(".cargo"))
             .map_err(|error| format!("cannot create .cargo directory: {error}"))?;
         fs::write(root.join(".cargo/config.toml"), "[alias]\ndev = \"run\"\n")
@@ -321,7 +331,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--tui]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp self-update\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web or TUI scaffold, inspect a resolved projection, run Procfile.dev concurrently, reinstall clamp, or run a Cargo command."
+    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp self-update\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, reinstall clamp, or run a Cargo command."
 }
 
 fn create_application(root: &std::path::Path) -> Result<(), String> {
@@ -459,6 +469,58 @@ fn create_web(root: &std::path::Path, name: &str) -> Result<(), String> {
     let mut ignored = fs::read_to_string(&gitignore).unwrap_or_default();
     ignored.push_str("/node_modules\n/public/build\n/storage\n.env\n");
     fs::write(&gitignore, ignored).map_err(|error| format!("cannot update .gitignore: {error}"))?;
+    Ok(())
+}
+
+const PACKAGE_TEMPLATE: &[(&str, &str)] = &[
+    (
+        "src/lib.rs",
+        include_str!("../templates/package/src/lib.rs"),
+    ),
+    (
+        "resources/views/index.html",
+        include_str!("../templates/package/resources/views/index.html"),
+    ),
+    (
+        "resources/css/__NAME__.css",
+        include_str!("../templates/package/resources/css/__NAME__.css"),
+    ),
+    (
+        "tests/routes.rs",
+        include_str!("../templates/package/tests/routes.rs"),
+    ),
+    ("README.md", include_str!("../templates/package/README.md")),
+];
+
+/// A self-contained package crate: routes, views, static files and tests.
+fn create_package(root: &std::path::Path, name: &str) -> Result<(), String> {
+    let crate_name = name.replace('-', "_");
+    let struct_name: String = name
+        .split(['-', '_'])
+        .flat_map(|word| {
+            let mut chars = word.chars();
+            chars
+                .next()
+                .map(|first| first.to_ascii_uppercase())
+                .into_iter()
+                .chain(chars)
+        })
+        .collect();
+    let fill = |text: &str| {
+        text.replace("__CRATE__", &crate_name)
+            .replace("__STRUCT__", &struct_name)
+            .replace("__ENV__", &crate_name.to_ascii_uppercase())
+            .replace("__NAME__", name)
+    };
+    for (path, contents) in PACKAGE_TEMPLATE {
+        let file = root.join(fill(path));
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+        }
+        fs::write(&file, fill(contents))
+            .map_err(|error| format!("cannot write {path}: {error}"))?;
+    }
     Ok(())
 }
 

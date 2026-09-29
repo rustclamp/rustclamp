@@ -51,8 +51,10 @@ creates a minimal Hello World project (`--blank`, the default). Add `--app` for 
 larger Rust project layout with a composition module and sample health module,
 `--web` for a Rust server with routes (Laravel-style `app/` with `routes/` and `resources/`, `public/`, `tests/`) and a Vite+ and Tailwind 4
 frontend (needs Node/npm; `clamp dev` runs `vp build --watch` beside `cargo run`), or `--tui` for an
-interactive terminal loop. Every project gets `Procfile.dev` (`app: cargo run`)
-and a `cargo dev` alias for `cargo run`. `clamp dev` runs each `name: command`
+interactive terminal loop. `--package` creates a self-contained web package
+instead: a library with its own routes, views, static files, settings and tests,
+which an app adds with `Router::package` (ADR 0008). Every other project gets
+`Procfile.dev` (`app: cargo run`) and a `cargo dev` alias for `cargo run`. `clamp dev` runs each `name: command`
 line of `Procfile.dev` at once with `[name]`-prefixed output; a command that
 fails stops the rest. All manifests use the RustClamp facade from its public Git repository so a
 starter app can build before the crates.io publication gate is cleared.

@@ -144,6 +144,19 @@ checks remain open. The preview servers also cannot bind local ports here.
 There is no staging host configured; production indexing headers and current
 live route status still need an external check.
 
+## Web packages
+
+ADR 0008 adds self-contained web packages. `Router::package` mounts a
+`web::Package` as a group, and a facade test shows package middleware stays on
+package routes. `package_view` prefers the app's built
+`views/vendor/{package}/` override, tested against a temporary web root. The
+coordinated runner generates a `--package` crate, checks that it emits the Git
+dependency, then checks and tests it against the local facade; its three tests
+run on a bare `Router`. A generated `--web` app with a generated package mounted
+also served the package route with the app's security headers, and served a
+`vendor/` override in place of the embedded view. Package migrations, workers,
+scheduled jobs, commands and a publish command are deferred.
+
 ## Remaining release work
 
 Package publication is blocked on the recorded license and registry ownership
