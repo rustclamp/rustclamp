@@ -7,6 +7,10 @@
 - Web packages: `web::Package`, `Router::package` (package middleware stays on
   package routes), `web::package_view` with app overrides under
   `views/vendor/{package}/`, and `clamp init NAME --package` (ADR 0008).
+- `rustclamp::db` (optional `db` feature): SQLite via rusqlite with bundled
+  SQLite, opened from `DB_CONNECTION`/`DB_DATABASE`, with named migrations.
+  `clamp init NAME --web` turns it on and runs `app/database/migrations.rs` at
+  startup (ADR 0009).
 - `clamp --version`; the CLI is 0.2.0 (release tag `clamp-v0.2.0`).
 - Phase 0 package scaffold and development checks.
 - Synchronous `Clamp::run` entrypoint and a prelude exporting `Clamp`.

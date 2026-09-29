@@ -154,10 +154,10 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         }
         fs::create_dir_all(root.join("src"))
             .map_err(|error| format!("cannot create project directory: {error}"))?;
-        let features = if template == "web" || template == "package" {
-            ", features = [\"web\"]"
-        } else {
-            ""
+        let features = match template {
+            "web" => ", features = [\"web\", \"db\"]",
+            "package" => ", features = [\"web\"]",
+            _ => "",
         };
         fs::write(
             root.join("Cargo.toml"),
@@ -407,6 +407,10 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
     (
         "app/routes/web.rs",
         include_str!("../templates/web/app/routes/web.rs"),
+    ),
+    (
+        "app/database/migrations.rs",
+        include_str!("../templates/web/app/database/migrations.rs"),
     ),
     (
         "app/routes/api.rs",

@@ -12,6 +12,8 @@
 
 #[cfg(feature = "config")]
 pub mod config;
+#[cfg(feature = "db")]
+pub mod db;
 #[cfg(feature = "log")]
 pub mod log;
 #[cfg(feature = "web")]

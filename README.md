@@ -23,7 +23,9 @@ unchanged. Captures may borrow local data or consume owned values. Errors and
 panics keep ordinary Rust behavior. This path needs no Core, Kernel or Runtime.
 
 Run Pico from this repository with `cargo run --offline --example 00-pico`.
-Rust 1.96.1 is the tested minimum; the facade has no dependencies.
+Rust 1.96.1 is the tested minimum; the facade has no dependencies by default.
+The optional `db` feature adds `rustclamp::db`, a SQLite database compiled into
+the app and opened from `.env` ([ADR 0009](docs/adr/0009-database.md)).
 The optional `web` feature adds `rustclamp::web`, a std-only HTTP server with
 routes, JSON and static files from `public/`; `clamp init --web` projects use it.
 Reusable features ship as packages: a crate implementing `web::Package` brings its

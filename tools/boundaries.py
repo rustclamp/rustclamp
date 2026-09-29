@@ -9,7 +9,21 @@ import tempfile
 
 # Every new edge requires prototype evidence and an explicit policy change.
 ALLOWED = {
-    "rustclamp": {"rustclamp-core", "rustclamp-kernel", "rustclamp-runtime"},
+    # The optional `db` feature: rusqlite with bundled SQLite (ADR 0009). The
+    # wasm-bindgen, js-sys and sqlite-wasm-rs entries build only for wasm32;
+    # Cargo metadata resolves every target.
+    "rustclamp": {
+        "rustclamp-core", "rustclamp-kernel", "rustclamp-runtime",
+        "allocator-api2", "bitflags", "bumpalo", "cc", "cfg-if", "equivalent",
+        "fallible-iterator", "fallible-streaming-iterator", "find-msvc-tools",
+        "foldhash", "hashbrown", "hashlink", "js-sys", "libsqlite3-sys",
+        "once_cell", "pkg-config", "proc-macro2", "quote", "rsqlite-vfs",
+        "rusqlite", "rustversion", "serde", "serde_core", "serde_derive",
+        "shlex", "smallvec", "sqlite-wasm-rs", "syn", "thiserror",
+        "thiserror-impl", "unicode-ident", "vcpkg", "wasm-bindgen",
+        "wasm-bindgen-macro", "wasm-bindgen-macro-support",
+        "wasm-bindgen-shared",
+    },
     "rustclamp-core": set(),
     "rustclamp-kernel": {"rustclamp-core"},
     "rustclamp-messaging": {
@@ -257,7 +271,7 @@ ALLOWED = {
     'zmij',
     },
 }
-OPTIONAL = {"rustclamp-runtime": {"tokio"}}
+OPTIONAL = {"rustclamp-runtime": {"tokio"}, "rustclamp": {"rusqlite"}}
 
 
 def metadata(manifest):

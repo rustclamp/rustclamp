@@ -3,7 +3,7 @@ use rustclamp::config::Config;
 use rustclamp::web::Request;
 
 fn app() -> rustclamp::web::Router {
-    routes(&Config::default())
+    routes(&Config::parse("DB_DATABASE=:memory:"))
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn every_response_carries_security_headers() {
 
 #[test]
 fn api_is_throttled_per_client() {
-    let routes = routes(&Config::parse("API_PER_MINUTE=1\n"));
+    let routes = routes(&Config::parse("API_PER_MINUTE=1\nDB_DATABASE=:memory:\n"));
     let request = || Request::get("/api/health").with_peer("10.0.0.1".parse().unwrap());
     assert_eq!(routes.handle(&request()).status, 200);
     assert_eq!(routes.handle(&request()).status, 429);

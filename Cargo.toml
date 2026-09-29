@@ -16,6 +16,8 @@ web = ["config", "log"]
 config = []
 # Optional leveled logging to `storage/logs/app.log` (`rustclamp::log`).
 log = ["config"]
+# Optional SQLite database from `.env` (`rustclamp::db`); compiles SQLite in.
+db = ["config", "dep:rusqlite"]
 
 [[example]]
 name = "00-pico"
@@ -29,3 +31,4 @@ missing_docs = "deny"
 broken_intra_doc_links = "deny"
 
 [dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
