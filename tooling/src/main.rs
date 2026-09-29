@@ -356,6 +356,30 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
     ("app/main.rs", include_str!("../templates/web/app/main.rs")),
     ("app/lib.rs", include_str!("../templates/web/app/lib.rs")),
     (
+        "app/config/app.rs",
+        include_str!("../templates/web/app/config/app.rs"),
+    ),
+    (
+        "app/http/controllers/controller.rs",
+        include_str!("../templates/web/app/http/controllers/controller.rs"),
+    ),
+    (
+        "app/http/controllers/health.rs",
+        include_str!("../templates/web/app/http/controllers/health.rs"),
+    ),
+    (
+        "app/http/middleware/request_log.rs",
+        include_str!("../templates/web/app/http/middleware/request_log.rs"),
+    ),
+    (
+        "app/http/requests/.gitkeep",
+        include_str!("../templates/web/app/http/requests/.gitkeep"),
+    ),
+    (
+        "app/models/.gitkeep",
+        include_str!("../templates/web/app/models/.gitkeep"),
+    ),
+    (
         "app/routes/web.rs",
         include_str!("../templates/web/app/routes/web.rs"),
     ),
@@ -370,6 +394,14 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
     (
         "app/resources/views/welcome.html",
         include_str!("../templates/web/app/resources/views/welcome.html"),
+    ),
+    (
+        "app/resources/views/errors/4xx.html",
+        include_str!("../templates/web/app/resources/views/errors/4xx.html"),
+    ),
+    (
+        "app/resources/views/errors/5xx.html",
+        include_str!("../templates/web/app/resources/views/errors/5xx.html"),
     ),
     (
         "app/resources/css/app.css",

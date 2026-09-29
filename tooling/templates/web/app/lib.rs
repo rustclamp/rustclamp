@@ -3,10 +3,35 @@
 //! `app/`: `.env`, `storage/` (uploads, logs) and `public/`.
 //!
 //! This file is the map: every folder and file of Rust code is declared here,
-//! so there are no `mod.rs` files. Add `http/controllers`, `models`, `config`
-//! and the like here as the app needs them.
+//! so there are no `mod.rs` files.
 
+use rustclamp::config::Config;
 use rustclamp::web::{Router, security_headers};
+
+/// Everything that handles HTTP.
+pub mod http {
+    /// Turn requests into responses.
+    pub mod controllers {
+        pub mod controller;
+        pub mod health;
+    }
+    /// Wrap requests: `Fn(&Request, Next) -> Response`.
+    pub mod middleware {
+        mod request_log;
+        pub use request_log::request_log;
+    }
+    // Form input and its validation goes in `requests/`, e.g.
+    // `pub mod requests { mod contact; pub use contact::ContactRequest; }`
+}
+
+// Data the app works with goes in `models/`, e.g.
+// `pub mod models { mod post; pub use post::Post; }`
+
+/// Typed settings from `.env`.
+pub mod config {
+    mod app;
+    pub use app::Settings;
+}
 
 /// Route definitions.
 pub mod routes {
@@ -15,7 +40,10 @@ pub mod routes {
 }
 
 /// Every route. A GET that matches none serves the file from `public/`.
-pub fn routes() -> Router {
-    let router = Router::new().middleware(security_headers);
-    routes::api::routes(routes::web::routes(router))
+pub fn routes(config: &Config) -> Router {
+    let settings = config::Settings::from(config);
+    let router = Router::new()
+        .middleware(security_headers)
+        .middleware(http::middleware::request_log);
+    routes::api::routes(routes::web::routes(router), &settings)
 }

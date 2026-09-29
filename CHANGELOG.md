@@ -85,3 +85,8 @@
   `Throttle::trust_forwarded` now takes a `bool`.
 - `clamp init --web` uses the my-site layout: `app/routes/{web,api}.rs`,
   `app/resources/`, `.env.example`, with `/storage` and `.env` git-ignored.
+- `web::error` fills `<!--status-->` and `<!--reason-->` in the app's error
+  views. `clamp init --web` adds `errors/4xx.html` and `errors/5xx.html`, a
+  Tailwind-only welcome page, `config/app.rs`, a base
+  `http/controllers/controller.rs`, a health controller, a `request_log`
+  middleware, and `http/requests/` and `models/` folders.

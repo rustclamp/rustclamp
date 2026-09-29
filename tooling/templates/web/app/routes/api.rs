@@ -1,6 +1,13 @@
-use rustclamp::web::{Router, json};
+use rustclamp::web::Router;
 
-/// JSON endpoints. Add `Throttle::per_minute(60).middleware()` to the group to rate limit them.
-pub fn routes(router: Router) -> Router {
-    router.group(|api| api.get("/api/health", |_| json(r#"{"status":"ok"}"#)))
+use crate::config::Settings;
+use crate::http::controllers::health;
+
+/// JSON endpoints, rate limited per client.
+pub fn routes(router: Router, settings: &Settings) -> Router {
+    let throttle = settings.per_minute(settings.api_per_minute);
+    router.group(|api| {
+        api.middleware(throttle.middleware())
+            .get("/api/health", health::show)
+    })
 }
