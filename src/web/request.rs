@@ -1,5 +1,8 @@
+use std::any::Any;
+use std::fmt;
 use std::io::{BufRead, Read};
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use super::{Response, Session, error};
 
@@ -30,7 +33,28 @@ pub struct Request {
     pub(super) session: Option<Session>,
     /// `{name}` route segments, set when the route matches.
     pub(super) params: Vec<(String, String)>,
+    /// Values from [`Router::state`](super::Router::state).
+    pub(super) state: State,
 }
+
+/// Values the app shares with every handler, such as its database.
+#[derive(Clone, Default)]
+pub(super) struct State(pub(super) Arc<Vec<Arc<dyn Any + Send + Sync>>>);
+
+impl fmt::Debug for State {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("State").finish_non_exhaustive()
+    }
+}
+
+// Requests compare by what the client sent; shared state is not part of that.
+impl PartialEq for State {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for State {}
 
 impl Request {
     /// Creates a request, for example to call routes from a test. A `?` in
@@ -47,6 +71,7 @@ impl Request {
             peer: None,
             session: None,
             params: Vec::new(),
+            state: State::default(),
         }
     }
 
@@ -111,6 +136,12 @@ impl Request {
     /// [`Sessions::middleware`](super::Sessions::middleware).
     pub fn session(&self) -> Option<&Session> {
         self.session.as_ref()
+    }
+
+    /// The value of type `T` the app added with
+    /// [`Router::state`](super::Router::state).
+    pub fn state<T: Any>(&self) -> Option<&T> {
+        self.state.0.iter().find_map(|value| value.downcast_ref())
     }
 
     /// The value of cookie `name`.
@@ -179,15 +210,27 @@ fn read_line(reader: &mut impl BufRead) -> Result<String, Response> {
 }
 
 /// The decoded value of `key` in `a=1&b=2`-style `pairs`.
-fn field(pairs: &str, key: &str) -> Option<String> {
+pub(super) fn field(pairs: &str, key: &str) -> Option<String> {
     pairs.split('&').find_map(|pair| {
         let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
         (decode(name) == key).then(|| decode(value))
     })
 }
 
+/// Percent-encodes `text` for a form body or query string.
+pub(super) fn encode(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
 /// Percent-decodes `text`, reading `+` as a space. Invalid escapes stay as they are.
-fn decode(text: &str) -> String {
+pub(super) fn decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

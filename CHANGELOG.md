@@ -4,9 +4,55 @@
 
 ### Added
 
+- The CLI is 0.3.0 (release tag `clamp-v0.3.0`): database, crypto and `.env`
+  commands, and `clamp init --web` apps with `db` and `crypto`.
+
 - Web packages: `web::Package`, `Router::package` (package middleware stays on
   package routes), `web::package_view` with app overrides under
   `views/vendor/{package}/`, and `clamp init NAME --package` (ADR 0008).
+- `rustclamp::db` (optional `db` feature): SQLite via rusqlite with bundled
+  SQLite, opened from `DB_CONNECTION`/`DB_DATABASE`. Laravel-style
+  `Migration` structs with `up`/`down`, batches and `Db::rollback`;
+  `Seeder` structs and `Db::seed`; a `Schema` builder (`create`, `table`,
+  `drop`); a `db.table(...)` query builder; `db::command` for `migrate`,
+  `migrate:rollback` and `db:seed`.
+- Web: `Router::state` and `Request::state` share app values with handlers
+  (`request.db()` with `db`); `Request::validate` with `required`, `min`,
+  `max`, `email` and `integer` rules, and `Invalid::back` redirecting with
+  errors and old input; `Session::flash`; `Request::render` fills
+  `<!--csrf-->`, `<!--flash-->`, `<!--errors-->` and `<!--old:field-->`.
+- `Sessions::database(db)`: sessions in a SQLite `sessions` table, so they
+  survive restarts; expired rows are pruned.
+- `rustclamp::build::states`: every file in `app/database/states/` becomes
+  `database::states::*`; the web template's `build.rs` calls it.
+- `db::States`: allowed transitions for a status column, each move recorded
+  in `state_history` with who made it; `history`, `can`, `allowed_from`.
+- `clamp make:migration NAME` (dated stub; `create_x` and `add_y_to_x` are
+  filled in) and `clamp make:seeder NAME`; `clamp migrate`,
+  `migrate:rollback`, `migrate:status` and `db:seed` run the app's
+  `db::command`, which gains `migrate:status`.
+- Log channels as in Laravel: `single` (`file` still works), `daily`
+  (`app-YYYY-MM-DD.log`, newest `LOG_DAILY_DAYS` kept), `stderr` and `stack`
+  (`LOG_STACK=daily,stderr`); `Logger::daily`.
+- `rustclamp::uuid` (optional std-only `uuid` feature, included by `db`):
+  `Uuid::v7` (time-ordered, strictly increasing per process) and `Uuid::v4`,
+  `parse`, SQLite mapping as text, and `Schema`'s `table.public_id()`.
+- `rustclamp::crypto` (optional `crypto` feature, RustCrypto): Argon2id
+  `Hash::make`/`check`, `Key` (`APP_KEY`, `base64:`) and `Crypt`
+  (XChaCha20-Poly1305), `sha256`, `hmac_sha256` and constant-time
+  `hmac_verify` (ADR 0010).
+- `clamp key:generate`, `clamp env:encrypt` and `clamp env:decrypt`
+  (`--key=`, `--env=`, `--force`, `CLAMP_ENV_KEY`); `clamp init --web` turns on
+  `crypto` and lists `APP_KEY` in `.env.example`.
+- `Db::transaction`: kept on `Ok`, undone on `Err`, and nested as a
+  savepoint inside another transaction; migrations, rollbacks and state
+  transitions use it, so they work inside a seeder. `Seeder::run` returns
+  `SeedError` (any error), so `?` works on transitions and I/O too.
+- `db::Model`: a table as a struct (`TABLE`, `from_row`) with `query`,
+  `all` and `find`.
+- `rustclamp::build` (optional `build` feature): `build.rs` discovery of
+  `app/database/migrations/` and `app/database/seeders/`. `clamp init NAME
+  --web` ships the `build.rs`, so a new file there is all it takes (ADR 0009).
 - `clamp --version`; the CLI is 0.2.0 (release tag `clamp-v0.2.0`).
 - Phase 0 package scaffold and development checks.
 - Synchronous `Clamp::run` entrypoint and a prelude exporting `Clamp`.

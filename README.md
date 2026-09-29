@@ -23,13 +23,15 @@ unchanged. Captures may borrow local data or consume owned values. Errors and
 panics keep ordinary Rust behavior. This path needs no Core, Kernel or Runtime.
 
 Run Pico from this repository with `cargo run --offline --example 00-pico`.
-Rust 1.96.1 is the tested minimum; the facade has no dependencies.
+Rust 1.96.1 is the tested minimum; the facade has no dependencies by default.
+The optional `db` feature adds `rustclamp::db`, a SQLite database compiled into
+the app and opened from `.env` ([ADR 0009](docs/adr/0009-database.md)).
 The optional `web` feature adds `rustclamp::web`, a std-only HTTP server with
 routes, JSON and static files from `public/`; `clamp init --web` projects use it.
 Reusable features ship as packages: a crate implementing `web::Package` brings its
 own routes, middleware, views and tests, and an app adds it with
 `Router::package` ([ADR 0008](docs/adr/0008-web-packages.md)). Publishing is
-disabled until licensing, registry ownership and the prototype API are reviewed.
+disabled until registry ownership and the prototype API are reviewed.
 
 See the [Pico results](docs/evidence/phase1.md) for measured costs and limitations.
 The example and source are available in the `rustclamp` repository. Package checks
@@ -291,3 +293,10 @@ For coordinated checkout, architecture checks, measurements, and release policy,
 see the [facade contributor guide](https://github.com/rustclamp/rustclamp/blob/main/CONTRIBUTING.md).
 The configured remote is `https://github.com/rustclamp/rustclamp.git`; repository existence
 and public visibility were verified during Phase 0.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option ([ADR 0011](docs/adr/0011-license.md)).
+Unless you state otherwise, any contribution you submit for inclusion is
+dual licensed as above, without additional terms or conditions.

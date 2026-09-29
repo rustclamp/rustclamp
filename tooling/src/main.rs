@@ -1,5 +1,8 @@
 //! Command-line interface for resolved Clamp process inspection.
 
+mod envfile;
+mod make;
+
 use serde_json::{Value, json};
 use std::{
     env, fs,
@@ -123,6 +126,34 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         println!("{}", usage());
         return Ok(0);
     }
+    if matches!(command, "key:generate" | "env:encrypt" | "env:decrypt") {
+        let root = env::current_dir().map_err(|error| format!("cannot read folder: {error}"))?;
+        let options = envfile::Options::parse(&args[1..])?;
+        let message = match command {
+            "key:generate" => envfile::key_generate(&root, &options),
+            "env:encrypt" => envfile::encrypt(&root, &options),
+            _ => envfile::decrypt(&root, &options, std::env::var(envfile::KEY_VARIABLE).ok()),
+        }?;
+        println!("{message}");
+        return Ok(0);
+    }
+    if let Some(kind) = command.strip_prefix("make:") {
+        let root = env::current_dir().map_err(|error| format!("cannot read folder: {error}"))?;
+        let path = make::make(&root, kind, args.get(1))?;
+        println!("Created {path}");
+        return Ok(0);
+    }
+    if matches!(
+        command,
+        "migrate" | "migrate:rollback" | "migrate:status" | "db:seed"
+    ) {
+        // The app runs its own database commands; see `rustclamp::db::command`.
+        let status = Command::new("cargo")
+            .args(["run", "--quiet", "--", command])
+            .status()
+            .map_err(|error| format!("cannot start cargo: {error}"))?;
+        return Ok(status.code().unwrap_or(1).clamp(0, 255) as u8);
+    }
     if command == "init" {
         let project = args.get(1).ok_or("init requires a project name or path")?;
         let flags: Vec<&str> = args[2..].iter().map(String::as_str).collect();
@@ -154,10 +185,10 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         }
         fs::create_dir_all(root.join("src"))
             .map_err(|error| format!("cannot create project directory: {error}"))?;
-        let features = if template == "web" || template == "package" {
-            ", features = [\"web\"]"
-        } else {
-            ""
+        let features = match template {
+            "web" => ", features = [\"web\", \"db\", \"crypto\"]",
+            "package" => ", features = [\"web\"]",
+            _ => "",
         };
         fs::write(
             root.join("Cargo.toml"),
@@ -346,7 +377,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, reinstall clamp, or run a Cargo command."
+    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp key:generate [--force]\n  clamp env:encrypt | env:decrypt [--key=KEY] [--env=NAME] [--force]\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, make migrations and seeders, run database commands, manage APP_KEY and encrypted .env files, reinstall clamp, or run a Cargo command."
 }
 
 fn create_application(root: &std::path::Path) -> Result<(), String> {
@@ -408,6 +439,7 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
         "app/routes/web.rs",
         include_str!("../templates/web/app/routes/web.rs"),
     ),
+    ("build.rs", include_str!("../templates/web/build.rs")),
     (
         "app/routes/api.rs",
         include_str!("../templates/web/app/routes/api.rs"),
@@ -477,12 +509,13 @@ fn create_web(root: &std::path::Path, name: &str) -> Result<(), String> {
     let mut cargo_toml =
         fs::read_to_string(&manifest).map_err(|error| format!("cannot read manifest: {error}"))?;
     cargo_toml.push_str(&format!(
-        "\n[lib]\npath = \"app/lib.rs\"\n\n[[bin]]\nname = \"{name}\"\npath = \"app/main.rs\"\n"
+        "\n[build-dependencies]\nrustclamp = {{ git = \"https://github.com/rustclamp/rustclamp\", branch = \"main\", features = [\"build\"] }}\n\n[lib]\npath = \"app/lib.rs\"\n\n[[bin]]\nname = \"{name}\"\npath = \"app/main.rs\"\n"
     ));
     fs::write(&manifest, cargo_toml).map_err(|error| format!("cannot write manifest: {error}"))?;
     let gitignore = root.join(".gitignore");
     let mut ignored = fs::read_to_string(&gitignore).unwrap_or_default();
-    ignored.push_str("/node_modules\n/public/build\n/storage\n.env\n");
+    // Every .env is secret except the example and the encrypted ones.
+    ignored.push_str("/node_modules\n/public/build\n/storage\n.env\n.env.*\n!.env.example\n!.env.encrypted\n!.env.*.encrypted\n");
     fs::write(&gitignore, ignored).map_err(|error| format!("cannot update .gitignore: {error}"))?;
     Ok(())
 }

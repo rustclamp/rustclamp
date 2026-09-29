@@ -10,10 +10,18 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+#[cfg(feature = "build")]
+pub mod build;
 #[cfg(feature = "config")]
 pub mod config;
+#[cfg(feature = "crypto")]
+pub mod crypto;
+#[cfg(feature = "db")]
+pub mod db;
 #[cfg(feature = "log")]
 pub mod log;
+#[cfg(feature = "uuid")]
+pub mod uuid;
 #[cfg(feature = "web")]
 pub mod web;
 

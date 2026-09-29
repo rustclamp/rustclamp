@@ -6,6 +6,7 @@
 //! so there are no `mod.rs` files.
 
 use rustclamp::config::Config;
+use rustclamp::db::Db;
 use rustclamp::web::{Router, security_headers};
 
 /// Everything that handles HTTP.
@@ -27,6 +28,16 @@ pub mod http {
 // Data the app works with goes in `models/`, e.g.
 // `pub mod models { mod post; pub use post::Post; }`
 
+/// The database: every file in `database/migrations/` (the schema, oldest
+/// first), `database/seeders/` (data for `cargo run -- db:seed`) and
+/// `database/states/` (allowed status transitions, as `database::states::*`).
+/// Adding a file is enough; `build.rs` lists them.
+pub mod database {
+    include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
+    include!(concat!(env!("OUT_DIR"), "/seeders.rs"));
+    include!(concat!(env!("OUT_DIR"), "/states.rs"));
+}
+
 /// Typed settings from `.env`.
 pub mod config {
     mod app;
@@ -40,9 +51,15 @@ pub mod routes {
 }
 
 /// Every route. A GET that matches none serves the file from `public/`.
+/// Opens the database from `.env` and runs pending migrations first.
 pub fn routes(config: &Config) -> Router {
     let settings = config::Settings::from(config);
+    let db = Db::open(config);
+    db.migrate(&database::migrations())
+        .unwrap_or_else(|error| panic!("migration failed: {error}"));
+    // Handlers reach the database with `request.db()`.
     let router = Router::new()
+        .state(db)
         .middleware(security_headers)
         .middleware(http::middleware::request_log);
     // Packages (`clamp init --package`) add their routes here, e.g.

@@ -26,6 +26,7 @@
 //! web::serve(routes);
 //! ```
 
+mod form;
 mod request;
 mod session;
 mod throttle;
@@ -40,6 +41,7 @@ use std::time::Duration;
 
 use crate::log::Log;
 
+pub use form::{Form, Invalid};
 pub use request::{MAX_BODY, Request};
 pub use session::{COOKIE, CSRF_FIELD, Session, Sessions, csrf};
 pub use throttle::{Throttle, throttle};
@@ -62,6 +64,7 @@ type Middleware = Arc<dyn Fn(&Request, Next) -> Response + Send + Sync>;
 pub struct Router {
     routes: Vec<(&'static str, String, Handler)>,
     middleware: Vec<Middleware>,
+    state: request::State,
 }
 
 impl Router {
@@ -109,6 +112,26 @@ impl Router {
         self
     }
 
+    /// Shares `value` with every handler, read with [`Request::state`], such as
+    /// the app's database (`request.db()` with the `db` feature). One value
+    /// per type; add it to the router that [`serve`] runs.
+    ///
+    /// ```
+    /// use rustclamp::web::{Request, Response, Router};
+    ///
+    /// struct Greeting(&'static str);
+    ///
+    /// let app = Router::new()
+    ///     .state(Greeting("hi"))
+    ///     .get("/", |request| Response::text(200, request.state::<Greeting>().unwrap().0));
+    /// assert_eq!(app.handle(&Request::get("/")).body, b"hi");
+    /// ```
+    #[must_use]
+    pub fn state<T: std::any::Any + Send + Sync>(mut self, value: T) -> Self {
+        Arc::make_mut(&mut self.state.0).push(Arc::new(value));
+        self
+    }
+
     /// Wraps every request this router handles, including static files and
     /// `404`s, in `middleware`. The first middleware added runs first.
     #[must_use]
@@ -149,7 +172,14 @@ impl Router {
     /// Runs the middleware, then the first matching route, else a static file
     /// for `GET`, else `404`.
     pub fn handle(&self, request: &Request) -> Response {
-        run(&self.middleware, request, &|request| self.dispatch(request))
+        if self.state.0.is_empty() {
+            return run(&self.middleware, request, &|request| self.dispatch(request));
+        }
+        let mut request = request.clone();
+        request.state = self.state.clone();
+        run(&self.middleware, &request, &|request| {
+            self.dispatch(request)
+        })
     }
 
     fn dispatch(&self, request: &Request) -> Response {

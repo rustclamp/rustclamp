@@ -165,7 +165,7 @@ scheduled jobs, commands and a publish command are deferred.
 
 ## Remaining release work
 
-Package publication is blocked on the recorded license and registry ownership
-decisions. Search Console verification is an external gate. Optional AI/MCP
+The license is decided (`MIT OR Apache-2.0`, ADR 0011); package publication
+is blocked on the registry ownership decision. Search Console verification is an external gate. Optional AI/MCP
 work has no concrete provider use case yet and remains independent from
 package/site release.

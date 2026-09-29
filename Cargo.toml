@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.96.1"
 description = "A minimal synchronous entrypoint for Clamp applications."
 repository = "https://github.com/rustclamp/rustclamp"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 publish = false
 autoexamples = false
@@ -16,6 +17,14 @@ web = ["config", "log"]
 config = []
 # Optional leveled logging to `storage/logs/app.log` (`rustclamp::log`).
 log = ["config"]
+# Optional build-script helpers (`rustclamp::build`), such as migration discovery.
+build = []
+# Optional SQLite database from `.env` (`rustclamp::db`); compiles SQLite in.
+db = ["config", "uuid", "dep:rusqlite"]
+# Optional std-only UUID v4 and v7 (`rustclamp::uuid`).
+uuid = []
+# Optional password hashing, encryption and SHA-256/HMAC (`rustclamp::crypto`).
+crypto = ["config", "dep:argon2", "dep:chacha20poly1305", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom"]
 
 [[example]]
 name = "00-pico"
@@ -29,3 +38,10 @@ missing_docs = "deny"
 broken_intra_doc_links = "deny"
 
 [dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
+argon2 = { version = "0.6.0", optional = true }
+chacha20poly1305 = { version = "0.11.0", optional = true }
+sha2 = { version = "0.11.0", optional = true }
+hmac = { version = "0.13.0", optional = true }
+base64ct = { version = "1.8.3", features = ["alloc"], optional = true }
+getrandom = { version = "0.4.3", optional = true }
