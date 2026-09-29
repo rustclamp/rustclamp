@@ -91,6 +91,11 @@ alloc without Kernel or Runtime. See the
 [Phase 8 evidence](docs/evidence/phase8-progress.md) for portability findings
 and scale/footprint measurements.
 
+`examples/13-site-server` serves either Python-built site through Clamp's public
+HTTP route target. It lets the Rust and Python previews share generated files for
+a direct response comparison; it is a hosting proof, not a rewrite of the
+Python generator. See the [Phase 9 progress evidence](docs/evidence/phase9-progress.md).
+
 ## Project Map
 
 | Repository | Responsibility | Status |

@@ -139,6 +139,7 @@ def check_examples(root):
         ("10-scheduler", "rustclamp-example-scheduler"),
         ("11-device-loop", "rustclamp-example-device-loop"),
         ("12-platform-neutral", "rustclamp-example-platform-neutral"),
+        ("13-site-server", "rustclamp-example-site-server"),
     )
     for example, package_name in examples:
         example_root = root / "rustclamp/examples" / example
@@ -169,7 +170,7 @@ def check_examples(root):
                 str(manifest), "--examples", cwd=root)
             run("cargo", "bench", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--bench", "loop", cwd=root)
-        if example not in {"06-users", "09-create-order"}:
+        if example not in {"06-users", "09-create-order", "13-site-server"}:
             run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--example", example, cwd=root)
         if example == "05-lifecycle":

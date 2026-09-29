@@ -60,3 +60,5 @@
 - Completed Phase 8 deterministic loop/device proofs, a Kernel-free no_std +
   alloc consumer, portability findings, cross-domain dependency-absence checks,
   and 1/5/20/50/100/500-module plus loop/footprint measurements.
+- Added a Phase 9 RustClamp HTTP site-hosting example and compared its responses
+  byte-for-byte with both Python preview sites.
