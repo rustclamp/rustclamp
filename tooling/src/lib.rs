@@ -130,21 +130,29 @@ pub fn graph_text(process: &Value) -> String {
     for module in process["included_modules"].as_array().into_iter().flatten() {
         let path = module["path"].as_array().cloned().unwrap_or_default();
         for pair in path.windows(2) {
-            edges.push(format!("{} -> {} [inclusion]", pair[0], pair[1]));
+            edges.push(format!(
+                "{} -> {} [inclusion]",
+                display_id(&pair[0]),
+                display_id(&pair[1])
+            ));
         }
     }
     for requirement in process["requirements"].as_array().into_iter().flatten() {
         if let Some(provider) = requirement["provider"].as_str() {
             edges.push(format!(
                 "{} -> {} [capability:{}]",
-                requirement["consumer"], provider, requirement["capability"]
+                display_id(&requirement["consumer"]),
+                provider,
+                display_id(&requirement["capability"])
             ));
         }
     }
     for contribution in process["contributions"].as_array().into_iter().flatten() {
         edges.push(format!(
             "{} -> {} [contribution:{}]",
-            contribution["contributor"], contribution["consumer"], contribution["target"]
+            display_id(&contribution["contributor"]),
+            display_id(&contribution["consumer"]),
+            display_id(&contribution["target"])
         ));
     }
     edges.sort();
@@ -578,6 +586,25 @@ mod tests {
         assert_eq!(tree_text(&process), "sample / cli\napp\n  db");
         assert!(why_text(&process, "db").unwrap().contains("app -> db"));
         assert!(why_text(&process, "missing").is_err());
+    }
+
+    #[test]
+    fn graph_formats_semantic_ids_without_json_quotes() {
+        let process = json!({
+            "included_modules": [
+                {"path": ["root", "provider"]}
+            ],
+            "requirements": [
+                {"consumer": "root", "capability": "storage", "provider": "provider"}
+            ],
+            "contributions": [
+                {"contributor": "command", "consumer": "root", "target": "cli"}
+            ]
+        });
+        assert_eq!(
+            graph_text(&process),
+            "command -> root [contribution:cli]\nroot -> provider [capability:storage]\nroot -> provider [inclusion]"
+        );
     }
 
     #[test]

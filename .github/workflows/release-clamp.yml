@@ -1,0 +1,91 @@
+name: Release clamp binaries
+
+on:
+  push:
+    tags:
+      - "clamp-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            extension: ""
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            extension: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            extension: ""
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            extension: .exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust target
+        run: rustup toolchain install 1.96.1 --profile minimal --target ${{ matrix.target }}
+      - name: Build clamp
+        run: cargo +1.96.1 build --release --locked --manifest-path tooling/Cargo.toml --target ${{ matrix.target }} --bin clamp
+      - name: Smoke check
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\tooling\target\${{ matrix.target }}\release\clamp.exe --help
+      - name: Smoke check
+        if: runner.os != 'Windows'
+        run: ./tooling/target/${{ matrix.target }}/release/clamp --help
+      - name: Package Unix archive
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#clamp-v}"
+          version="${version//\//-}"
+          name="clamp-${version}-${{ matrix.target }}"
+          mkdir -p "dist/${name}"
+          cp "tooling/target/${{ matrix.target }}/release/clamp" "dist/${name}/clamp"
+          tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+          (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          rm -rf "dist/${name}"
+      - name: Package Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^clamp-v', ''
+          $version = $version -replace '[/\\]', '-'
+          $name = "clamp-$version-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force "dist/$name" | Out-Null
+          Copy-Item "tooling/target/${{ matrix.target }}/release/clamp.exe" "dist/$name/clamp.exe"
+          Compress-Archive -Path "dist/$name/clamp.exe" -DestinationPath "dist/$name.zip"
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name.zip" | Set-Content "dist/$name.zip.sha256"
+          Remove-Item "dist/$name" -Recurse -Force
+      - uses: actions/upload-artifact@v7
+        with:
+          name: clamp-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/clamp-v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: clamp-*
+          path: dist
+          merge-multiple: true
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --generate-notes

@@ -13,3 +13,12 @@ into a sorted runtime table and rejects duplicate CAN IDs. The loop/domain is
 stdlib-only; the separate composition proof uses Kernel and runtime contracts.
 
 Run with `cargo run --manifest-path examples/11-device-loop/Cargo.toml --example 11-device-loop`.
+
+Export the Kernel hardware capability projection for `clamp` with the optional
+`tooling-inspection` feature. The document covers composition only; simulation
+state, sensor freshness, and runtime selection remain device-owned:
+
+```sh
+cargo run --offline --locked --manifest-path examples/11-device-loop/Cargo.toml \
+  --example inspection-json --features tooling-inspection > device-architecture.json
+```

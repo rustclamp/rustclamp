@@ -9,10 +9,17 @@ publish = false
 rustclamp-core = { version = "0.1.0", path = "../../../core" }
 rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
 rustclamp-runtime = { version = "0.1.0", path = "../../../runtime" }
+rustclamp-tooling = { version = "0.1.0", path = "../../tooling", optional = true }
 
 [features]
 default = []
 tokio-runtime = ["rustclamp-runtime/tokio"]
+tooling-inspection = ["dep:rustclamp-tooling"]
+
+[[example]]
+name = "inspection-json"
+path = "examples/inspection-json.rs"
+required-features = ["tooling-inspection"]
 
 [workspace]
 

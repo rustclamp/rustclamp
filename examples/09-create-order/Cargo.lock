@@ -908,6 +908,7 @@ dependencies = [
  "rustclamp-messaging",
  "rustclamp-postgres",
  "rustclamp-scheduler",
+ "rustclamp-tooling",
  "rustclamp-worker",
  "serde_json",
  "tokio",
@@ -942,6 +943,15 @@ name = "rustclamp-scheduler"
 version = "0.1.0"
 dependencies = [
  "rustclamp-core",
+]
+
+[[package]]
+name = "rustclamp-tooling"
+version = "0.1.0"
+dependencies = [
+ "rustclamp-core",
+ "rustclamp-kernel",
+ "serde_json",
 ]
 
 [[package]]

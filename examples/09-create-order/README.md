@@ -51,8 +51,14 @@ resource owners that drain on shutdown.
 
 ```sh
 cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin phase7-inspect
+cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml \
+  --bin phase7-inspect --features tooling-inspection -- --tooling-json > orders-architecture.json
 cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin measure-jetstream
 ```
+
+The opt-in JSON output contains the four Kernel projections. Transactional
+outbox/inbox and runtime lifecycle state remain in the example's own inspector
+and are not included in the `clamp` document.
 
 The measurement binary publishes 1,000 sequential messages and awaits each
 JetStream confirmation, then verifies that a two-message `Discard New` stream

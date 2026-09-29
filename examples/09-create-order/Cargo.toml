@@ -13,9 +13,13 @@ rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
 rustclamp-messaging = { version = "0.1.0", path = "../../../messaging" }
 rustclamp-postgres = { version = "0.1.0", path = "../../../postgres" }
 rustclamp-scheduler = { version = "0.1.0", path = "../../../scheduler" }
+rustclamp-tooling = { version = "0.1.0", path = "../../tooling", optional = true }
 rustclamp-worker = { version = "0.1.0", path = "../../../worker" }
 serde_json = "1"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+
+[features]
+tooling-inspection = ["dep:rustclamp-tooling"]
 
 [[bin]]
 name = "orders-api"

@@ -133,7 +133,29 @@ fn inspection_text() -> Result<String, Box<dyn Error>> {
     Ok(output)
 }
 
+#[cfg(feature = "tooling-inspection")]
+fn tooling_document() -> Result<(), Box<dyn Error>> {
+    let blueprint = architecture();
+    let projections = [API, PUBLISHER, WORKER, SCHEDULER]
+        .into_iter()
+        .map(|process| {
+            blueprint
+                .project(process)
+                .map_err(|error| std::io::Error::other(format!("{error:?}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let projections = projections.iter().collect::<Vec<_>>();
+    let document =
+        rustclamp_tooling::inspection_document(&projections).map_err(std::io::Error::other)?;
+    println!("{document}");
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
+    #[cfg(feature = "tooling-inspection")]
+    if std::env::args().nth(1).as_deref() == Some("--tooling-json") {
+        return tooling_document();
+    }
     print!("{}", inspection_text()?);
     Ok(())
 }
