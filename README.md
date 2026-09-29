@@ -23,7 +23,9 @@ unchanged. Captures may borrow local data or consume owned values. Errors and
 panics keep ordinary Rust behavior. This path needs no Core, Kernel or Runtime.
 
 Run Pico from this repository with `cargo run --offline --example 00-pico`.
-Rust 1.96.1 is the tested minimum; the facade has no dependencies. Publishing is
+Rust 1.96.1 is the tested minimum; the facade has no dependencies.
+The optional `web` feature adds `rustclamp::web`, a std-only HTTP server with
+routes, JSON and static files from `public/`; `clamp init --web` projects use it. Publishing is
 disabled until licensing, registry ownership and the prototype API are reviewed.
 
 See the [Pico results](docs/evidence/phase1.md) for measured costs and limitations.
@@ -95,6 +97,15 @@ and scale/footprint measurements.
 HTTP route target. It lets the Rust and Python previews share generated files for
 a direct response comparison; it is a hosting proof, not a rewrite of the
 Python generator. See the [Phase 9 progress evidence](docs/evidence/phase9-progress.md).
+
+The standalone [`clamp` developer tool](tooling/README.md) installs with
+`cargo install --path tooling`. It can create a minimal Hello World or a larger
+Rust app, pass Cargo
+commands through, and inspect versioned JSON exported from a resolved Kernel
+process projection. Inspection is architecture metadata; it does not discover
+source declarations or report configuration evaluation and lifecycle state.
+The separate [starter kits](starter-kits/README.md) include a Vue 3 todo demo
+using Vite+.
 
 ## Project Map
 

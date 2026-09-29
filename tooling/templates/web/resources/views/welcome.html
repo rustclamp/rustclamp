@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clamp</title>
+  <script type="module" src="/js/app.ts"></script>
+</head>
+<body class="min-h-screen bg-stone-50 text-stone-900 antialiased dark:bg-stone-950 dark:text-stone-100">
+  <main class="mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-6 py-16">
+    <div class="flex items-center gap-3">
+      <span class="grid size-10 place-items-center rounded-xl bg-orange-600 text-lg font-bold text-white">C</span>
+      <span class="font-mono text-xs uppercase tracking-widest text-stone-500">RustClamp</span>
+    </div>
+
+    <h1 class="mt-10 text-4xl font-light tracking-tight sm:text-6xl">
+      Your app is
+      <span class="bg-gradient-to-r from-orange-600 to-amber-500 bg-clip-text font-medium text-transparent">running</span>.
+    </h1>
+    <p class="mt-4 max-w-xl text-lg text-stone-600 dark:text-stone-400">
+      A Rust server with a Vite+ and Tailwind 4 frontend. <code class="font-mono text-sm">clamp dev</code> rebuilds the frontend on save; refresh to see it.
+    </p>
+
+    <ul class="mt-12 divide-y divide-stone-200 border-y border-stone-200 dark:divide-stone-800 dark:border-stone-800">
+      <li class="flex flex-col gap-1 py-5 sm:flex-row sm:items-baseline sm:gap-6">
+        <code class="w-64 shrink-0 font-mono text-sm text-orange-600 dark:text-orange-400">resources/views/welcome.html</code>
+        <span class="text-stone-600 dark:text-stone-400">This page. Vite+ builds it into <code class="font-mono text-sm">public/build/</code>.</span>
+      </li>
+      <li class="flex flex-col gap-1 py-5 sm:flex-row sm:items-baseline sm:gap-6">
+        <code class="w-64 shrink-0 font-mono text-sm text-orange-600 dark:text-orange-400">app/routes.rs</code>
+        <span class="text-stone-600 dark:text-stone-400">Routes: <code class="font-mono text-sm">GET /</code> serves this page, <code class="font-mono text-sm">GET /api/health</code> returns JSON.</span>
+      </li>
+      <li class="flex flex-col gap-1 py-5 sm:flex-row sm:items-baseline sm:gap-6">
+        <code class="w-64 shrink-0 font-mono text-sm text-orange-600 dark:text-orange-400">tests/</code>
+        <span class="text-stone-600 dark:text-stone-400">Route tests. Run them with <code class="font-mono text-sm">cargo test</code>.</span>
+      </li>
+    </ul>
+
+    <div class="mt-12 flex flex-wrap gap-3">
+      <a href="https://github.com/rustclamp/rustclamp" class="rounded-full bg-stone-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-stone-700 dark:bg-white dark:text-stone-900 dark:hover:bg-stone-200">Read the docs</a>
+      <a href="https://rustclamp.com" class="rounded-full border border-stone-300 px-5 py-2.5 text-sm font-medium hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-900">rustclamp.com</a>
+    </div>
+  </main>
+</body>
+</html>
