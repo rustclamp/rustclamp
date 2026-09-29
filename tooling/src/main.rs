@@ -23,6 +23,39 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         println!("{}", usage());
         return Ok(0);
     }
+    if command == "init" {
+        let project = args.get(1).ok_or("init requires a project name or path")?;
+        if args.len() != 2 {
+            return Err("init accepts one project name or path".into());
+        }
+        let status = Command::new("cargo")
+            .args(["new", "--bin", project])
+            .status()
+            .map_err(|error| format!("cannot start Cargo: {error}"))?;
+        if !status.success() {
+            return Ok(status.code().unwrap_or(1).clamp(0, 255) as u8);
+        }
+        let root = std::path::Path::new(project);
+        let manifest = root.join("Cargo.toml");
+        let mut cargo_toml = fs::read_to_string(&manifest)
+            .map_err(|error| format!("cannot read generated manifest: {error}"))?;
+        cargo_toml.push_str("rustclamp = \"0.1\"\n");
+        fs::write(&manifest, cargo_toml)
+            .map_err(|error| format!("cannot update generated manifest: {error}"))?;
+        fs::write(
+            root.join("src/main.rs"),
+            "use rustclamp::prelude::*;\n\nfn main() {\n    Clamp::run(|| println!(\"Hello from Clamp!\"));\n}\n",
+        )
+        .map_err(|error| format!("cannot write generated entrypoint: {error}"))?;
+        fs::write(
+            root.join("README.md"),
+            "# Clamp application\n\nCreated with `clamp init`. Run it with `cargo run`.\n",
+        )
+        .map_err(|error| format!("cannot write generated README: {error}"))?;
+        println!("Created RustClamp application at {}", root.display());
+        println!("Next: cd {} && cargo run", root.display());
+        return Ok(0);
+    }
     if ["check", "test", "build", "run"].contains(&command) {
         let status = Command::new("cargo")
             .arg(command)
@@ -112,5 +145,5 @@ fn run(args: Vec<String>) -> Result<u8, String> {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp <check|test|build|run> [Cargo arguments]\n\nInspect a versioned resolved process projection or run a Cargo command."
+    "Usage:\n  clamp init <project-name>\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a Clamp application, inspect a resolved projection, or run a Cargo command."
 }

@@ -55,9 +55,15 @@ exported document and `why` output reflect that projection. CLI smoke runs
 covered human tree/why output and JSON inspect output. `tools/check.py` now
 includes this standalone package. `clamp check`, `test`, `build`, and `run` pass
 arguments and exit status through to Cargo; the check wrapper has a smoke run.
+`cargo install --path tooling --root /tmp/clamp-global-install` installed the
+binary successfully, and the installed command ran from `/tmp`. `clamp init`
+created a runnable application; its `rustclamp = "0.1"` dependency was tested
+with a local Cargo patch to this checkout. A plain registry build awaits the
+RustClamp 0.1 publication gate.
 Output still needs comparison against every reference example; required
 configuration and lifecycle boundaries need fuller presentation. Project
-generation remains open until the framework has a publishable dependency target.
+generation is implemented, while its ordinary registry build remains gated on
+a publishable dependency target.
 
 ## Remaining release work
 

@@ -5,6 +5,18 @@ developer command. It consumes resolved process metadata from an application;
 it does not parse source code, initialize the application, open connections, or
 start services.
 
+## Install the command
+
+From the coordinated source checkout, install it into Cargo's global binary
+directory:
+
+```sh
+cargo install --path rustclamp/tooling
+```
+
+Make sure `~/.cargo/bin` is on `PATH`. After installation, `clamp` works from
+any current directory. It uses Cargo in that directory for project commands.
+
 The application exports a document with `inspection_document(&[&projection])`
 and writes the returned JSON value. A single document can contain multiple
 processes from one application. Pass `--process ID` when it contains more than
@@ -30,7 +42,9 @@ descriptive; they are not estimates of memory or runtime cost.
 
 The `check`, `test`, `build`, and `run` commands pass their arguments and exit
 status through to Cargo in the current directory. Project generation will be
-added after the framework packages have a publishable dependency target.
+available with `clamp init <project-name>`. The generated manifest depends on
+the `rustclamp` 0.1 release, so building a generated project through the
+registry becomes available when that package is published.
 
 ## Schema version 1
 
