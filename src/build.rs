@@ -44,15 +44,36 @@ pub fn seeders(folder: &str) {
     write(folder, "seeders", "Seeder");
 }
 
-fn write(folder: &str, function: &str, kind: &str) {
+/// Writes `$OUT_DIR/states.rs`: `pub mod states` holding every item of every
+/// `.rs` file in `folder`, such as `pub const ORDER: States = ...` in
+/// `order.rs`, read as `database::states::ORDER`. The rules for each status
+/// column live in one place.
+///
+/// # Panics
+///
+/// As [`migrations`].
+pub fn states(folder: &str) {
     println!("cargo:rerun-if-changed={folder}");
     let out = std::env::var("OUT_DIR").expect("run from build.rs, where OUT_DIR is set");
-    let source = source(Path::new(folder), function, kind);
-    fs::write(Path::new(&out).join(format!("{function}.rs")), source)
-        .unwrap_or_else(|error| panic!("cannot write {function}.rs to OUT_DIR: {error}"));
+    fs::write(
+        Path::new(&out).join("states.rs"),
+        states_source(Path::new(folder)),
+    )
+    .unwrap_or_else(|error| panic!("cannot write states.rs to OUT_DIR: {error}"));
 }
 
-fn source(folder: &Path, function: &str, kind: &str) -> String {
+fn states_source(folder: &Path) -> String {
+    let mut modules = String::new();
+    for (path, stem) in files(folder, "state") {
+        modules.push_str(&format!(
+            "    #[path = {path:?}]\n    mod {stem};\n    pub use {stem}::*;\n"
+        ));
+    }
+    format!("/// Every file in the states folder.\npub mod states {{\n{modules}}}\n")
+}
+
+/// The `.rs` files in `folder` as (absolute path, stem), sorted by name.
+fn files(folder: &Path, kind: &str) -> Vec<(String, String)> {
     let mut stems: Vec<String> = fs::read_dir(folder)
         .map(|entries| {
             entries
@@ -65,21 +86,37 @@ fn source(folder: &Path, function: &str, kind: &str) -> String {
         .unwrap_or_default();
     stems.sort();
     let folder = fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+    stems
+        .into_iter()
+        .map(|stem| {
+            assert!(
+                stem.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "{kind} file {stem}.rs: use only letters, digits and _"
+            );
+            (
+                folder.join(format!("{stem}.rs")).display().to_string(),
+                stem,
+            )
+        })
+        .collect()
+}
+
+fn write(folder: &str, function: &str, kind: &str) {
+    println!("cargo:rerun-if-changed={folder}");
+    let out = std::env::var("OUT_DIR").expect("run from build.rs, where OUT_DIR is set");
+    let source = source(Path::new(folder), function, kind);
+    fs::write(Path::new(&out).join(format!("{function}.rs")), source)
+        .unwrap_or_else(|error| panic!("cannot write {function}.rs to OUT_DIR: {error}"));
+}
+
+fn source(folder: &Path, function: &str, kind: &str) -> String {
     let mut modules = String::new();
     let mut list = String::new();
-    for stem in &stems {
-        assert!(
-            stem.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
-            "{kind} file {stem}.rs: use only letters, digits and _"
-        );
-        let path = folder.join(format!("{stem}.rs"));
-        modules.push_str(&format!(
-            "#[path = {path:?}]\nmod {function}_{stem};\n",
-            path = path.display().to_string()
-        ));
+    for (path, stem) in files(folder, kind) {
+        modules.push_str(&format!("#[path = {path:?}]\nmod {function}_{stem};\n"));
         list.push_str(&format!(
             "        &{function}_{stem}::{},\n",
-            struct_name(stem)
+            struct_name(&stem)
         ));
     }
     format!(
@@ -131,6 +168,17 @@ mod tests {
         assert!(posts < tags);
         assert!(!source.contains("notes"));
         fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn states_reexport_each_file() {
+        let folder = std::env::temp_dir().join(format!("rustclamp-states-{}", std::process::id()));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("order.rs"), "").unwrap();
+        let source = states_source(&folder);
+        fs::remove_dir_all(folder).unwrap();
+        assert!(source.starts_with("/// Every file in the states folder.\npub mod states {"));
+        assert!(source.contains("    mod order;\n    pub use order::*;\n"));
     }
 
     #[test]

@@ -20,6 +20,8 @@
   `<!--csrf-->`, `<!--flash-->`, `<!--errors-->` and `<!--old:field-->`.
 - `Sessions::database(db)`: sessions in a SQLite `sessions` table, so they
   survive restarts; expired rows are pruned.
+- `rustclamp::build::states`: every file in `app/database/states/` becomes
+  `database::states::*`; the web template's `build.rs` calls it.
 - `db::States`: allowed transitions for a status column, each move recorded
   in `state_history` with who made it; `history`, `can`, `allowed_from`.
 - `clamp make:migration NAME` (dated stub; `create_x` and `add_y_to_x` are

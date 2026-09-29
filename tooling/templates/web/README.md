@@ -19,6 +19,7 @@ app/                             everything the app is made of; replace it to de
   config/app.rs                  typed settings; .env.example lists the keys
   database/migrations/           the schema: one file per migration, run at startup
   database/seeders/              data for `cargo run -- db:seed`
+  database/states/               allowed status transitions (`db::States`)
   routes/web.rs, routes/api.rs   pages, JSON (throttled)
   http/controllers/              controller.rs is the base: `use super::controller::*;`
   http/middleware/               request_log.rs: logs every request at debug level

@@ -29,11 +29,13 @@ pub mod http {
 // `pub mod models { mod post; pub use post::Post; }`
 
 /// The database: every file in `database/migrations/` (the schema, oldest
-/// first) and `database/seeders/` (data for `cargo run -- db:seed`). Adding a
-/// file is enough; `build.rs` lists them.
+/// first), `database/seeders/` (data for `cargo run -- db:seed`) and
+/// `database/states/` (allowed status transitions, as `database::states::*`).
+/// Adding a file is enough; `build.rs` lists them.
 pub mod database {
     include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
     include!(concat!(env!("OUT_DIR"), "/seeders.rs"));
+    include!(concat!(env!("OUT_DIR"), "/states.rs"));
 }
 
 /// Typed settings from `.env`.
