@@ -15,6 +15,7 @@ pub mod http {
     /// Turn requests into responses.
     pub mod controllers {
         pub mod controller;
+        pub mod health;
     }
     /// Wrap requests: `Fn(&Request, Next) -> Response`.
     pub mod middleware {

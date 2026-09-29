@@ -52,7 +52,6 @@ use crate::config::Config;
 mod query;
 mod schema;
 mod states;
-pub mod timestamp;
 pub use query::Query;
 pub use schema::{Column, Schema, Table};
 pub use states::{Change, States, Transition};

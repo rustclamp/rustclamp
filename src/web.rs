@@ -27,11 +27,10 @@
 //! ```
 
 mod form;
-#[cfg(feature = "markdown")]
-pub mod markdown;
 mod request;
 mod session;
 mod throttle;
+mod upload;
 mod view;
 
 use std::fs;
@@ -48,6 +47,7 @@ pub use form::{Form, Invalid};
 pub use request::{MAX_BODY, Request};
 pub use session::{COOKIE, CSRF_FIELD, Session, Sessions, csrf};
 pub use throttle::{Throttle, throttle};
+pub use upload::{MAX_UPLOAD, UploadedFile};
 pub use view::{ToValue, Value};
 
 /// The web root, relative to the working directory. [`asset`] serves files from it.
@@ -61,51 +61,6 @@ const READ_TIMEOUT: Duration = Duration::from_secs(10);
 pub type Next<'a> = &'a dyn Fn(&Request) -> Response;
 
 type Handler = Box<dyn Fn(&Request) -> Response + Send + Sync>;
-
-/// What a handler may return: a [`Response`], or a [`Result`] whose error is
-/// logged with the request's method and path and answered with `500`, as an
-/// uncaught exception is in Laravel. So a handler can use `?`:
-///
-/// ```
-/// use rustclamp::web::{self, Request, Response, Router};
-///
-/// fn show(request: &Request) -> web::Result {
-///     let id: u32 = request.query("id").unwrap_or_default().parse()?;
-///     Ok(Response::text(200, &id.to_string()))
-/// }
-///
-/// let app = Router::new().get("/", show);
-/// assert_eq!(app.handle(&Request::get("/?id=7")).body, b"7");
-/// assert_eq!(app.handle(&Request::get("/?id=x")).status, 500);
-/// ```
-pub trait IntoResponse {
-    /// The response to send for `request`.
-    fn into_response(self, request: &Request) -> Response;
-}
-
-impl IntoResponse for Response {
-    fn into_response(self, _: &Request) -> Response {
-        self
-    }
-}
-
-impl<T: IntoResponse, E: std::fmt::Display> IntoResponse for std::result::Result<T, E> {
-    fn into_response(self, request: &Request) -> Response {
-        match self {
-            Ok(response) => response.into_response(request),
-            Err(problem) => {
-                Log::error(format_args!(
-                    "{} {}: {problem}",
-                    request.method, request.path
-                ));
-                error(500)
-            }
-        }
-    }
-}
-
-/// A handler's result: any error converts with `?` and answers `500`.
-pub type Result<T = Response> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Middleware = Arc<dyn Fn(&Request, Next) -> Response + Send + Sync>;
 
 /// The app's routes: exact method and path matches, checked in order.
@@ -124,41 +79,22 @@ impl Router {
 
     /// Answers `GET path` with `handler`.
     #[must_use]
-    pub fn get<R: IntoResponse>(
+    pub fn get(
         self,
         path: &str,
-        handler: impl Fn(&Request) -> R + Send + Sync + 'static,
+        handler: impl Fn(&Request) -> Response + Send + Sync + 'static,
     ) -> Self {
         self.route("GET", path, handler)
     }
 
     /// Answers `POST path` with `handler`.
     #[must_use]
-    pub fn post<R: IntoResponse>(
+    pub fn post(
         self,
         path: &str,
-        handler: impl Fn(&Request) -> R + Send + Sync + 'static,
+        handler: impl Fn(&Request) -> Response + Send + Sync + 'static,
     ) -> Self {
         self.route("POST", path, handler)
-    }
-
-    /// A health check at `GET path`, like Laravel's `/up`: `{"status":"ok"}`,
-    /// or `503` when the database shared with [`Router::state`] does not answer.
-    #[must_use]
-    pub fn up(self, path: &str) -> Self {
-        self.get(path, |request: &Request| {
-            #[cfg(feature = "db")]
-            if let Some(db) = request.state::<crate::db::Db>()
-                && db
-                    .with(|sql| sql.query_row("SELECT 1", [], |_| Ok(())))
-                    .is_err()
-            {
-                return error(503);
-            }
-            #[cfg(not(feature = "db"))]
-            let _ = request;
-            json(r#"{"status":"ok"}"#)
-        })
     }
 
     /// Answers `GET path` with the built view `name`, as [`view`] does.
@@ -170,17 +106,13 @@ impl Router {
     /// Answers `method path` with `handler`. A `{name}` segment matches any
     /// one segment and is read with [`Request::param`], as in `/blog/{slug}`.
     #[must_use]
-    pub fn route<R: IntoResponse>(
+    pub fn route(
         mut self,
         method: &'static str,
         path: &str,
-        handler: impl Fn(&Request) -> R + Send + Sync + 'static,
+        handler: impl Fn(&Request) -> Response + Send + Sync + 'static,
     ) -> Self {
-        self.routes.push((
-            method,
-            path.into(),
-            Box::new(move |request: &Request| handler(request).into_response(request)),
-        ));
+        self.routes.push((method, path.into(), Box::new(handler)));
         self
     }
 
@@ -646,79 +578,7 @@ pub fn asset(path: &str) -> Response {
     Response::new(200, content_type, body)
 }
 
-/// A web app's startup, the part every `main.rs` repeats. Each field is one
-/// of the app's own functions, so settings stay in `app/config/`:
-///
-/// ```no_run
-/// # mod config {
-/// #     use rustclamp::config::Config;
-/// #     pub fn logging(c: &Config) -> rustclamp::log::Settings { rustclamp::log::Settings::from_config(c) }
-/// #     pub fn database(c: &Config) -> rustclamp::db::Settings { rustclamp::db::Settings::from_config(c) }
-/// #     pub fn filesystems(_: &Config) -> rustclamp::storage::Settings { unimplemented!() }
-/// # }
-/// # mod database {
-/// #     pub fn migrations() -> Vec<&'static dyn rustclamp::db::Migration> { Vec::new() }
-/// #     pub fn seeders() -> Vec<&'static dyn rustclamp::db::Seeder> { Vec::new() }
-/// # }
-/// # fn routes(_: &rustclamp::config::Config) -> rustclamp::web::Router { rustclamp::web::Router::new() }
-/// fn main() {
-///     rustclamp::web::App {
-///         logging: config::logging,
-///         database: config::database,
-///         filesystems: config::filesystems,
-///         migrations: database::migrations,
-///         seeders: database::seeders,
-///     }
-///     .run(routes);
-/// }
-/// ```
-#[cfg(feature = "db")]
-#[derive(Debug, Clone, Copy)]
-pub struct App {
-    /// `app/config/logging.rs`.
-    pub logging: fn(&crate::config::Config) -> crate::log::Settings,
-    /// `app/config/database.rs`.
-    pub database: fn(&crate::config::Config) -> crate::db::Settings,
-    /// `app/config/filesystems.rs`.
-    pub filesystems: fn(&crate::config::Config) -> crate::storage::Settings,
-    /// Every migration, from `build.rs`.
-    pub migrations: fn() -> Vec<&'static dyn crate::db::Migration>,
-    /// Every seeder, from `build.rs`.
-    pub seeders: fn() -> Vec<&'static dyn crate::db::Seeder>,
-}
-
-#[cfg(feature = "db")]
-impl App {
-    /// Loads `.env`, installs the logger, then either runs a database command
-    /// given as the first argument (`migrate`, `migrate:rollback`, `db:seed`)
-    /// and exits with its status, or links `public/storage` to the public disk
-    /// (like `php artisan storage:link`; a failure is a warning) and serves
-    /// `routes`, which opens and migrates the database.
-    pub fn run(self, routes: impl FnOnce(&crate::config::Config) -> Router) {
-        use crate::db::Db;
-        use crate::log::Logger;
-        use crate::storage::Storage;
-
-        let config = crate::config::Config::load();
-        Log::init(Logger::new(&(self.logging)(&config)));
-        if let Some(command) = std::env::args().nth(1) {
-            let db = Db::connect(&(self.database)(&config));
-            let (migrations, seeders) = ((self.migrations)(), (self.seeders)());
-            std::process::exit(crate::db::command(&db, &command, &migrations, &seeders));
-        }
-        if let Err(error) = Storage::new((self.filesystems)(&config)).link() {
-            Log::warning(format_args!("storage link failed: {error}"));
-        }
-        serve(routes(&config));
-    }
-}
-
-/// Threads answering requests unless `WEB_THREADS` says otherwise.
-const THREADS: usize = 32;
-
-/// Listens on `127.0.0.1` and answers requests with `routes` on a pool of
-/// `WEB_THREADS` threads (default 32), so one slow request does not hold up
-/// the rest.
+/// Listens on `127.0.0.1` and answers every request with `routes`.
 ///
 /// Uses `PORT` when set; otherwise the first free port from 8080 to 8099, then
 /// any free port. Exits the process if `PORT` is set but unavailable.
@@ -735,47 +595,10 @@ pub fn serve(routes: Router) {
         std::process::exit(1);
     };
     let address = listener.local_addr().expect("listener has an address");
-    let threads = std::env::var("WEB_THREADS").map_or(THREADS, |threads| {
-        threads.parse().expect("WEB_THREADS must be a number")
-    });
     println!("Serving on http://{address}");
-    serve_on(listener, routes, threads);
-}
-
-/// Answers connections from `listener` on `threads` worker threads. Accepted
-/// connections wait in a queue of four per thread; when it is full, the
-/// operating system's backlog holds the rest, so a flood cannot spawn threads
-/// or grow memory without bound.
-// ponytail: a fixed pool of blocking threads; each slow client holds one for up
-// to READ_TIMEOUT, so size WEB_THREADS above the slow clients you expect, or
-// put nginx in front (it buffers requests), before reaching for async.
-// Memory: each thread holds one parsed request, so the worst case is
-// WEB_THREADS x the largest body (10 MiB uploads: 32 x 10 MiB = 320 MiB).
-fn serve_on(listener: TcpListener, routes: Router, threads: usize) {
-    let threads = threads.max(1);
-    let routes = Arc::new(routes);
-    let (queue, waiting) = std::sync::mpsc::sync_channel::<TcpStream>(threads * 4);
-    let waiting = Arc::new(std::sync::Mutex::new(waiting));
-    for _ in 0..threads {
-        let (routes, waiting) = (Arc::clone(&routes), Arc::clone(&waiting));
-        std::thread::spawn(move || {
-            loop {
-                // The lock is held only while taking the next connection.
-                let next = waiting
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .recv();
-                let Ok(stream) = next else { return };
-                // A panic outside the handler (writing the response) must not
-                // shrink the pool.
-                let _ = catch_unwind(AssertUnwindSafe(|| respond(stream, &routes)));
-            }
-        });
-    }
+    // ponytail: one request at a time; spawn a thread per stream when apps need concurrency
     for stream in listener.incoming().flatten() {
-        if queue.send(stream).is_err() {
-            return;
-        }
+        respond(stream, &routes);
     }
 }
 
@@ -819,46 +642,6 @@ fn respond(mut stream: TcpStream, routes: &Router) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn slow_requests_do_not_hold_up_the_rest() {
-        use std::io::Read;
-        use std::time::Instant;
-
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let routes = Router::new().get("/slow", |_| {
-            std::thread::sleep(Duration::from_millis(300));
-            Response::text(200, "done")
-        });
-        std::thread::spawn(move || serve_on(listener, routes, 4));
-        let get = move || {
-            let mut stream = TcpStream::connect(address).unwrap();
-            stream
-                .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
-                .unwrap();
-            let mut answer = String::new();
-            stream.read_to_string(&mut answer).unwrap();
-            answer
-        };
-        let started = Instant::now();
-        let clients: Vec<_> = (0..4).map(|_| std::thread::spawn(get)).collect();
-        for client in clients {
-            assert!(client.join().unwrap().ends_with("done"));
-        }
-        // One at a time would take 1.2 s.
-        assert!(
-            started.elapsed() < Duration::from_millis(900),
-            "{:?}",
-            started.elapsed()
-        );
-
-        // A client that connects and sends nothing holds one thread, not the server.
-        let _idle = TcpStream::connect(address).unwrap();
-        let started = Instant::now();
-        assert!(get().ends_with("done"));
-        assert!(started.elapsed() < Duration::from_secs(2));
-    }
 
     #[test]
     fn asset_refuses_paths_outside_dist() {
@@ -1042,15 +825,6 @@ mod tests {
         fs::remove_dir_all(&public).unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(body(response), "<main><h2>&lt;Hi&gt;</h2></main>");
-    }
-
-    #[test]
-    fn up_answers_ok() {
-        let response = Router::new().up("/up").handle(&Request::get("/up"));
-        assert_eq!(
-            (response.status, response.body),
-            (200, br#"{"status":"ok"}"#.to_vec())
-        );
     }
 
     #[test]

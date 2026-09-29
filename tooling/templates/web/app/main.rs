@@ -1,15 +1,23 @@
-use ::__CRATE__::{config, database, routes};
+use rustclamp::config::Config;
+use rustclamp::db::Db;
+use rustclamp::log::{Log, Logger};
+use rustclamp::prelude::*;
+use rustclamp::storage::Storage;
 
-/// Loads `.env`, starts logging, runs `cargo run -- migrate` (or
-/// `migrate:rollback`, `db:seed`) when asked, links `public/storage`, then
-/// serves the routes.
+use ::__CRATE__::{config, database};
+
 fn main() {
-    rustclamp::web::App {
-        logging: config::logging,
-        database: config::database,
-        filesystems: config::filesystems,
-        migrations: database::migrations,
-        seeders: database::seeders,
+    let config = Config::load();
+    Log::init(Logger::new(&config::logging(&config)));
+    // `cargo run -- migrate`, `migrate:rollback` or `db:seed`.
+    if let Some(command) = std::env::args().nth(1) {
+        let db = Db::connect(&config::database(&config));
+        let (migrations, seeders) = (database::migrations(), database::seeders());
+        std::process::exit(rustclamp::db::command(&db, &command, &migrations, &seeders));
     }
-    .run(routes);
+    // `public/storage` serves the public disk, like `php artisan storage:link`.
+    if let Err(error) = Storage::new(config::filesystems(&config)).link() {
+        Log::warning(format_args!("storage link failed: {error}"));
+    }
+    Clamp::run(|| rustclamp::web::serve(::__CRATE__::routes(&config)));
 }

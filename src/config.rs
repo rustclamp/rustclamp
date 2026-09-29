@@ -79,12 +79,6 @@ impl Config {
         }
     }
 
-    /// Whether `APP_ENV` is `production`: settings that protect users
-    /// default to on there.
-    pub fn is_production(&self) -> bool {
-        self.get("APP_ENV") == Some("production")
-    }
-
     /// The value of `key`.
     ///
     /// # Panics

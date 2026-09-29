@@ -50,19 +50,6 @@ impl Invalid {
 }
 
 impl Request {
-    /// A one-time message for the next page, shown by [`Request::render`] as
-    /// `flash`: `session().flash(...)` without the unwrap.
-    ///
-    /// # Panics
-    ///
-    /// When the route runs without [`Sessions::middleware`](super::Sessions::middleware):
-    /// the message would be lost, which is a bug in the app.
-    pub fn flash(&self, message: &str) {
-        self.session()
-            .expect("flash needs Sessions::middleware on this route")
-            .flash(message);
-    }
-
     /// Checks form fields against rules separated by `|`: `required`,
     /// `min:N` and `max:N` (characters), `email`, `integer` and `url` (`http`
     /// or `https` only, so a stored link can never be `javascript:`). A field that
@@ -198,21 +185,14 @@ fn check(rule: &str, value: &str, label: &str, name: &str) -> Option<String> {
 /// `javascript:`, `data:` or a relative path, runs or resolves in the page
 /// when put in an `href`, whatever the escaping.
 fn is_web_url(value: &str) -> bool {
-    let web = matches!(url_scheme(value).as_deref(), Some("http" | "https"));
-    let host = value.split_once("://").map_or("", |(_, rest)| {
-        rest.split(['/', '?', '#']).next().unwrap_or_default()
-    });
-    web && !host.is_empty()
-        && !host.starts_with('@')
-        && !value.contains(|c: char| c.is_whitespace() || c.is_control())
-}
-
-/// The lowercased scheme of `url` (`javascript` in `JavaScript:x`), or `None`
-/// for a relative link: the part before the first `:`, if no `/`, `?` or `#`
-/// comes first.
-pub(super) fn url_scheme(url: &str) -> Option<String> {
-    let (scheme, _) = url.split_once(':')?;
-    (!scheme.contains(['/', '?', '#'])).then(|| scheme.trim().to_ascii_lowercase())
+    let lower = value.to_ascii_lowercase();
+    let rest = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"));
+    rest.is_some_and(|rest| {
+        let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        !host.is_empty() && !host.starts_with('@')
+    }) && !value.contains(|c: char| c.is_whitespace() || c.is_control())
 }
 
 #[cfg(test)]

@@ -126,27 +126,6 @@ impl Sessions {
         }
     }
 
-    /// Sessions from the app's config: `SESSION_MINUTES` (idle lifetime,
-    /// default 120) and `SESSION_SECURE` (HTTPS-only cookie, default on when
-    /// `APP_ENV=production`).
-    ///
-    /// # Panics
-    ///
-    /// When `SESSION_SECURE=false` with `APP_ENV=production`: the app refuses
-    /// to start rather than send session cookies over plain HTTP.
-    pub fn from_config(config: &crate::config::Config) -> Self {
-        let production = config.is_production();
-        let secure = config.get_or("SESSION_SECURE", production);
-        assert!(
-            secure || !production,
-            "SESSION_SECURE=false with APP_ENV=production: session cookies would travel over plain HTTP"
-        );
-        Self::new(Duration::from_secs(
-            60 * config.get_or("SESSION_MINUTES", 120u64),
-        ))
-        .secure(secure)
-    }
-
     /// Keeps sessions in `db`'s `sessions` table, created when missing, so
     /// visitors stay logged in across restarts and processes. Expired rows
     /// are deleted as new sessions start. Two requests changing the same
@@ -491,31 +470,6 @@ mod tests {
         assert!(
             !state(&old).starts_with("3"),
             "the old ID no longer opens the session"
-        );
-    }
-
-    #[test]
-    fn production_sessions_are_https_only() {
-        use crate::config::Config;
-        let cookie = |env: &str| {
-            let app = Router::new().group(|web| {
-                web.middleware(Sessions::from_config(&Config::parse(env)).middleware())
-                    .get("/", |_| Response::text(200, ""))
-            });
-            app.handle(&Request::get("/"))
-                .header("set-cookie")
-                .unwrap()
-                .to_owned()
-        };
-        assert!(cookie("APP_ENV=production\n").contains("; Secure"));
-        assert!(!cookie("APP_ENV=local\n").contains("; Secure"));
-        assert!(cookie("SESSION_MINUTES=5\n").contains("Max-Age=300"));
-        let insecure = std::panic::catch_unwind(|| {
-            Sessions::from_config(&Config::parse("APP_ENV=production\nSESSION_SECURE=false\n"))
-        });
-        assert!(
-            insecure.is_err(),
-            "production refuses an insecure session cookie"
         );
     }
 
