@@ -82,6 +82,13 @@ and [integration boundary decision](docs/adr/0005-phase6-integration-boundaries.
 Release build, dependency, binary, process, and paired workload measurements
 are recorded in the [Phase 6 evidence](docs/evidence/phase6-progress.md).
 
+`examples/11-device-loop` begins Phase 8 with fixed-step replay, controlled
+clock/random/input sources, validated fake sensor samples, bounded input
+backpressure, display/optional telemetry, and typed CAN decoder assembly. Its
+default dependency graph excludes Tokio; the optional `tokio-service` feature
+demonstrates a separately cancelled async service. See the
+[Phase 8 progress evidence](docs/evidence/phase8-progress.md).
+
 ## Project Map
 
 | Repository | Responsibility | Status |

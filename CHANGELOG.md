@@ -57,3 +57,6 @@
 - Added the dependency-light Scheduler target with controlled-clock, overlap,
   misfire, admission, and drain checks, plus Phase 7 throughput and dependency
   measurements.
+- Started Phase 8 with a deterministic integer-step replay and fake device/CAN
+  proof; the default loop stays Tokio-free while an optional async service path
+  uses the existing runtime adapter.
