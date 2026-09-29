@@ -45,5 +45,7 @@ pub fn routes(config: &Config) -> Router {
     let router = Router::new()
         .middleware(security_headers)
         .middleware(http::middleware::request_log);
+    // Packages (`clamp init --package`) add their routes here, e.g.
+    // `let router = router.package(blog::Blog::from(config));`
     routes::api::routes(routes::web::routes(router), &settings)
 }

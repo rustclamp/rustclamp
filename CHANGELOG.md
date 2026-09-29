@@ -4,6 +4,10 @@
 
 ### Added
 
+- Web packages: `web::Package`, `Router::package` (package middleware stays on
+  package routes), `web::package_view` with app overrides under
+  `views/vendor/{package}/`, and `clamp init NAME --package` (ADR 0008).
+- `clamp --version`; the CLI is 0.2.0 (release tag `clamp-v0.2.0`).
 - Phase 0 package scaffold and development checks.
 - Synchronous `Clamp::run` entrypoint and a prelude exporting `Clamp`.
 - Pico example, plain Rust comparison, isolated dependency regression checks,

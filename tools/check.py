@@ -287,6 +287,7 @@ def check_tooling_generator(root):
             ("app", "Health check: ready"),
             ("tui", "Clamp TUI"),
             ("web", None),  # ponytail: long-running server, checked and tested only
+            ("package", None),  # a library: nothing to run
         ):
             project = Path(temporary) / template
             command = [
@@ -303,6 +304,11 @@ def check_tooling_generator(root):
 
             run("cargo", "check", "--offline", "--manifest-path", str(manifest), cwd=root)
             run("cargo", "test", "--offline", "--manifest-path", str(manifest), cwd=root)
+            if template == "package":
+                for name in ("src/lib.rs", "resources/views/index.html", "resources/css/package.css",
+                             "tests/routes.rs"):
+                    assert (project / name).exists(), f"package template omitted {name}"
+                assert not (project / "Procfile.dev").exists(), "package template wrote a Procfile"
             if template == "web":
                 for name in ("package.json", "vite.config.ts", "app/routes/web.rs", "app/routes/api.rs", "tests/routes.rs",
                              "app/resources/views/welcome.html", "public/robots.txt", ".env.example"):

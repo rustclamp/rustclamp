@@ -34,5 +34,8 @@ The server itself is `rustclamp::web`, the framework's `web` feature: `Router`,
 `view` and `render` (fills `<!--key-->` markers, `escape` the values),
 `Sessions` and `csrf()`, `Throttle`, `security_headers`, and `error(status)`, which
 fills `<!--status-->` and `<!--reason-->` in the error views.
+Packages made with `clamp init --package` bring their own routes, views and
+tests; add one with `.package(...)` in `app/lib.rs`, and override its views in
+`app/resources/views/vendor/{package}/`.
 `cargo dev` starts only the Rust server; run `npm run build` first so
 `public/build/` exists.
