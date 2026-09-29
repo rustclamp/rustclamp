@@ -31,7 +31,7 @@ two-terminal run. Live broker execution is pending because the local Docker
 daemon is unavailable. Delivery outcomes are explicit: success ACKs; transient
 handler errors retry with bounded backoff for five total attempts; invalid
 envelopes are copied to a dead-letter subject before source ACK; and a valid
-message without a route is terminally rejected. The consumer lease is 30 seconds
+message without a route is terminally rejected. The consumer lease is 45 seconds
 with at most one unacknowledged delivery. Worker handlers classify failures as
 retryable, permanent, or unknown outcome. Only retryable failures are authorized
 to retry; unknown outcomes are preserved in dead-letter records and are not
@@ -42,6 +42,8 @@ unacknowledged work, and concurrent handler execution are bounded by stream
 retention and a single in-flight delivery. The Worker stops fetching on Ctrl-C,
 then completes or times out its current delivery before exiting; an unacknowledged
 delivery after process loss is left for lease-based redelivery.
+The example's opt-in tracing feature emits an API publish event and a Worker
+handler span with the same correlation and message IDs.
 
 ## Verification so far
 

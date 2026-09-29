@@ -40,6 +40,12 @@ struct EmailPayload {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    #[cfg(feature = "tracing")]
+    tracing_subscriber::fmt()
+        .with_env_filter("info")
+        .try_init()
+        .ok();
+
     let url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into());
     let client = async_nats::connect(url).await?;
     let jetstream = jetstream::new(client);
@@ -151,6 +157,8 @@ async fn handle_message(
     envelope: MessageEnvelope,
     attempts: i64,
 ) -> DeliveryOutcome {
+    let correlation_id = envelope.correlation_id.clone();
+    let message_id = envelope.id.clone();
     let budget = if let Some(deadline) = envelope.deadline_unix_ms {
         let remaining = deadline.saturating_sub(now_ms());
         if remaining == 0 {
@@ -163,7 +171,21 @@ async fn handle_message(
     } else {
         MAX_HANDLER_TIME
     };
-    let result = match tokio::time::timeout(budget, registry.dispatch(envelope)).await {
+    let dispatch = registry.dispatch(envelope);
+    #[cfg(feature = "tracing")]
+    let dispatch = {
+        use tracing::Instrument;
+        dispatch.instrument(tracing::info_span!(
+            "worker.delivery",
+            %correlation_id,
+            %message_id,
+            attempt = attempts
+        ))
+    };
+    #[cfg(not(feature = "tracing"))]
+    let _ = (correlation_id, message_id);
+
+    let result = match tokio::time::timeout(budget, dispatch).await {
         Ok(result) => result,
         Err(_) => {
             return DeliveryOutcome::DeadLetter {

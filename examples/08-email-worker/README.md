@@ -25,6 +25,9 @@ cargo run --offline --locked --manifest-path rustclamp/examples/08-email-worker/
 cargo run --offline --locked --manifest-path rustclamp/examples/08-email-worker/Cargo.toml --bin email-api
 ```
 
+Pass `--features tracing` to either command to emit publication and handler
+spans containing the envelope's correlation and message IDs.
+
 The API waits for JetStream's publish acknowledgement. The Worker uses a
 durable pull consumer with one unacknowledged message at a time and a 45-second
 acknowledgement lease. It acknowledges only after its handler succeeds. A

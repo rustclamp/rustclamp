@@ -47,6 +47,12 @@ impl EmailSender for JetStreamEmailSender {
             .publish(SUBJECT, serde_json::to_vec(&message)?.into())
             .await?;
         ack.await?;
+        #[cfg(feature = "tracing")]
+        tracing::info!(
+            correlation_id = %message.correlation_id,
+            message_id = %message.id,
+            "published email request"
+        );
         println!("queued {} ({})", message.name, message.id);
         Ok(())
     }
@@ -54,6 +60,12 @@ impl EmailSender for JetStreamEmailSender {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    #[cfg(feature = "tracing")]
+    tracing_subscriber::fmt()
+        .with_env_filter("info")
+        .try_init()
+        .ok();
+
     let url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into());
     let client = async_nats::connect(url).await?;
     let jetstream = jetstream::new(client);
