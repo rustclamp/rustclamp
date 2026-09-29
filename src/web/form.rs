@@ -1,9 +1,9 @@
 //! Form validation, flash messages and views filled from the session, like
 //! Laravel's `$request->validate()`, `back()->withErrors()` and `old()`.
 
-use super::request::{encode, field};
+use super::request::{decode, encode};
 use super::session::{ERRORS, FLASH, OLD};
-use super::{Request, Response, escape, redirect, render};
+use super::{Request, Response, ToValue, Value, redirect, render};
 
 /// Input that passed [`Request::validate`]: each field trimmed.
 #[derive(Debug)]
@@ -51,7 +51,8 @@ impl Invalid {
 
 impl Request {
     /// Checks form fields against rules separated by `|`: `required`,
-    /// `min:N` and `max:N` (characters), `email` and `integer`. A field that
+    /// `min:N` and `max:N` (characters), `email`, `integer` and `url` (`http`
+    /// or `https` only, so a stored link can never be `javascript:`). A field that
     /// is empty and not `required` passes. Values are trimmed.
     ///
     /// ```
@@ -102,71 +103,41 @@ impl Request {
         Err(Invalid { errors, old })
     }
 
-    /// [`render`] with the session filled in: `<!--csrf-->` (the CSRF field),
-    /// `<!--flash-->` (the [`Session::flash`](super::Session::flash) message),
-    /// `<!--errors-->` (validation errors) and `<!--old:field-->` (the input
-    /// that failed, escaped). Each is shown once, then cleared; without a
-    /// session they are empty. Markup uses `notice` and `notice--error`
-    /// classes. `slots` are filled first, as with [`render`].
-    pub fn render(&self, name: &str, slots: &[(&str, &str)]) -> Response {
+    /// [`render`] with the session's form state added to `data`: `csrf` (the
+    /// CSRF field, print it with `{!! csrf !!}`), `flash` (the
+    /// [`Session::flash`](super::Session::flash) message, or `false`),
+    /// `errors` (the validation errors, a list) and `old` (the input that
+    /// failed, `{{ old.email }}`). Each is shown once, then cleared; without a
+    /// session they are empty.
+    pub fn render(&self, name: &str, data: &[(&str, &dyn ToValue)]) -> Response {
         let (csrf, flash, errors, old) = match self.session() {
             Some(session) => (
                 session.csrf_field(),
                 session.take(FLASH),
-                session.take(ERRORS),
+                session.take(ERRORS).unwrap_or_default(),
                 session.take(OLD).unwrap_or_default(),
             ),
             None => Default::default(),
         };
-        let flash = flash
-            .map(|message| {
-                format!(
-                    r#"<p class="notice" role="status">{}</p>"#,
-                    escape(&message)
-                )
-            })
-            .unwrap_or_default();
-        let errors = errors
-            .map(|errors| {
-                let items: String = errors
-                    .lines()
-                    .map(|error| format!("<li>{}</li>", escape(error)))
-                    .collect();
-                format!(r#"<div class="notice notice--error" role="alert"><ul>{items}</ul></div>"#)
-            })
-            .unwrap_or_default();
-        let mut all = slots.to_vec();
+        let errors: Vec<&str> = errors.lines().collect();
+        let old = Value::Map(
+            old.split('&')
+                .filter(|pair| !pair.is_empty())
+                .map(|pair| {
+                    let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+                    (decode(name), Value::Text(decode(value)))
+                })
+                .collect(),
+        );
+        let mut all = data.to_vec();
         all.extend([
-            ("csrf", csrf.as_str()),
-            ("flash", flash.as_str()),
-            ("errors", errors.as_str()),
+            ("csrf", &csrf as &dyn ToValue),
+            ("flash", &flash),
+            ("errors", &errors),
+            ("old", &old),
         ]);
-        let mut response = render(name, &all);
-        if response.status == 200 {
-            let page = String::from_utf8_lossy(&response.body);
-            response.body = fill_old(&page, &old).into_bytes();
-        }
-        response
+        render(name, &all)
     }
-}
-
-/// Replaces each `<!--old:field-->` with that field's escaped value from
-/// `old`, or nothing.
-fn fill_old(page: &str, old: &str) -> String {
-    let mut out = String::with_capacity(page.len());
-    let mut rest = page;
-    while let Some(start) = rest.find("<!--old:") {
-        out.push_str(&rest[..start]);
-        let marker = &rest[start + 8..];
-        let Some(end) = marker.find("-->") else {
-            out.push_str(&rest[start..]);
-            return out;
-        };
-        out.push_str(&escape(&field(old, &marker[..end]).unwrap_or_default()));
-        rest = &marker[end + 3..];
-    }
-    out.push_str(rest);
-    out
 }
 
 /// The message for `value` failing `rule`, if it does.
@@ -203,8 +174,25 @@ fn check(rule: &str, value: &str, label: &str, name: &str) -> Option<String> {
             .parse::<i64>()
             .is_err()
             .then(|| format!("The {label} field must be a whole number.")),
+        "url" => (!is_web_url(value)).then(|| {
+            format!("The {label} field must be a link starting with http:// or https://.")
+        }),
         _ => panic!("unknown validation rule {rule} for {name}"),
     }
+}
+
+/// An absolute `http` or `https` link with a host. Anything else, such as
+/// `javascript:`, `data:` or a relative path, runs or resolves in the page
+/// when put in an `href`, whatever the escaping.
+fn is_web_url(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let rest = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"));
+    rest.is_some_and(|rest| {
+        let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        !host.is_empty() && !host.starts_with('@')
+    }) && !value.contains(|c: char| c.is_whitespace() || c.is_control())
 }
 
 #[cfg(test)]
@@ -236,6 +224,37 @@ mod tests {
     }
 
     #[test]
+    fn url_accepts_only_web_links() {
+        for good in [
+            "https://rustclamp.com",
+            "http://a.si/x?y=1#z",
+            "HTTPS://A.SI",
+        ] {
+            assert!(is_web_url(good), "{good}");
+        }
+        for bad in [
+            "javascript:alert(1)",
+            "JavaScript://%0aalert(1)",
+            "data:text/html,x",
+            "//evil.com",
+            "/relative",
+            "https://",
+            "https:// evil.com",
+            "https://a.si/\nx\u{7}",
+        ] {
+            assert!(!is_web_url(bad), "{bad}");
+        }
+        let invalid = Request::post("/")
+            .with_body("site=javascript%3Aalert(1)")
+            .validate(&[("site", "url")])
+            .unwrap_err();
+        assert_eq!(
+            invalid.errors,
+            ["The site field must be a link starting with http:// or https://."]
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "unknown validation rule")]
     fn unknown_rule_is_a_bug() {
         let _ = Request::post("/")
@@ -244,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn old_input_refills_escaped_and_skips_passwords() {
+    fn old_input_skips_passwords() {
         let request = Request::post("/").with_body("name=%3Cb%3E&password=secret&x=");
         let invalid = request
             .validate(&[
@@ -253,11 +272,7 @@ mod tests {
                 ("x", "required"),
             ])
             .unwrap_err();
-        let page = fill_old(
-            r#"<input value="<!--old:name-->"><input value="<!--old:password-->"><!--old:"#,
-            &invalid.old,
-        );
-        assert_eq!(page, r#"<input value="&lt;b&gt;"><input value=""><!--old:"#);
+        assert_eq!(invalid.old, "name=%3Cb%3E&x=");
     }
 
     #[test]

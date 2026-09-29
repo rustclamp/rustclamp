@@ -23,6 +23,7 @@ fn every_response_carries_security_headers() {
     for path in ["/api/health", "/nope"] {
         let response = app().handle(&Request::get(path));
         assert_eq!(response.header("x-frame-options"), Some("DENY"), "{path}");
+        assert!(response.header("content-security-policy").is_some(), "{path}");
     }
 }
 

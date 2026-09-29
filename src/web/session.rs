@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,8 @@ type Data = Arc<Mutex<HashMap<String, String>>>;
 #[derive(Clone)]
 pub struct Session {
     data: Data,
+    /// Set by [`Session::regenerate`]; the middleware issues a new ID.
+    renew: Arc<AtomicBool>,
 }
 
 impl Session {
@@ -50,10 +53,19 @@ impl Session {
     }
 
     /// A one-time message for the next page, such as "Thanks, your message
-    /// was received.": [`Request::render`](super::Request::render) shows it
-    /// at `<!--flash-->` once.
+    /// was received.": [`Request::render`](super::Request::render) passes it
+    /// to the view as `flash`, once.
     pub fn flash(&self, message: &str) {
         self.put(FLASH, message);
+    }
+
+    /// Moves the session to a new random ID and a new CSRF token, keeping its
+    /// values; the old ID stops working. Call it on login, logout and any
+    /// change of privilege, so an ID planted or seen before cannot ride along
+    /// (session fixation).
+    pub fn regenerate(&self) {
+        self.lock().remove(CSRF_FIELD);
+        self.renew.store(true, Ordering::Relaxed);
     }
 
     /// This session's CSRF token, created on first use.
@@ -208,6 +220,23 @@ impl Sessions {
         (random_token(), Data::default())
     }
 
+    /// Moves the session stored under `old` to a new ID and returns it.
+    fn rename(&self, old: &str, data: &Data) -> String {
+        let id = random_token();
+        #[cfg(feature = "db")]
+        if let Some(db) = &self.database {
+            let _ = db.with(|sql| sql.execute("DELETE FROM sessions WHERE id = ?1", [old]));
+            return id;
+        }
+        let mut store = self
+            .store
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        store.remove(old);
+        store.insert(id.clone(), (Arc::clone(data), Instant::now()));
+        id
+    }
+
     /// Writes the session back to the database store, if there is one.
     fn save(&self, id: &str, data: &Data) {
         #[cfg(feature = "db")]
@@ -232,12 +261,17 @@ impl Sessions {
     /// refreshing its cookie on the response.
     pub fn middleware(self) -> impl Fn(&Request, Next) -> Response + Send + Sync + 'static {
         move |request, next| {
-            let (id, data) = self.open(request.cookie(COOKIE));
+            let (mut id, data) = self.open(request.cookie(COOKIE));
+            let renew = Arc::new(AtomicBool::new(false));
             let mut request = request.clone();
             request.session = Some(Session {
                 data: Arc::clone(&data),
+                renew: Arc::clone(&renew),
             });
             let response = next(&request);
+            if renew.load(Ordering::Relaxed) {
+                id = self.rename(&id, &data);
+            }
             self.save(&id, &data);
             let secure = if self.secure { "; Secure" } else { "" };
             response.with_header(
@@ -394,6 +428,61 @@ mod tests {
             cookie,
             "an existing session keeps its ID"
         );
+    }
+
+    /// Logs in on `sessions`: the old ID and token die, the values move over.
+    fn regenerate_moves_the_session(sessions: Sessions) {
+        let app = Router::new().group(|web| {
+            web.middleware(sessions.middleware())
+                .get("/token", |request| {
+                    let session = request.session().unwrap();
+                    session.put("cart", "3");
+                    Response::text(200, &session.csrf_token())
+                })
+                .get("/login", |request| {
+                    request.session().unwrap().regenerate();
+                    Response::text(200, "")
+                })
+                .get("/state", |request| {
+                    let session = request.session().unwrap();
+                    let cart = session.get("cart").unwrap_or_default();
+                    Response::text(200, &format!("{cart} {}", session.csrf_token()))
+                })
+        });
+        let first = app.handle(&Request::get("/token"));
+        let (old, token) = (cookie_of(&first), String::from_utf8(first.body).unwrap());
+        let login = app.handle(&Request::get("/login").with_header("Cookie", &old));
+        let new = cookie_of(&login);
+        assert_ne!(new, old, "a new ID after login");
+        let state = |cookie: &str| {
+            String::from_utf8(
+                app.handle(&Request::get("/state").with_header("Cookie", cookie))
+                    .body,
+            )
+            .unwrap()
+        };
+        let moved = state(&new);
+        assert!(
+            moved.starts_with("3 "),
+            "values move to the new ID: {moved}"
+        );
+        assert!(!moved.ends_with(&token), "the CSRF token is replaced");
+        assert!(
+            !state(&old).starts_with("3"),
+            "the old ID no longer opens the session"
+        );
+    }
+
+    #[test]
+    fn regenerate_moves_a_memory_session() {
+        regenerate_moves_the_session(Sessions::new(Duration::from_secs(60)));
+    }
+
+    #[cfg(feature = "db")]
+    #[test]
+    fn regenerate_moves_a_database_session() {
+        let db = crate::db::Db::open(&crate::config::Config::parse("DB_DATABASE=:memory:"));
+        regenerate_moves_the_session(Sessions::new(Duration::from_secs(60)).database(db));
     }
 
     #[cfg(feature = "db")]

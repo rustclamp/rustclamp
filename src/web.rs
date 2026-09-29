@@ -30,6 +30,7 @@ mod form;
 mod request;
 mod session;
 mod throttle;
+mod view;
 
 use std::fs;
 use std::io::{BufReader, Write};
@@ -45,6 +46,7 @@ pub use form::{Form, Invalid};
 pub use request::{MAX_BODY, Request};
 pub use session::{COOKIE, CSRF_FIELD, Session, Sessions, csrf};
 pub use throttle::{Throttle, throttle};
+pub use view::{ToValue, Value};
 
 /// The web root, relative to the working directory. [`asset`] serves files from it.
 pub const PUBLIC: &str = "public";
@@ -230,12 +232,18 @@ pub trait Package {
     fn routes(self, router: Router) -> Router;
 }
 
-/// The view `name` of `package`, with `<!--key-->` markers filled as in
-/// [`render`]. The app's built override, `public/build/views/vendor/{package}/{name}.html`
+/// The view `name` of `package`, rendered with `data` as in [`render`]. The
+/// app's built override, `public/build/views/vendor/{package}/{name}.html`
 /// (source `app/resources/views/vendor/{package}/{name}.html`), wins over
-/// `embedded`, the package's own copy.
-pub fn package_view(package: &str, name: &str, embedded: &str, slots: &[(&str, &str)]) -> Response {
-    package_view_in(Path::new(PUBLIC), package, name, embedded, slots)
+/// `embedded`, the package's own copy. Views it extends or includes are the
+/// app's, so a package page can `@extends('layouts.app')`.
+pub fn package_view(
+    package: &str,
+    name: &str,
+    embedded: &str,
+    data: &[(&str, &dyn ToValue)],
+) -> Response {
+    package_view_in(Path::new(PUBLIC), package, name, embedded, data)
 }
 
 fn package_view_in(
@@ -243,17 +251,11 @@ fn package_view_in(
     package: &str,
     name: &str,
     embedded: &str,
-    slots: &[(&str, &str)],
+    data: &[(&str, &dyn ToValue)],
 ) -> Response {
-    let file = public
-        .join("build/views/vendor")
-        .join(package)
-        .join(format!("{name}.html"));
-    let mut page = fs::read_to_string(file).unwrap_or_else(|_| embedded.to_owned());
-    for (key, value) in slots {
-        page = page.replace(&format!("<!--{key}-->"), value);
-    }
-    html(200, page.into_bytes())
+    let full = format!("vendor/{package}/{name}");
+    let source = built_view(public, &full).unwrap_or_else(|| embedded.to_owned());
+    rendered(public, &full, &source, &Value::map(data))
 }
 
 /// The `{name}` values when `path` matches `pattern`, segment by segment.
@@ -340,36 +342,59 @@ pub fn redirect(location: &str) -> Response {
     Response::text(302, "").with_header("Location", location)
 }
 
-/// Serves a built view, `public/build/views/{name}.html`, or `503` if the
-/// frontend is not built yet.
+/// Renders the built view `name` without data, as [`render`] does.
 pub fn view(name: &str) -> Response {
-    let file = Path::new(PUBLIC)
-        .join("build/views")
-        .join(format!("{name}.html"));
-    match fs::read(file) {
-        Ok(body) => html(200, body),
+    render(name, &[])
+}
+
+/// Renders the built view `name`, `public/build/views/{name}.html` (source
+/// `app/resources/views/`), with `data`: Blade-style `{{ title }}`,
+/// `@foreach`, `@if`, `@extends` and `@include`, described in [`Value`]'s
+/// module. `{{ }}` escapes; `{!! !!}` does not. `503` if the frontend is not
+/// built yet; a view that fails to render is logged and answers `500`.
+///
+/// ```no_run
+/// use rustclamp::web::render;
+///
+/// let posts = vec!["First", "Second"];
+/// render("blog", &[("title", &"Blog"), ("posts", &posts)]);
+/// ```
+pub fn render(name: &str, data: &[(&str, &dyn ToValue)]) -> Response {
+    render_value(name, &Value::map(data))
+}
+
+fn render_value(name: &str, data: &Value) -> Response {
+    let public = Path::new(PUBLIC);
+    match built_view(public, name) {
+        Some(source) => rendered(public, name, &source, data),
         // The app's own error views are not built either, so use the built-in page.
-        Err(_) => page(
+        None => page(
             503,
             "The frontend is not built yet. If <code>clamp dev</code> is running, refresh in a moment; otherwise run <code>clamp dev</code>.",
         ),
     }
 }
 
-/// The built view `name` with each `<!--key-->` marker replaced by its value.
-/// Values are inserted as-is: pass text through [`escape`] first. A view that
-/// is not built yet (`503`) passes through untouched.
-pub fn render(name: &str, slots: &[(&str, &str)]) -> Response {
-    let mut response = view(name);
-    if response.status != 200 {
-        return response;
+/// The built view `name` (`layouts.app` or `layouts/app`) under `public`.
+fn built_view(public: &Path, name: &str) -> Option<String> {
+    if !view::is_view_name(name) {
+        return None;
     }
-    let mut page = String::from_utf8_lossy(&response.body).into_owned();
-    for (key, value) in slots {
-        page = page.replace(&format!("<!--{key}-->"), value);
+    let file = public
+        .join("build/views")
+        .join(format!("{}.html", name.replace('.', "/")));
+    fs::read_to_string(file).ok()
+}
+
+/// `200` with `source` rendered, or a logged `500`.
+fn rendered(public: &Path, name: &str, source: &str, data: &Value) -> Response {
+    match view::render(name, source, data, &|name| built_view(public, name)) {
+        Ok(body) => html(200, body.into_bytes()),
+        Err(problem) => {
+            Log::error(format_args!("{problem}"));
+            error(500)
+        }
     }
-    response.body = page.into_bytes();
-    response
 }
 
 /// Escapes text for HTML content and quoted attribute values.
@@ -381,32 +406,61 @@ pub fn escape(text: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// The Content-Security-Policy [`security_headers`] sends. Scripts only from
+/// the app's own files, so injected markup cannot run: no inline `<script>`
+/// and no `onclick=`. Styles may be inline (the built-in error page is) and
+/// fonts may come from Google Fonts, which the starter kits use.
+pub const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; \
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+    font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; \
+    object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+
 /// Middleware adding the browser security headers every page should carry:
-/// no MIME sniffing, no framing by other sites, no full URLs leaked as referrer.
+/// no MIME sniffing, no framing by other sites, no full URLs leaked as
+/// referrer, HTTPS only for a year once a browser has seen the site over
+/// HTTPS (browsers ignore HSTS on plain HTTP, so local development is
+/// unaffected), no camera, microphone or location access, and
+/// [`CONTENT_SECURITY_POLICY`]. A response that already sets
+/// `Content-Security-Policy` keeps its own.
 pub fn security_headers(request: &Request, next: Next) -> Response {
-    next(request)
+    let response = next(request);
+    let has_policy = response.header("content-security-policy").is_some();
+    let response = response
         .with_header("X-Content-Type-Options", "nosniff")
         .with_header("X-Frame-Options", "DENY")
         .with_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        .with_header("Strict-Transport-Security", "max-age=31536000")
+        .with_header(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=()",
+        );
+    if has_policy {
+        response
+    } else {
+        response.with_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    }
 }
 
 /// An error page for `status`: the app's built view `errors/{status}`, else
 /// `errors/{class}xx` (such as `errors/4xx`), else a built-in page. In the
-/// app's view, `<!--status-->` and `<!--reason-->` become the code and its
-/// reason phrase, so one `4xx` view serves every client error.
+/// app's view, `{{ status }}` and `{{ reason }}` are the code and its reason
+/// phrase, so one `4xx` view serves every client error. An error view that
+/// fails to render is logged and the built-in page answers instead.
 pub fn error(status: u16) -> Response {
+    let public = Path::new(PUBLIC);
+    let data = Value::map(&[("status", &status), ("reason", &reason(status))]);
     for name in [
         format!("errors/{status}"),
         format!("errors/{}xx", status / 100),
     ] {
-        let file = Path::new(PUBLIC)
-            .join("build/views")
-            .join(format!("{name}.html"));
-        if let Ok(body) = fs::read_to_string(file) {
-            let body = body
-                .replace("<!--status-->", &status.to_string())
-                .replace("<!--reason-->", reason(status));
-            return html(status, body.into_bytes());
+        if let Some(source) = built_view(public, &name) {
+            match view::render(&name, &source, &data, &|name| built_view(public, name)) {
+                Ok(body) => return html(status, body.into_bytes()),
+                Err(problem) => {
+                    Log::error(format_args!("{problem}"));
+                    break;
+                }
+            }
         }
     }
     page(status, "")
@@ -497,6 +551,10 @@ pub fn asset(path: &str) -> Response {
         .components()
         .all(|part| matches!(part, Component::Normal(_)))
     {
+        return error(404);
+    }
+    // Views are templates: they are served rendered, by a route, never raw.
+    if relative.starts_with("build/views") {
         return error(404);
     }
     let file = Path::new(PUBLIC).join(relative);
@@ -691,6 +749,31 @@ mod tests {
         let response = routes.handle(&Request::get("/"));
         assert_eq!(response.header("x-frame-options"), Some("DENY"));
         assert_eq!(response.header("x-content-type-options"), Some("nosniff"));
+        assert_eq!(
+            response.header("strict-transport-security"),
+            Some("max-age=31536000")
+        );
+        let policy = response.header("content-security-policy").unwrap();
+        assert!(
+            policy.contains("script-src 'self';") && !policy.contains("script-src 'self' 'unsafe")
+        );
+        assert!(policy.contains("frame-ancestors 'none'"));
+
+        let own = Router::new().middleware(security_headers).get("/", |_| {
+            json("{}").with_header("Content-Security-Policy", "default-src 'none'")
+        });
+        let response = own.handle(&Request::get("/"));
+        let policies: Vec<_> = response
+            .headers
+            .iter()
+            .filter(|(name, _)| name == "Content-Security-Policy")
+            .collect();
+        assert_eq!(
+            policies.len(),
+            1,
+            "a route's own policy is kept, not doubled"
+        );
+        assert_eq!(policies[0].1, "default-src 'none'");
     }
 
     #[test]
@@ -709,27 +792,37 @@ mod tests {
     }
 
     #[test]
-    fn package_view_prefers_the_app_override() {
+    fn package_view_prefers_the_app_override_and_extends_app_layouts() {
         let public = std::env::temp_dir().join(format!("clamp-pkg-{}", std::process::id()));
         let body = |response: Response| String::from_utf8(response.body).unwrap();
-        let slots = [("title", "Hi")];
+        let data: [(&str, &dyn ToValue); 1] = [("title", &"<Hi>")];
         assert_eq!(
             body(package_view_in(
                 &public,
                 "blog",
                 "index",
-                "<h1><!--title--></h1>",
-                &slots
+                "<h1>{{ title }}</h1>",
+                &data
             )),
-            "<h1>Hi</h1>"
+            "<h1>&lt;Hi&gt;</h1>"
         );
         let dir = public.join("build/views/vendor/blog");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("index.html"), "<h2><!--title--></h2>").unwrap();
-        let response = package_view_in(&public, "blog", "index", "<h1><!--title--></h1>", &slots);
+        fs::write(
+            dir.join("index.html"),
+            "@extends('layouts.app')@section('main')<h2>{{ title }}</h2>@endsection",
+        )
+        .unwrap();
+        fs::create_dir_all(public.join("build/views/layouts")).unwrap();
+        fs::write(
+            public.join("build/views/layouts/app.html"),
+            "<main>@yield('main')</main>",
+        )
+        .unwrap();
+        let response = package_view_in(&public, "blog", "index", "<h1>{{ title }}</h1>", &data);
         fs::remove_dir_all(&public).unwrap();
         assert_eq!(response.status, 200);
-        assert_eq!(body(response), "<h2>Hi</h2>");
+        assert_eq!(body(response), "<main><h2>&lt;Hi&gt;</h2></main>");
     }
 
     #[test]

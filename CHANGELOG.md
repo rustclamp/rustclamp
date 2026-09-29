@@ -2,8 +2,39 @@
 
 ## Unreleased
 
+### Changed (breaking)
+
+- Views use templates instead of `<!--key-->` markers (ADR 0012). Old callers
+  still compile but render wrong: markers are left as invisible comments, and
+  values passed through `escape` are escaped twice. To migrate:
+  - Replace `<!--key-->` with `{{ key }}`, or `{!! key !!}` for HTML you made.
+  - Drop `escape(...)` from values passed to `render`, `Request::render` and
+    `package_view`.
+  - `security_headers` now blocks inline `<script>` and `on*=` handlers: move
+    them into `resources/js`, or into `public/` with `vite-ignore`.
+  - `<!--status-->`/`<!--reason-->` become `{{ status }}`/`{{ reason }}`;
+    `<!--csrf-->` becomes `{!! csrf !!}`, and `<!--old:email-->` becomes
+    `{{ old.email }}`. `<!--flash-->`/`<!--errors-->` become
+    `@if(flash)…{{ flash }}…@endif` and `@foreach(errors as error)`.
+
 ### Added
 
+- Security: `security_headers` also sends a strict Content-Security-Policy
+  (`web::CONTENT_SECURITY_POLICY`; scripts only from the app's files, a
+  route's own policy wins), HSTS and a Permissions-Policy.
+  `Session::regenerate()` moves a session to a new ID and CSRF token (call it
+  on login). A `url` validation rule accepts only `http`/`https` links.
+- Views are templates (ADR 0012): a std-only Blade subset rendered at request
+  time from the Vite-built HTML. `{{ name }}` escapes, `{!! name !!}` does
+  not; `@if`/`@else`, `@foreach`, `@extends`/`@section`/`@yield`,
+  `@include`, with named values for components (`post: featured`). Data is
+  `web::Value`, built from anything `web::ToValue`
+  (text, numbers, bools, lists, options, and your models). `render`,
+  `Request::render` and `package_view` take `&[(&str, &dyn ToValue)]`
+  instead of `<!--key-->` slots; `Request::render` passes `csrf`, `flash`,
+  `errors` and `old`; error views get `status` and `reason`. An unknown name
+  or broken view is logged and answers `500`. `public/build/views/` is no
+  longer served raw.
 - The CLI is 0.3.0 (release tag `clamp-v0.3.0`): database, crypto and `.env`
   commands, and `clamp init --web` apps with `db` and `crypto`.
 
@@ -19,8 +50,8 @@
 - Web: `Router::state` and `Request::state` share app values with handlers
   (`request.db()` with `db`); `Request::validate` with `required`, `min`,
   `max`, `email` and `integer` rules, and `Invalid::back` redirecting with
-  errors and old input; `Session::flash`; `Request::render` fills
-  `<!--csrf-->`, `<!--flash-->`, `<!--errors-->` and `<!--old:field-->`.
+  errors and old input; `Session::flash`; `Request::render` passes the
+  CSRF field, flash, errors and old input to the view.
 - `Sessions::database(db)`: sessions in a SQLite `sessions` table, so they
   survive restarts; expired rows are pruned.
 - `rustclamp::build::states`: every file in `app/database/states/` becomes
