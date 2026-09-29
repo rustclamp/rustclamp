@@ -30,6 +30,8 @@ jobs:
         working-directory: rustclamp
         run: |
           cargo fmt --check
+          # boundaries.py reads offline metadata for every target, wasm-only crates included
+          cargo fetch
           cargo clippy --all-features --all-targets -- -D warnings
           cargo test --all-features
           RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
