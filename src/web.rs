@@ -1,21 +1,17 @@
 //! A small, synchronous HTTP server for Clamp web applications.
 //!
 //! Enabled by the `web` feature. It uses only the standard library: the app
-//! supplies one routing function and [`serve`] handles ports, request parsing,
-//! responses and static files. `public/` is the web root; Vite builds views and
-//! assets into `public/build/`.
+//! declares a [`Router`] and [`serve`] handles ports, request parsing, responses
+//! and static files. `public/` is the web root; Vite builds views and assets
+//! into `public/build/`. A `GET` that matches no route serves the file of that
+//! name from `public/`; anything else is `404`.
 //!
 //! ```no_run
-//! use rustclamp::web::{self, Request, Response};
+//! use rustclamp::web::{self, Router, json};
 //!
-//! fn routes(request: &Request) -> Response {
-//!     match (request.method.as_str(), request.path.as_str()) {
-//!         ("GET", "/") => web::view("welcome"),
-//!         ("GET", "/api/health") => web::json(r#"{"status":"ok"}"#),
-//!         ("GET", _) => web::asset(&request.path),
-//!         _ => Response::text(404, "Not found"),
-//!     }
-//! }
+//! let routes = Router::new()
+//!     .view("/", "welcome")
+//!     .get("/api/health", |_| json(r#"{"status":"ok"}"#));
 //!
 //! web::serve(routes);
 //! ```
@@ -44,6 +40,75 @@ impl Request {
         Self {
             method: method.into(),
             path: path.into(),
+        }
+    }
+
+    /// A `GET` request for `path`.
+    pub fn get(path: &str) -> Self {
+        Self::new("GET", path)
+    }
+
+    /// A `POST` request for `path`.
+    pub fn post(path: &str) -> Self {
+        Self::new("POST", path)
+    }
+}
+
+type Handler = Box<dyn Fn(&Request) -> Response>;
+
+/// The app's routes: exact method and path matches, checked in order.
+#[derive(Default)]
+pub struct Router {
+    routes: Vec<(&'static str, String, Handler)>,
+}
+
+impl Router {
+    /// An empty router. Unmatched `GET`s still serve files from [`PUBLIC`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Answers `GET path` with `handler`.
+    #[must_use]
+    pub fn get(self, path: &str, handler: impl Fn(&Request) -> Response + 'static) -> Self {
+        self.route("GET", path, handler)
+    }
+
+    /// Answers `POST path` with `handler`.
+    #[must_use]
+    pub fn post(self, path: &str, handler: impl Fn(&Request) -> Response + 'static) -> Self {
+        self.route("POST", path, handler)
+    }
+
+    /// Answers `GET path` with the built view `name`, as [`view`] does.
+    #[must_use]
+    pub fn view(self, path: &str, name: &'static str) -> Self {
+        self.get(path, move |_| view(name))
+    }
+
+    /// Answers `method path` with `handler`.
+    #[must_use]
+    pub fn route(
+        mut self,
+        method: &'static str,
+        path: &str,
+        handler: impl Fn(&Request) -> Response + 'static,
+    ) -> Self {
+        // ponytail: exact paths only; add `{param}` segments when an app needs them
+        self.routes.push((method, path.into(), Box::new(handler)));
+        self
+    }
+
+    /// Runs the first matching route, else a static file for `GET`, else `404`.
+    pub fn handle(&self, request: &Request) -> Response {
+        let matched = self
+            .routes
+            .iter()
+            .find(|(method, path, _)| *method == request.method && *path == request.path);
+        match matched {
+            Some((_, _, handler)) => handler(request),
+            None if request.method == "GET" => asset(&request.path),
+            None => Response::text(404, "Not found"),
         }
     }
 }
@@ -134,7 +199,7 @@ pub fn asset(path: &str) -> Response {
 ///
 /// Uses `PORT` when set; otherwise the first free port from 8080 to 8099, then
 /// any free port. Exits the process if `PORT` is set but unavailable.
-pub fn serve(routes: impl Fn(&Request) -> Response) {
+pub fn serve(routes: Router) {
     let ports: Vec<u16> = match std::env::var("PORT") {
         Ok(port) => vec![port.parse().expect("PORT must be a number")],
         Err(_) => (8080..8100).chain([0]).collect(),
@@ -154,14 +219,14 @@ pub fn serve(routes: impl Fn(&Request) -> Response) {
     }
 }
 
-fn respond(mut stream: TcpStream, routes: &impl Fn(&Request) -> Response) {
+fn respond(mut stream: TcpStream, routes: &Router) {
     let mut request_line = String::new();
     let _ = BufReader::new(&stream).read_line(&mut request_line);
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("");
     let target = parts.next().unwrap_or("/");
     let path = target.split(['?', '#']).next().unwrap_or("/");
-    let response = routes(&Request::new(method, path));
+    let response = routes.handle(&Request::new(method, path));
     let reason = if response.status == 200 {
         "OK"
     } else {
@@ -186,6 +251,17 @@ mod tests {
         assert_eq!(asset("/../Cargo.toml").status, 404);
         assert_eq!(asset("/assets/../../Cargo.toml").status, 404);
         assert_eq!(asset("//etc/passwd").status, 404);
+    }
+
+    #[test]
+    fn router_matches_method_and_path_then_falls_back() {
+        let routes = Router::new()
+            .get("/hello", |_| json("{}"))
+            .post("/hello", |_| Response::text(201, "created"));
+        assert_eq!(routes.handle(&Request::get("/hello")).status, 200);
+        assert_eq!(routes.handle(&Request::post("/hello")).status, 201);
+        assert_eq!(routes.handle(&Request::get("/missing.css")).status, 404);
+        assert_eq!(routes.handle(&Request::new("DELETE", "/hello")).status, 404);
     }
 
     #[test]

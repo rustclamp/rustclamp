@@ -13,7 +13,7 @@ refresh after changes.
 
 ```
 app/routes.rs              routes: GET / is the welcome view, GET /api/health returns JSON
-app/main.rs, app/lib.rs    starts the server; lib.rs exposes modules to tests
+app/main.rs, app/lib.rs    start the server; lib.rs exposes routes() to tests
 resources/views/           pages (Vite entries), e.g. welcome.html
 resources/css, resources/js
 public/                    web root for static files; public/build/ is generated

@@ -1,3 +1,3 @@
-//! Application code. `main.rs` starts the server; tests in `tests/` import from here.
+mod routes;
 
-pub mod routes;
+pub use routes::routes;
