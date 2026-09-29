@@ -17,7 +17,7 @@ app/                             everything the app is made of; replace it to de
   lib.rs                         the map: declares every Rust module (no mod.rs files)
   main.rs                        starts the server with settings from .env
   config/app.rs                  typed settings; .env.example lists the keys
-  database/migrations.rs         the schema, one named SQL migration at a time
+  database/migrations.rs         every migration; each one a file in database/migrations/
   routes/web.rs, routes/api.rs   pages, JSON (throttled)
   http/controllers/              controller.rs is the base: `use super::controller::*;`
   http/middleware/               request_log.rs: logs every request at debug level
@@ -40,7 +40,10 @@ Packages made with `clamp init --package` bring their own routes, views and
 tests; add one with `.package(...)` in `app/lib.rs`, and override its views in
 `app/resources/views/vendor/{package}/`.
 The database is `rustclamp::db`, the `db` feature: SQLite compiled in, opened
-from `DB_CONNECTION` and `DB_DATABASE`. `Db::with` lends the connection; use
+from `DB_CONNECTION` and `DB_DATABASE`. Migrations are `Migration` structs
+with `up` and `down` written with `Schema`; they run at startup, and
+`cargo run -- migrate:rollback` undoes the last batch. `db.table("posts")`
+builds queries and `Db::with` lends the connection for anything else. Use
 `rustclamp::db::sqlite` (rusqlite) for its types rather than adding `rusqlite`.
 `cargo dev` starts only the Rust server; run `npm run build` first so
 `public/build/` exists.

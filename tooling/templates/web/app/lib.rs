@@ -50,7 +50,7 @@ pub mod routes {
 pub fn routes(config: &Config) -> Router {
     let settings = config::Settings::from(config);
     let db = Db::open(config);
-    db.migrate(database::migrations::ALL)
+    db.migrate(&database::migrations::all())
         .unwrap_or_else(|error| panic!("migration failed: {error}"));
     let router = Router::new()
         .middleware(security_headers)

@@ -8,24 +8,51 @@
 //! Use the re-exported [`sqlite`] (rusqlite) rather than adding `rusqlite` to
 //! the app: two versions of it cannot link into one binary.
 //!
+//! A migration is a struct implementing [`Migration`], one per file, with
+//! `up` and `down` SQL written by [`Schema`] or by hand. [`Db::table`] builds
+//! queries; [`Db::with`] lends the connection for anything else.
+//!
 //! ```
 //! use rustclamp::config::Config;
-//! use rustclamp::db::Db;
+//! use rustclamp::db::{Db, Migration, Schema, sqlite::params};
+//!
+//! struct CreatePosts;
+//!
+//! impl Migration for CreatePosts {
+//!     fn name(&self) -> &'static str {
+//!         "2026_09_29_000001_create_posts"
+//!     }
+//!     fn up(&self) -> String {
+//!         Schema::create("posts", |table| {
+//!             table.id();
+//!             table.string("title");
+//!             table.timestamps();
+//!         })
+//!     }
+//!     fn down(&self) -> String {
+//!         Schema::drop("posts")
+//!     }
+//! }
 //!
 //! let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
-//! db.migrate(&[("0001_create_posts", "CREATE TABLE posts (title TEXT NOT NULL)")])
+//! db.migrate(&[&CreatePosts]).unwrap();
+//! db.table("posts").insert(&["title"], params!["Hello"]).unwrap();
+//! let titles = db
+//!     .table("posts")
+//!     .where_eq("title", &"Hello")
+//!     .get(|row| row.get::<_, String>("title"))
 //!     .unwrap();
-//! db.with(|sql| sql.execute("INSERT INTO posts (title) VALUES (?1)", ["Hello"]))
-//!     .unwrap();
-//! let count: i64 = db
-//!     .with(|sql| sql.query_row("SELECT count(*) FROM posts", [], |row| row.get(0)))
-//!     .unwrap();
-//! assert_eq!(count, 1);
+//! assert_eq!(titles, ["Hello"]);
 //! ```
 
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::config::Config;
+
+mod query;
+mod schema;
+pub use query::Query;
+pub use schema::{Column, Schema, Table};
 
 pub use rusqlite as sqlite;
 use rusqlite::Connection;
@@ -90,18 +117,30 @@ impl Db {
         work(&connection)
     }
 
-    /// Runs each `(name, sql)` migration not yet run, in order, recording it
-    /// in the `migrations` table. A migration that fails is rolled back and
-    /// stops the rest.
-    pub fn migrate(&self, migrations: &[(&str, &str)]) -> sqlite::Result<()> {
+    /// A query on `table`; see [`Query`].
+    pub fn table<'a>(&'a self, table: &str) -> Query<'a> {
+        Query::new(self, table)
+    }
+
+    /// Runs `up` for each migration not yet run, in order, as one batch,
+    /// recording each in the `migrations` table. A migration that fails is
+    /// rolled back and stops the rest.
+    pub fn migrate(&self, migrations: &[&dyn Migration]) -> sqlite::Result<()> {
         self.with(|connection| {
             connection.execute_batch(
                 "CREATE TABLE IF NOT EXISTS migrations (
                     name TEXT PRIMARY KEY,
+                    batch INTEGER NOT NULL,
                     ran_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )",
             )?;
-            for (name, sql) in migrations {
+            let batch: i64 = connection.query_row(
+                "SELECT coalesce(max(batch), 0) + 1 FROM migrations",
+                [],
+                |row| row.get(0),
+            )?;
+            for migration in migrations {
+                let name = migration.name();
                 let ran: bool = connection.query_row(
                     "SELECT EXISTS (SELECT 1 FROM migrations WHERE name = ?1)",
                     [name],
@@ -111,18 +150,93 @@ impl Db {
                     continue;
                 }
                 let transaction = connection.unchecked_transaction()?;
-                transaction.execute_batch(sql)?;
-                transaction.execute("INSERT INTO migrations (name) VALUES (?1)", [name])?;
+                transaction.execute_batch(&migration.up())?;
+                transaction.execute(
+                    "INSERT INTO migrations (name, batch) VALUES (?1, ?2)",
+                    rusqlite::params![name, batch],
+                )?;
                 transaction.commit()?;
             }
             Ok(())
         })
     }
+
+    /// Runs `down` for every migration in the last batch, newest first, and
+    /// returns their names. Each one is undone in its own transaction.
+    ///
+    /// # Errors
+    ///
+    /// When SQL fails, or a migration in the batch is missing from
+    /// `migrations`, which would leave its `down` unknown.
+    pub fn rollback(&self, migrations: &[&dyn Migration]) -> Result<Vec<&'static str>, String> {
+        self.with(|connection| {
+            let names: Vec<String> = connection
+                .prepare(
+                    "SELECT name FROM migrations
+                     WHERE batch = (SELECT max(batch) FROM migrations)
+                     ORDER BY rowid DESC",
+                )
+                .and_then(|mut query| query.query_map([], |row| row.get(0))?.collect())
+                .map_err(|error| error.to_string())?;
+            let mut undone = Vec::new();
+            for name in names {
+                let migration = migrations
+                    .iter()
+                    .find(|migration| migration.name() == name)
+                    .ok_or_else(|| format!("migration {name} ran but is not in the list"))?;
+                let transaction = connection
+                    .unchecked_transaction()
+                    .map_err(|error| error.to_string())?;
+                transaction
+                    .execute_batch(&migration.down())
+                    .and_then(|()| {
+                        transaction.execute("DELETE FROM migrations WHERE name = ?1", [&name])
+                    })
+                    .map_err(|error| format!("{name}: {error}"))?;
+                transaction.commit().map_err(|error| error.to_string())?;
+                undone.push(migration.name());
+            }
+            Ok(undone)
+        })
+    }
+}
+
+/// One change to the database schema, like a Laravel migration class. Its
+/// name orders it and is recorded once it has run, so never rename or edit a
+/// migration that has run anywhere: add a new one.
+pub trait Migration {
+    /// A unique name that sorts in run order, such as
+    /// `2026_09_29_000001_create_posts`.
+    fn name(&self) -> &'static str;
+    /// The SQL that applies the change, often [`Schema::create`].
+    fn up(&self) -> String;
+    /// The SQL that undoes [`up`](Self::up), often [`Schema::drop`].
+    fn down(&self) -> String;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A migration from literal SQL.
+    struct Sql(&'static str, &'static str, &'static str);
+
+    impl Migration for Sql {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+        fn up(&self) -> String {
+            self.1.to_owned()
+        }
+        fn down(&self) -> String {
+            self.2.to_owned()
+        }
+    }
+
+    fn count(db: &Db, sql: &str) -> i64 {
+        db.with(|connection| connection.query_row(sql, [], |row| row.get(0)))
+            .unwrap()
+    }
 
     fn memory() -> Db {
         Db::open(&Config::parse("DB_DATABASE=:memory:"))
@@ -131,9 +245,13 @@ mod tests {
     #[test]
     fn migrations_run_once() {
         let db = memory();
-        let migrations = [("0001", "CREATE TABLE posts (title TEXT)")];
-        db.migrate(&migrations).unwrap();
-        db.migrate(&migrations).unwrap();
+        let posts = Sql(
+            "0001",
+            "CREATE TABLE posts (title TEXT)",
+            "DROP TABLE posts",
+        );
+        db.migrate(&[&posts]).unwrap();
+        db.migrate(&[&posts]).unwrap();
         let ran: i64 = db
             .with(|sql| sql.query_row("SELECT count(*) FROM migrations", [], |row| row.get(0)))
             .unwrap();
@@ -143,8 +261,8 @@ mod tests {
     #[test]
     fn failed_migration_is_rolled_back_and_not_recorded() {
         let db = memory();
-        let migrations = [("0001", "CREATE TABLE posts (title TEXT); NOT SQL")];
-        assert!(db.migrate(&migrations).is_err());
+        let broken = Sql("0001", "CREATE TABLE posts (title TEXT); NOT SQL", "");
+        assert!(db.migrate(&[&broken]).is_err());
         let tables: i64 = db
             .with(|sql| {
                 sql.query_row(
@@ -158,9 +276,56 @@ mod tests {
     }
 
     #[test]
+    fn rollback_undoes_the_last_batch_newest_first() {
+        let db = memory();
+        let posts = Sql(
+            "0001",
+            "CREATE TABLE posts (id INTEGER PRIMARY KEY)",
+            "DROP TABLE posts",
+        );
+        let tags = Sql(
+            "0002",
+            "CREATE TABLE tags (post_id INTEGER REFERENCES posts (id))",
+            "DROP TABLE tags",
+        );
+        let views = Sql("0003", "CREATE TABLE views (n INTEGER)", "DROP TABLE views");
+        db.migrate(&[&posts]).unwrap();
+        db.migrate(&[&posts, &tags, &views]).unwrap();
+        let all: [&dyn Migration; 3] = [&posts, &tags, &views];
+        assert_eq!(db.rollback(&all).unwrap(), ["0003", "0002"]);
+        assert_eq!(
+            count(
+                &db,
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name != 'migrations'"
+            ),
+            1
+        );
+        assert_eq!(db.rollback(&all).unwrap(), ["0001"]);
+        assert!(db.rollback(&all).unwrap().is_empty());
+        db.migrate(&all).unwrap();
+        assert_eq!(
+            count(&db, "SELECT count(DISTINCT batch) FROM migrations"),
+            1
+        );
+    }
+
+    #[test]
+    fn rollback_needs_every_migration_in_the_batch() {
+        let db = memory();
+        db.migrate(&[&Sql(
+            "0001",
+            "CREATE TABLE posts (id INTEGER)",
+            "DROP TABLE posts",
+        )])
+        .unwrap();
+        let error = db.rollback(&[]).unwrap_err();
+        assert!(error.contains("0001"), "{error}");
+    }
+
+    #[test]
     fn clones_share_the_database() {
         let db = memory();
-        db.migrate(&[("0001", "CREATE TABLE posts (title TEXT)")])
+        db.migrate(&[&Sql("0001", "CREATE TABLE posts (title TEXT)", "")])
             .unwrap();
         let other = db.clone();
         other
