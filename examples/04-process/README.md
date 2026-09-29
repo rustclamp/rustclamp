@@ -49,6 +49,16 @@ cargo run --offline --locked --manifest-path examples/04-process/Cargo.toml --ex
 cargo test --offline --locked --manifest-path examples/04-process/Cargo.toml
 ```
 
+To export both real process projections for the `clamp` inspection commands,
+enable the optional tooling feature:
+
+```sh
+cargo run --offline --locked --manifest-path examples/04-process/Cargo.toml \
+  --example inspection-json --features tooling-inspection > architecture.json
+cargo run --offline --locked --manifest-path tooling/Cargo.toml -- \
+  tree architecture.json --process example.process.cli
+```
+
 ## Runtime Selection vs Build Targets
 
 `build-targets/` contrasts one binary that selects CLI or Worker at runtime

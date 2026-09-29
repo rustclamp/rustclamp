@@ -1,0 +1,2 @@
+vite: npx vp build --watch
+app: cargo run

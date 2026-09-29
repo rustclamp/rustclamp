@@ -48,3 +48,17 @@
   architecture/evidence documentation.
 - Added release workload comparisons for direct Axum and SQLx paths, including
   measurement-only allocation instrumentation and dependency/build/binary reports.
+- Added transport-neutral message envelopes, bounded in-memory and JetStream
+  messaging, process-separated email workers, classified retries, deadlines,
+  dead-letter handling, and tracing correlation.
+- Added the PostgreSQL transactional outbox/inbox CreateOrder proof, payment
+  uncertainty and compensation, process/ownership inspection, and live crash-
+  window evidence against PostgreSQL and JetStream.
+- Added the dependency-light Scheduler target with controlled-clock, overlap,
+  misfire, admission, and drain checks, plus Phase 7 throughput and dependency
+  measurements.
+- Completed Phase 8 deterministic loop/device proofs, a Kernel-free no_std +
+  alloc consumer, portability findings, cross-domain dependency-absence checks,
+  and 1/5/20/50/100/500-module plus loop/footprint measurements.
+- Added a Phase 9 RustClamp HTTP site-hosting example and compared its responses
+  byte-for-byte with both Python preview sites.

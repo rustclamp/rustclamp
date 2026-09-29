@@ -1,0 +1,44 @@
+[package]
+name = "rustclamp-example-device-loop"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.1"
+publish = false
+
+[features]
+default = []
+tokio-service = ["rustclamp-runtime/tokio"]
+tooling-inspection = ["dep:rustclamp-tooling"]
+
+[dependencies]
+rustclamp-core = { version = "0.1.0", path = "../../../core" }
+rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
+rustclamp-runtime = { version = "0.1.0", path = "../../../runtime" }
+rustclamp-tooling = { version = "0.1.0", path = "../../tooling", optional = true }
+
+[[example]]
+name = "inspection-json"
+path = "examples/inspection-json.rs"
+required-features = ["tooling-inspection"]
+
+[[example]]
+name = "11-device-loop"
+path = "examples/run.rs"
+
+[[example]]
+name = "11-device-loop-direct"
+path = "examples/direct.rs"
+
+[[bench]]
+name = "loop"
+path = "benches/loop.rs"
+harness = false
+
+[workspace]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"

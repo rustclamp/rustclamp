@@ -28,6 +28,7 @@ fn map_user_created(event: UserCreated, context: PublishContext) -> MessageEnvel
         schema_version: 1,
         correlation_id: context.correlation_id,
         causation_id: None,
+        deadline_unix_ms: None,
         payload,
     }
 }

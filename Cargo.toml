@@ -7,6 +7,11 @@ description = "A minimal synchronous entrypoint for Clamp applications."
 repository = "https://github.com/rustclamp/rustclamp"
 readme = "README.md"
 publish = false
+autoexamples = false
+
+[features]
+# Optional std-only HTTP server for `clamp init --web` apps.
+web = []
 
 [[example]]
 name = "00-pico"

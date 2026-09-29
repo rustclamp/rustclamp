@@ -8,6 +8,15 @@ publish = false
 [dependencies]
 rustclamp-core = { version = "0.1.0", path = "../../../core" }
 rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
+rustclamp-tooling = { version = "0.1.0", path = "../../tooling", optional = true }
+
+[features]
+tooling-inspection = ["dep:rustclamp-tooling"]
+
+[[example]]
+name = "inspection-json"
+path = "examples/inspection-json.rs"
+required-features = ["tooling-inspection"]
 
 [workspace]
 

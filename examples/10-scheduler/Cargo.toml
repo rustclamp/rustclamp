@@ -1,0 +1,25 @@
+[package]
+name = "rustclamp-example-scheduler"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.1"
+publish = false
+
+[dependencies]
+futures-executor = "0.3"
+rustclamp-core = { version = "0.1.0", path = "../../../core" }
+rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
+rustclamp-scheduler = { version = "0.1.0", path = "../../../scheduler" }
+
+[[example]]
+name = "10-scheduler"
+path = "examples/ticks.rs"
+
+[workspace]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"

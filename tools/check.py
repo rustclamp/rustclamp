@@ -23,6 +23,7 @@ PACKAGE_TO_REPO = {
     "rustclamp-postgres": "postgres",
     "rustclamp-messaging": "messaging",
     "rustclamp-worker": "worker",
+    "rustclamp-scheduler": "scheduler",
 }
 
 
@@ -133,6 +134,12 @@ def check_examples(root):
         ("05-lifecycle", "rustclamp-example-lifecycle"),
         ("06-users", "rustclamp-example-users"),
         ("07-messaging", "rustclamp-example-messaging"),
+        ("08-email-worker", "rustclamp-example-email-worker"),
+        ("09-create-order", "rustclamp-example-create-order"),
+        ("10-scheduler", "rustclamp-example-scheduler"),
+        ("11-device-loop", "rustclamp-example-device-loop"),
+        ("12-platform-neutral", "rustclamp-example-platform-neutral"),
+        ("13-site-server", "rustclamp-example-site-server"),
     )
     for example, package_name in examples:
         example_root = root / "rustclamp/examples" / example
@@ -142,13 +149,32 @@ def check_examples(root):
              "--manifest-path", str(manifest)], cwd=root, text=True))
         dependencies = resolved_dependencies(metadata, package_name)
         assert "rustclamp" not in dependencies, f"{example} unexpectedly depends on the facade"
+        if example in {"04-process", "05-lifecycle", "09-create-order", "11-device-loop"}:
+            assert "rustclamp-tooling" not in dependencies, (
+                f"{example} activated optional inspection tooling by default"
+            )
+        if example == "11-device-loop":
+            assert "tokio" not in dependencies, "default device loop activated Tokio"
+        if example == "12-platform-neutral":
+            assert "rustclamp-kernel" not in dependencies, "platform-neutral consumer activated Kernel"
         print(f"{example} dependency graph: {', '.join(sorted(dependencies))}; facade absent")
 
         run("cargo", "fmt", "--manifest-path", str(manifest), "--", "--check", cwd=root)
         run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
             "--all-targets", "--", "-D", "warnings", cwd=root)
         run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest), cwd=root)
-        if example != "06-users":
+        if example == "11-device-loop":
+            run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--all-targets", "--all-features", "--", "-D", "warnings", cwd=root)
+            run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--all-features", cwd=root)
+            run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--example", "11-device-loop-direct", cwd=root)
+            run("cargo", "build", "--offline", "--locked", "--release", "--manifest-path",
+                str(manifest), "--examples", cwd=root)
+            run("cargo", "bench", "--offline", "--locked", "--manifest-path", str(manifest),
+                "--bench", "loop", cwd=root)
+        if example not in {"06-users", "09-create-order", "13-site-server"}:
             run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--example", example, cwd=root)
         if example == "05-lifecycle":
@@ -236,6 +262,146 @@ def check_pico_runtime_absence(root):
     print("isolated Pico: Tokio feature absent")
 
 
+def check_tooling(root):
+    manifest = root / "rustclamp/tooling/Cargo.toml"
+    run("cargo", "fmt", "--manifest-path", str(manifest), "--", "--check", cwd=root)
+    run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
+        "--all-targets", "--", "-D", "warnings", cwd=root)
+    run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest), cwd=root)
+    run("cargo", "doc", "--offline", "--locked", "--manifest-path", str(manifest),
+        "--no-deps", cwd=root, env={**os.environ, "RUSTDOCFLAGS": "-D warnings"})
+    run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+        "--", "--help", cwd=root)
+    run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
+        "--", "check", "--offline", "--manifest-path", str(manifest), cwd=root)
+    check_tooling_generator(root)
+
+
+def check_tooling_generator(root):
+    tooling_manifest = root / "rustclamp/tooling/Cargo.toml"
+    facade = root / "rustclamp"
+    git_dependency = 'git = "https://github.com/rustclamp/rustclamp", branch = "main"'
+    with tempfile.TemporaryDirectory(prefix="clamp-init-") as temporary:
+        for template, expected in (
+            ("blank", "Hello from Clamp!"),
+            ("app", "Health check: ready"),
+            ("tui", "Clamp TUI"),
+            ("web", None),  # ponytail: long-running server, checked and tested only
+        ):
+            project = Path(temporary) / template
+            command = [
+                "cargo", "run", "--offline", "--locked", "--manifest-path",
+                str(tooling_manifest), "--", "init", str(project), f"--{template}",
+            ]
+            run(*command, cwd=root)
+
+            manifest = project / "Cargo.toml"
+            contents = manifest.read_text()
+            assert git_dependency in contents, f"{template} did not use the public facade dependency"
+            contents = contents.replace(git_dependency, f'path = "{facade}"')
+            manifest.write_text(contents)
+
+            run("cargo", "check", "--offline", "--manifest-path", str(manifest), cwd=root)
+            run("cargo", "test", "--offline", "--manifest-path", str(manifest), cwd=root)
+            if template == "web":
+                for name in ("package.json", "vite.config.ts", "app/routes.rs", "tests/routes.rs",
+                             "resources/views/welcome.html", "public/robots.txt"):
+                    assert (project / name).exists(), f"web template omitted {name}"
+            if expected:
+                output = subprocess.check_output(
+                    ["cargo", "run", "--offline", "--manifest-path", str(manifest)],
+                    cwd=root, text=True, input="",
+                )
+                assert expected in output, f"{template} output omitted {expected!r}: {output}"
+            global CHECKS_PASSED
+            CHECKS_PASSED += 1
+            print(f"generated {template} project checked, tested" + (", and ran" if expected else ""))
+
+
+def compare_tooling_projection(root, example, export_args, expected_processes):
+    example_manifest = root / f"rustclamp/examples/{example}/Cargo.toml"
+    tooling_manifest = root / "rustclamp/tooling/Cargo.toml"
+    document_text = subprocess.check_output(
+        ["cargo", "run", "--quiet", "--offline", "--locked", "--manifest-path",
+         str(example_manifest), *export_args],
+        cwd=root, text=True)
+    document = json.loads(document_text)
+    processes = {process["id"]: process for process in document["processes"]}
+    assert set(processes) == set(expected_processes), (
+        f"{example} exported unexpected process IDs: {sorted(processes)}"
+    )
+
+    def clamp(*arguments):
+        return subprocess.check_output(
+            ["cargo", "run", "--quiet", "--offline", "--locked", "--manifest-path",
+             str(tooling_manifest), "--", *arguments], cwd=root, text=True)
+
+    with tempfile.TemporaryDirectory(prefix="clamp-inspection-") as temporary:
+        path = Path(temporary) / "architecture.json"
+        path.write_text(document_text)
+        for process_id, process in processes.items():
+            summary = clamp("inspect", str(path), "--process", process_id)
+            assert f"Process: {process_id}" in summary
+            assert f"Included modules: {len(process['included_modules'])}" in summary
+
+            tree = clamp("tree", str(path), "--process", process_id)
+            for module in process["included_modules"]:
+                assert module["id"] in tree, f"tree omitted {module['id']} from {process_id}"
+
+            graph = clamp("graph", str(path), "--process", process_id)
+            for module in process["included_modules"]:
+                for parent, child in zip(module["path"], module["path"][1:]):
+                    expected = f"{parent} -> {child} [inclusion]"
+                    assert expected in graph, f"graph omitted {expected}"
+            for requirement in process["requirements"]:
+                provider = requirement["provider"]
+                if provider is not None:
+                    expected = (
+                        f"{requirement['consumer']} -> {provider} "
+                        f"[capability:{requirement['capability']}]"
+                    )
+                    assert expected in graph, f"graph omitted {expected}"
+            for contribution in process["contributions"]:
+                expected = (
+                    f"{contribution['contributor']} -> {contribution['consumer']} "
+                    f"[contribution:{contribution['target']}]"
+                )
+                assert expected in graph, f"graph omitted {expected}"
+
+            included = next(
+                module for module in process["included_modules"]
+                if module["reason"]["kind"] == "capability_provider"
+            )
+            explanation = clamp("why", str(path), included["id"], "--process", process_id)
+            assert " -> ".join(included["path"]) in explanation
+
+            if process["exclusions"]:
+                excluded = process["exclusions"][0]
+                explanation = clamp("why", str(path), excluded["id"], "--process", process_id)
+                assert excluded["reason"] in explanation
+        print(f"clamp inspect/tree/graph/why match the {example} projections")
+
+
+def check_tooling_reference(root):
+    compare_tooling_projection(
+        root, "04-process", ["--example", "inspection-json", "--features", "tooling-inspection"],
+        ["example.process.cli", "example.process.worker"],
+    )
+    compare_tooling_projection(
+        root, "05-lifecycle", ["--example", "inspection-json", "--features", "tooling-inspection"],
+        ["example.lifecycle.worker", "example.lifecycle.reporter"],
+    )
+    compare_tooling_projection(
+        root, "11-device-loop", ["--example", "inspection-json", "--features", "tooling-inspection"],
+        ["example.device-loop.simulation"],
+    )
+    compare_tooling_projection(
+        root, "09-create-order",
+        ["--bin", "phase7-inspect", "--features", "tooling-inspection", "--", "--tooling-json"],
+        ["orders-api", "outbox-publisher", "orders-worker", "orders-scheduler"],
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
@@ -250,6 +416,8 @@ def main():
         check_pico_runtime_absence(root)
         check_examples(root)
         check_process_build_targets(root)
+        check_tooling(root)
+        check_tooling_reference(root)
         # Copy each package and only its declared internal dependency closure out of the
         # coordination workspace. Unrelated siblings cannot mask a package failure.
         for repo in REPOS:

@@ -22,6 +22,7 @@ ALLOWED = {
         "serde_derive", "serde_json", "syn", "unicode-ident", "zmij",
         "rustclamp-core", "rustclamp-messaging",
     },
+    "rustclamp-scheduler": {"rustclamp-core"},
     "rustclamp-runtime": {
     'bytes',
     'errno',
@@ -214,6 +215,7 @@ ALLOWED = {
     'thiserror-impl',
     'tinystr',
     'tinyvec',
+    'tinyvec_macros',
     'tokio',
     'tokio-macros',
     'tokio-stream',

@@ -96,4 +96,10 @@ From the `rustclamp` repository:
 cargo run --offline --locked --manifest-path examples/05-lifecycle/Cargo.toml --example 05-lifecycle
 cargo test --offline --locked --manifest-path examples/05-lifecycle/Cargo.toml
 cargo test --offline --locked --all-features --manifest-path examples/05-lifecycle/Cargo.toml
+cargo run --offline --locked --manifest-path examples/05-lifecycle/Cargo.toml \
+  --example inspection-json --features tooling-inspection > lifecycle-architecture.json
 ```
+
+The opt-in exporter contains only the Worker and Reporter process projections;
+it does not include the fake lifecycle's resource ownership, readiness, or
+cleanup outcome.
