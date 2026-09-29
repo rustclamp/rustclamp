@@ -82,19 +82,19 @@ added the Cargo bin path to `.zshrc`; the installed binary ran from a different
 directory. The real user's `.zshrc` also now contains that PATH entry. The
 current terminal must reload it with `source ~/.zshrc; rehash`.
 
-No prebuilt binary release exists yet. Added
-`.github/workflows/release-clamp.yml` to build and smoke-check Linux x86_64,
+`.github/workflows/release-clamp.yml` builds and smoke-checks Linux x86_64,
 Intel and Apple Silicon macOS, and Windows x86_64 archives with SHA-256 files.
 Pushing a `clamp-v*` tag creates a GitHub release; manual dispatch builds
-temporary artifacts without publishing. The workflow has not run on GitHub and
-no release tag has been created, so the source installer still compiles `clamp`
-on each machine. The Linux x86_64 release binary built locally with Rust 1.96.1,
-passed `clamp --help`, and its tarball checksum verified; the other target
-artifacts await a hosted workflow run. A local Linux installation was verified
-under `/tmp`; it is not a published artifact. The installer now adds
-`~/.cargo/bin` to the user's zsh or bash startup file when that directory is
-missing from `PATH`; a new
-terminal or reloading the startup file makes `clamp` available from any folder.
+temporary artifacts without publishing. `clamp-v0.1.0` was published on
+2026-09-29 by a hosted run with all four archives attached. The installer now
+downloads the latest release archive for Linux x86_64 and macOS, verifies its
+checksum, and copies `clamp` into `~/.cargo/bin`; Linux ARM64 still builds from
+`main`. A local Linux run installed the v0.1.0 binary this way into a temporary
+`CARGO_HOME`. `clamp self-update` from a release binary reruns the installer on
+Unix. The installer still installs Rust with rustup because generated projects
+need Cargo. It adds `~/.cargo/bin` to the user's zsh or bash startup file when
+that directory is missing from `PATH`; a new terminal or reloading the startup
+file makes `clamp` available from any folder.
 Those deployment checks establish the state at that time. Search Console and
 broader site QA remain open.
 The coordinated check runner compares `inspect`, `tree`, `graph`, and

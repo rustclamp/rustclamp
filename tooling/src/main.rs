@@ -212,13 +212,24 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         return Ok(0);
     }
     if command == "self-update" || command == "global-update" {
-        // Reinstall from the checkout this binary was built from, else from GitHub main.
+        // Reinstall from the checkout this binary was built from, else the latest release (Unix) or GitHub main.
         let mut source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         // tooling depends on ../../core and ../../kernel, so a GitHub install
         // clones all three repos side by side, as install.sh does.
         let work = std::env::temp_dir().join(format!("clamp-update-{}", std::process::id()));
         if source.join("Cargo.toml").exists() {
             println!("Updating clamp from {}", source.display());
+        } else if cfg!(unix) {
+            // Release binaries: rerun the installer, which fetches the latest release.
+            println!("Updating clamp from the latest release");
+            let status = Command::new("sh")
+                .args([
+                    "-c",
+                    "curl --proto '=https' --tlsv1.2 -fsSL https://rustclamp.com/install.sh | sh",
+                ])
+                .status()
+                .map_err(|error| format!("cannot start sh: {error}"))?;
+            return Ok(status.code().unwrap_or(1).clamp(0, 255) as u8);
         } else {
             println!("Updating clamp from github.com/rustclamp (main)");
             for repo in ["core", "kernel", "rustclamp"] {
