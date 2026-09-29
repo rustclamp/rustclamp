@@ -32,6 +32,14 @@
   schemes; `web::App` runs a web app's startup; `Router::up` health check;
   `Request::flash`; `db::timestamp::{date, iso8601}`. The web template uses
   them and drops its health controller.
+- `web::App` owns an app's wiring: it holds the routes too, opens and
+  migrates the database, shares it and the disks with handlers and adds
+  `security_headers`. `main.rs` is `my_site::app().run()`; tests use
+  `app().test(env)` (in-memory, migrated, seeded). `web::testing::Client`
+  browses a router like a visitor: cookie jar, CSRF token from the last page,
+  `see`/`location`/`body_text` on `Response`. `Throttle::from_config(config,
+  key, default)` reads the limit and `TRUST_PROXY`; `markdown::front_matter`
+  splits `key: value` headers from Markdown.
 - `web::serve` answers on a fixed pool of `WEB_THREADS` threads (default 32)
   instead of one request at a time; accepted connections queue four per
   thread, so a flood cannot grow threads or memory without bound.

@@ -31,6 +31,7 @@ mod form;
 pub mod markdown;
 mod request;
 mod session;
+pub mod testing;
 mod throttle;
 mod upload;
 mod view;
@@ -648,8 +649,11 @@ pub fn asset(path: &str) -> Response {
     Response::new(200, content_type, body)
 }
 
-/// A web app's startup, the part every `main.rs` repeats. Each field is one
-/// of the app's own functions, so settings stay in `app/config/`:
+/// A web app: its config functions, its migrations and seeders, and its
+/// routes. The app declares one in `app/lib.rs`; `main.rs` runs it and tests
+/// build it, so the wiring every app repeats lives here: opening and migrating
+/// the database, sharing it and the storage disks with handlers
+/// (`request.db()`, `request.storage()`) and adding [`security_headers`].
 ///
 /// ```no_run
 /// # mod config {
@@ -662,16 +666,27 @@ pub fn asset(path: &str) -> Response {
 /// #     pub fn migrations() -> Vec<&'static dyn rustclamp::db::Migration> { Vec::new() }
 /// #     pub fn seeders() -> Vec<&'static dyn rustclamp::db::Seeder> { Vec::new() }
 /// # }
-/// # fn routes(_: &rustclamp::config::Config) -> rustclamp::web::Router { rustclamp::web::Router::new() }
-/// fn main() {
-///     rustclamp::web::App {
+/// use rustclamp::config::Config;
+/// use rustclamp::db::Db;
+/// use rustclamp::web::{App, Router};
+///
+/// fn routes(router: Router, _config: &Config, _db: &Db) -> Router {
+///     router.view("/", "welcome")
+/// }
+///
+/// pub fn app() -> App {
+///     App {
 ///         logging: config::logging,
 ///         database: config::database,
 ///         filesystems: config::filesystems,
 ///         migrations: database::migrations,
 ///         seeders: database::seeders,
+///         routes,
 ///     }
-///     .run(routes);
+/// }
+///
+/// fn main() {
+///     app().run();
 /// }
 /// ```
 #[cfg(feature = "db")]
@@ -687,31 +702,68 @@ pub struct App {
     pub migrations: fn() -> Vec<&'static dyn crate::db::Migration>,
     /// Every seeder, from `build.rs`.
     pub seeders: fn() -> Vec<&'static dyn crate::db::Seeder>,
+    /// Adds the app's routes to a router that already shares the database
+    /// and disks and sends security headers.
+    pub routes: fn(Router, &crate::config::Config, &crate::db::Db) -> Router,
 }
 
 #[cfg(feature = "db")]
 impl App {
     /// Loads `.env`, installs the logger, then either runs a database command
     /// given as the first argument (`migrate`, `migrate:rollback`, `db:seed`)
-    /// and exits with its status, or links `public/storage` to the public disk
-    /// (like `php artisan storage:link`; a failure is a warning) and serves
-    /// `routes`, which opens and migrates the database.
-    pub fn run(self, routes: impl FnOnce(&crate::config::Config) -> Router) {
+    /// and exits with its status, or migrates, links `public/storage` to the
+    /// public disk (like `php artisan storage:link`; a failure is a warning)
+    /// and serves the routes.
+    ///
+    /// # Panics
+    ///
+    /// When a migration fails: the app must not serve an old schema.
+    pub fn run(self) {
         use crate::db::Db;
         use crate::log::Logger;
         use crate::storage::Storage;
 
         let config = crate::config::Config::load();
         Log::init(Logger::new(&(self.logging)(&config)));
+        let db = Db::connect(&(self.database)(&config));
         if let Some(command) = std::env::args().nth(1) {
-            let db = Db::connect(&(self.database)(&config));
             let (migrations, seeders) = ((self.migrations)(), (self.seeders)());
             std::process::exit(crate::db::command(&db, &command, &migrations, &seeders));
         }
+        db.migrate(&(self.migrations)())
+            .unwrap_or_else(|error| panic!("migration failed: {error}"));
         if let Err(error) = Storage::new((self.filesystems)(&config)).link() {
             Log::warning(format_args!("storage link failed: {error}"));
         }
-        serve(routes(&config));
+        serve(self.router(&config, db));
+    }
+
+    /// The app's routes on `db`, shared with handlers together with the
+    /// storage disks, behind [`security_headers`].
+    pub fn router(&self, config: &crate::config::Config, db: crate::db::Db) -> Router {
+        let router = Router::new()
+            .state(db.clone())
+            .state(crate::storage::Storage::new((self.filesystems)(config)))
+            .middleware(security_headers);
+        (self.routes)(router, config, &db)
+    }
+
+    /// For tests: the app on a fresh in-memory database, migrated and seeded,
+    /// with `env` (`.env` lines such as `"API_PER_MINUTE=2\n"`) as its config.
+    /// Returns the database too, so a test can check what was stored.
+    /// Drive it with [`testing::Client`].
+    ///
+    /// # Panics
+    ///
+    /// When a migration or seeder fails.
+    pub fn test(&self, env: &str) -> (Router, crate::db::Db) {
+        let config = crate::config::Config::parse(&format!("DB_DATABASE=:memory:\n{env}"));
+        let db = crate::db::Db::connect(&(self.database)(&config));
+        db.migrate(&(self.migrations)())
+            .unwrap_or_else(|error| panic!("migration failed: {error}"));
+        db.seed(&(self.seeders)())
+            .unwrap_or_else(|error| panic!("seeding failed: {error}"));
+        (self.router(&config, db.clone()), db)
     }
 }
 

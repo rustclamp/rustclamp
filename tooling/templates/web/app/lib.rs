@@ -5,10 +5,7 @@
 //! This file is the map: every folder and file of Rust code is declared here,
 //! so there are no `mod.rs` files.
 
-use rustclamp::config::Config;
-use rustclamp::db::Db;
-use rustclamp::storage::Storage;
-use rustclamp::web::{Router, security_headers};
+use rustclamp::web::App;
 
 /// Everything that handles HTTP.
 pub mod http {
@@ -56,21 +53,23 @@ pub mod routes {
     pub mod web;
 }
 
-/// Every route. A GET that matches none serves the file from `public/`.
-/// Opens the database from `.env` and runs pending migrations first.
-pub fn routes(config: &Config) -> Router {
-    let settings = config::Settings::from(config);
-    let db = Db::connect(&config::database(config));
-    db.migrate(&database::migrations())
-        .unwrap_or_else(|error| panic!("migration failed: {error}"));
-    // Handlers reach the database with `request.db()` and files with
-    // `request.storage()`.
-    let router = Router::new()
-        .state(db)
-        .state(Storage::new(config::filesystems(config)))
-        .middleware(security_headers)
-        .middleware(http::middleware::request_log);
-    // Packages (`clamp init --package`) add their routes here, e.g.
-    // `let router = router.package(blog::Blog::from(config));`
-    routes::api::routes(routes::web::routes(router), &settings)
+/// The app: its config, database and routes. `main.rs` runs it; tests build
+/// it with `app().test("")`. The framework opens and migrates the database
+/// and shares it (`request.db()`) and the disks (`request.storage()`) with
+/// handlers, behind security headers.
+pub fn app() -> App {
+    App {
+        logging: config::logging,
+        database: config::database,
+        filesystems: config::filesystems,
+        migrations: database::migrations,
+        seeders: database::seeders,
+        routes: |router, config, _db| {
+            let settings = config::Settings::from(config);
+            let router = router.middleware(http::middleware::request_log);
+            // Packages (`clamp init --package`) add their routes here, e.g.
+            // `let router = router.package(blog::Blog::from(config));`
+            routes::api::routes(routes::web::routes(router), &settings)
+        },
+    }
 }

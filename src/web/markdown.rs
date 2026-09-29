@@ -50,6 +50,27 @@ pub fn to_html(markdown: &str) -> String {
     out
 }
 
+/// Splits a Markdown file with `key: value` front matter, up to the first
+/// blank line, into its fields and the Markdown after it. `None` when there
+/// is no blank line. Keys are trimmed; a line without `:` is skipped.
+///
+/// ```
+/// use rustclamp::web::markdown;
+///
+/// let (fields, body) = markdown::front_matter("title: Hi\ndate: 2026-09-30\n\n# Hi").unwrap();
+/// assert_eq!(fields["title"], "Hi");
+/// assert_eq!(body, "# Hi");
+/// ```
+pub fn front_matter(source: &str) -> Option<(std::collections::HashMap<String, String>, &str)> {
+    let (head, body) = source.split_once("\n\n")?;
+    let fields = head
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
+        .collect();
+    Some((fields, body.trim()))
+}
+
 /// `url` when it is relative or uses a web scheme, else `#`.
 fn safe(url: CowStr<'_>) -> CowStr<'_> {
     match url_scheme(&url).as_deref() {

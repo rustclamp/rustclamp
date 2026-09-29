@@ -38,6 +38,21 @@ impl Throttle {
         Self::new(max, Duration::from_secs(60))
     }
 
+    /// `max` requests per client per minute, read from config `key` (default
+    /// `max`), trusting `X-Forwarded-For` when `TRUST_PROXY=true`, as
+    /// [`trust_forwarded`](Self::trust_forwarded) describes.
+    ///
+    /// ```
+    /// use rustclamp::config::Config;
+    /// use rustclamp::web::Throttle;
+    ///
+    /// let contact = Throttle::from_config(&Config::parse("CONTACT_PER_MINUTE=2"), "CONTACT_PER_MINUTE", 5);
+    /// ```
+    pub fn from_config(config: &crate::config::Config, key: &str, max: u32) -> Self {
+        Self::per_minute(config.get_or(key, max))
+            .trust_forwarded(config.get_or("TRUST_PROXY", false))
+    }
+
     /// When `trust` is set, identifies clients by the last `X-Forwarded-For`
     /// address, the one the proxy appended, instead of the connecting peer.
     /// Enable this only behind exactly one proxy that sets the header, such as
