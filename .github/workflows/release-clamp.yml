@@ -29,18 +29,29 @@ jobs:
             extension: .exe
     runs-on: ${{ matrix.os }}
     steps:
+      # tooling depends on ../../core and ../../kernel: check the repos out side by side.
       - uses: actions/checkout@v7
+        with:
+          path: rustclamp
+      - uses: actions/checkout@v7
+        with:
+          repository: rustclamp/core
+          path: core
+      - uses: actions/checkout@v7
+        with:
+          repository: rustclamp/kernel
+          path: kernel
       - name: Install Rust target
         run: rustup toolchain install 1.96.1 --profile minimal --target ${{ matrix.target }}
       - name: Build clamp
-        run: cargo +1.96.1 build --release --locked --manifest-path tooling/Cargo.toml --target ${{ matrix.target }} --bin clamp
+        run: cargo +1.96.1 build --release --locked --manifest-path rustclamp/tooling/Cargo.toml --target ${{ matrix.target }} --bin clamp
       - name: Smoke check
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\tooling\target\${{ matrix.target }}\release\clamp.exe --help
+        run: .\rustclamp\tooling\target\${{ matrix.target }}\release\clamp.exe --help
       - name: Smoke check
         if: runner.os != 'Windows'
-        run: ./tooling/target/${{ matrix.target }}/release/clamp --help
+        run: ./rustclamp/tooling/target/${{ matrix.target }}/release/clamp --help
       - name: Package Unix archive
         if: runner.os != 'Windows'
         shell: bash
@@ -49,7 +60,7 @@ jobs:
           version="${version//\//-}"
           name="clamp-${version}-${{ matrix.target }}"
           mkdir -p "dist/${name}"
-          cp "tooling/target/${{ matrix.target }}/release/clamp" "dist/${name}/clamp"
+          cp "rustclamp/tooling/target/${{ matrix.target }}/release/clamp" "dist/${name}/clamp"
           tar -czf "dist/${name}.tar.gz" -C dist "${name}"
           (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
           rm -rf "dist/${name}"
@@ -61,7 +72,7 @@ jobs:
           $version = $version -replace '[/\\]', '-'
           $name = "clamp-$version-${{ matrix.target }}"
           New-Item -ItemType Directory -Force "dist/$name" | Out-Null
-          Copy-Item "tooling/target/${{ matrix.target }}/release/clamp.exe" "dist/$name/clamp.exe"
+          Copy-Item "rustclamp/tooling/target/${{ matrix.target }}/release/clamp.exe" "dist/$name/clamp.exe"
           Compress-Archive -Path "dist/$name/clamp.exe" -DestinationPath "dist/$name.zip"
           $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $name.zip" | Set-Content "dist/$name.zip.sha256"
