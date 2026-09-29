@@ -27,8 +27,14 @@ excluded from indexing.
 
 The Ansible nginx template now redirects legacy `/docs` and `/docs/...` requests
 from `rustclamp.com` to the matching path on `docs.rustclamp.com`. Its syntax
-check passes. The playbook is an untracked local operator file and has not been
-deployed as part of this evidence.
+check passes. The playbook is an untracked local operator file. Check mode
+passed preflight, canonical, robots, route, and Nginx syntax checks. The actual
+deploy then stalled during upload: Ansible reported the `rustclamp.com` upload as
+changed, but timed out reaching the host before it could finish the docs upload,
+apply the redirecting vhost, or complete live verification. Direct public
+requests from this environment returned HTTP 403, and SSH to the host timed out.
+Treat production state as partial and unverified; rerun the playbook when SSH and
+public HTTP access are available.
 
 This is a local hosting prototype. Static file reads are synchronous, production
 deployment is not switched to Rust, and the page generator remains Python.
