@@ -1,20 +1,84 @@
 //! Command-line interface for resolved Clamp process inspection.
 
 use serde_json::{Value, json};
-use std::{env, fs, process::Command, process::ExitCode};
+use std::{
+    env, fs,
+    io::{self, IsTerminal, Write},
+    process::Command,
+    process::ExitCode,
+};
 
 use rustclamp_tooling::{
     doctor_text, graph_text, inspect_text, tree_text, validate_document, why_text,
 };
 
 fn main() -> ExitCode {
-    match run(env::args().skip(1).collect()) {
+    let args = env::args().skip(1).collect::<Vec<_>>();
+    if args.is_empty() {
+        return match welcome() {
+            Ok(code) => ExitCode::from(code),
+            Err(message) => {
+                eprintln!("clamp: {message}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    match run(args) {
         Ok(code) => ExitCode::from(code),
         Err(message) => {
             eprintln!("clamp: {message}\n\n{}", usage());
             ExitCode::from(2)
         }
     }
+}
+
+fn welcome() -> Result<u8, String> {
+    println!(
+        "\n  ╭──────────────────────────────╮\n  │       Welcome to Clamp       │\n  │        RustClamp tools       │\n  ╰──────────────────────────────╯\n\n  1. Create a project\n  2. Check this project\n  3. Run tests\n  4. Build this project\n  5. Run this project\n  6. Inspect architecture JSON\n  7. Show command help\n  0. Exit\n"
+    );
+    print!("Choose an option: ");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("cannot write menu: {error}"))?;
+    let mut choice = String::new();
+    io::stdin()
+        .read_line(&mut choice)
+        .map_err(|error| format!("cannot read menu choice: {error}"))?;
+    let choice = choice.trim();
+    if choice == "0" || (choice.is_empty() && !io::stdin().is_terminal()) {
+        return Ok(0);
+    }
+    if choice == "1" {
+        print!("Project name: ");
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("cannot write prompt: {error}"))?;
+        let mut name = String::new();
+        io::stdin()
+            .read_line(&mut name)
+            .map_err(|error| format!("cannot read project name: {error}"))?;
+        return run(vec!["init".into(), name.trim().into()]);
+    }
+    if choice == "6" {
+        print!("Inspection JSON file: ");
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("cannot write prompt: {error}"))?;
+        let mut path = String::new();
+        io::stdin()
+            .read_line(&mut path)
+            .map_err(|error| format!("cannot read file path: {error}"))?;
+        return run(vec!["inspect".into(), path.trim().into()]);
+    }
+    let command = match choice {
+        "2" => "check",
+        "3" => "test",
+        "4" => "build",
+        "5" => "run",
+        "7" => "--help",
+        _ => return Err(format!("unknown menu option {choice:?}")),
+    };
+    run(vec![command.into()])
 }
 
 fn run(args: Vec<String>) -> Result<u8, String> {
@@ -39,7 +103,9 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         let manifest = root.join("Cargo.toml");
         let mut cargo_toml = fs::read_to_string(&manifest)
             .map_err(|error| format!("cannot read generated manifest: {error}"))?;
-        cargo_toml.push_str("rustclamp = \"0.1\"\n");
+        cargo_toml.push_str(
+            "rustclamp = { git = \"https://github.com/rustclamp/rustclamp\", branch = \"main\" }\n",
+        );
         fs::write(&manifest, cargo_toml)
             .map_err(|error| format!("cannot update generated manifest: {error}"))?;
         fs::write(

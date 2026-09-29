@@ -16,6 +16,8 @@ cargo install --path rustclamp/tooling
 
 Make sure `~/.cargo/bin` is on `PATH`. After installation, `clamp` works from
 any current directory. It uses Cargo in that directory for project commands.
+Running `clamp` with no arguments opens a welcome menu for project creation,
+Cargo commands, and architecture inspection.
 
 The application exports a document with `inspection_document(&[&projection])`
 and writes the returned JSON value. A single document can contain multiple
@@ -42,9 +44,9 @@ descriptive; they are not estimates of memory or runtime cost.
 
 The `check`, `test`, `build`, and `run` commands pass their arguments and exit
 status through to Cargo in the current directory. Project generation will be
-available with `clamp init <project-name>`. The generated manifest depends on
-the `rustclamp` 0.1 release, so building a generated project through the
-registry becomes available when that package is published.
+available with `clamp init <project-name>`. The generated manifest uses the
+RustClamp facade from its public Git repository so a starter app can build
+before the crates.io publication gate is cleared.
 
 ## Schema version 1
 

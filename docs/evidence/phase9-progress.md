@@ -56,10 +56,15 @@ covered human tree/why output and JSON inspect output. `tools/check.py` now
 includes this standalone package. `clamp check`, `test`, `build`, and `run` pass
 arguments and exit status through to Cargo; the check wrapper has a smoke run.
 `cargo install --path tooling --root /tmp/clamp-global-install` installed the
-binary successfully, and the installed command ran from `/tmp`. `clamp init`
-created a runnable application; its `rustclamp = "0.1"` dependency was tested
-with a local Cargo patch to this checkout. A plain registry build awaits the
-RustClamp 0.1 publication gate.
+binary successfully, and the installed command ran from `/tmp`. The no-argument
+menu and `clamp init` flow both ran. The generated app compiled and ran against
+the local facade; fetching its public Git dependency could not be verified in
+this network-restricted environment.
+Both site sources now carry an installer at `/install.sh`; the marketing
+homepage shows the copyable install command and the docs explain prerequisites.
+The script builds from the three public Git repositories on Linux/macOS. Its
+GitHub main-branch source is ready to become usable when the tooling branch is
+merged; live deployment remains unverified.
 Output still needs comparison against every reference example; required
 configuration and lifecycle boundaries need fuller presentation. Project
 generation is implemented, while its ordinary registry build remains gated on
