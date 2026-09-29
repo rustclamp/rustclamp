@@ -28,9 +28,12 @@ pub mod http {
 // Data the app works with goes in `models/`, e.g.
 // `pub mod models { mod post; pub use post::Post; }`
 
-/// The database schema.
+/// The database: every file in `database/migrations/` (the schema, oldest
+/// first) and `database/seeders/` (data for `cargo run -- db:seed`). Adding a
+/// file is enough; `build.rs` lists them.
 pub mod database {
-    pub mod migrations;
+    include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
+    include!(concat!(env!("OUT_DIR"), "/seeders.rs"));
 }
 
 /// Typed settings from `.env`.
@@ -50,7 +53,7 @@ pub mod routes {
 pub fn routes(config: &Config) -> Router {
     let settings = config::Settings::from(config);
     let db = Db::open(config);
-    db.migrate(&database::migrations::all())
+    db.migrate(&database::migrations())
         .unwrap_or_else(|error| panic!("migration failed: {error}"));
     let router = Router::new()
         .middleware(security_headers)

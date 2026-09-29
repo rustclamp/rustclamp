@@ -2,18 +2,15 @@ use rustclamp::config::Config;
 use rustclamp::db::Db;
 use rustclamp::prelude::*;
 
+use ::__CRATE__::database;
+
 fn main() {
     let config = Config::load();
-    // `cargo run -- migrate:rollback` undoes the last batch of migrations.
-    if std::env::args().nth(1).as_deref() == Some("migrate:rollback") {
-        match Db::open(&config).rollback(&::__CRATE__::database::migrations::all()) {
-            Ok(names) => names.iter().for_each(|name| println!("Rolled back {name}")),
-            Err(error) => {
-                eprintln!("rollback failed: {error}");
-                std::process::exit(1);
-            }
-        }
-        return;
+    // `cargo run -- migrate`, `migrate:rollback` or `db:seed`.
+    if let Some(command) = std::env::args().nth(1) {
+        let db = Db::open(&config);
+        let (migrations, seeders) = (database::migrations(), database::seeders());
+        std::process::exit(rustclamp::db::command(&db, &command, &migrations, &seeders));
     }
     Clamp::run(|| rustclamp::web::serve(::__CRATE__::routes(&config)));
 }

@@ -10,6 +10,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+#[cfg(feature = "build")]
+pub mod build;
 #[cfg(feature = "config")]
 pub mod config;
 #[cfg(feature = "db")]

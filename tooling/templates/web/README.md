@@ -17,7 +17,8 @@ app/                             everything the app is made of; replace it to de
   lib.rs                         the map: declares every Rust module (no mod.rs files)
   main.rs                        starts the server with settings from .env
   config/app.rs                  typed settings; .env.example lists the keys
-  database/migrations.rs         every migration; each one a file in database/migrations/
+  database/migrations/           the schema: one file per migration, run at startup
+  database/seeders/              data for `cargo run -- db:seed`
   routes/web.rs, routes/api.rs   pages, JSON (throttled)
   http/controllers/              controller.rs is the base: `use super::controller::*;`
   http/middleware/               request_log.rs: logs every request at debug level
@@ -40,10 +41,54 @@ Packages made with `clamp init --package` bring their own routes, views and
 tests; add one with `.package(...)` in `app/lib.rs`, and override its views in
 `app/resources/views/vendor/{package}/`.
 The database is `rustclamp::db`, the `db` feature: SQLite compiled in, opened
-from `DB_CONNECTION` and `DB_DATABASE`. Migrations are `Migration` structs
-with `up` and `down` written with `Schema`; they run at startup, and
-`cargo run -- migrate:rollback` undoes the last batch. `db.table("posts")`
-builds queries and `Db::with` lends the connection for anything else. Use
-`rustclamp::db::sqlite` (rusqlite) for its types rather than adding `rusqlite`.
+from `DB_CONNECTION` and `DB_DATABASE`. `db.table("posts")` builds queries and
+`Db::with` lends the connection for anything else; use `rustclamp::db::sqlite`
+(rusqlite) for its types rather than adding `rusqlite`.
+
+A migration is a file in `app/database/migrations/`; `build.rs` finds it, so
+there is nothing to register. The file name is its recorded name, and the
+struct is that name without the date, in `UpperCamelCase`.
+`app/database/migrations/2026_09_29_000001_create_posts.rs`:
+
+```rust
+use rustclamp::db::{Migration, Schema, migration_name};
+
+pub struct CreatePosts;
+
+impl Migration for CreatePosts {
+    fn name(&self) -> &'static str {
+        migration_name(file!())
+    }
+    fn up(&self) -> String {
+        Schema::create("posts", |table| {
+            table.id();
+            table.string("title");
+            table.timestamps();
+        })
+    }
+    fn down(&self) -> String {
+        Schema::drop("posts")
+    }
+}
+```
+
+A seeder is a file in `app/database/seeders/`, such as `posts_seeder.rs`:
+
+```rust
+use rustclamp::db::{Db, Seeder, sqlite::{Result, params}};
+
+pub struct PostsSeeder;
+
+impl Seeder for PostsSeeder {
+    fn run(&self, db: &Db) -> Result<()> {
+        db.table("posts").insert(&["title"], params!["Hello"])?;
+        Ok(())
+    }
+}
+```
+
+Migrations run when the server starts. From the console:
+`cargo run -- migrate`, `cargo run -- migrate:rollback` (the last batch) and
+`cargo run -- db:seed` (migrates first).
 `cargo dev` starts only the Rust server; run `npm run build` first so
 `public/build/` exists.

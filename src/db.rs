@@ -161,6 +161,24 @@ impl Db {
         })
     }
 
+    /// Runs each seeder in order, each in its own transaction, so a failing
+    /// seeder leaves nothing half inserted.
+    pub fn seed(&self, seeders: &[&dyn Seeder]) -> sqlite::Result<()> {
+        // ponytail: the transaction spans several `with` calls on the shared
+        // connection, so run seeders from the console, not while serving.
+        for seeder in seeders {
+            self.with(|connection| connection.execute_batch("BEGIN"))?;
+            match seeder.run(self) {
+                Ok(()) => self.with(|connection| connection.execute_batch("COMMIT"))?,
+                Err(error) => {
+                    self.with(|connection| connection.execute_batch("ROLLBACK"))?;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Runs `down` for every migration in the last batch, newest first, and
     /// returns their names. Each one is undone in its own transaction.
     ///
@@ -201,12 +219,78 @@ impl Db {
     }
 }
 
+/// Fills the database with data, like a Laravel seeder class: one struct
+/// per file in `app/database/seeders/`, run by `cargo run -- db:seed`.
+pub trait Seeder {
+    /// Inserts the data, usually with [`Db::table`].
+    fn run(&self, db: &Db) -> sqlite::Result<()>;
+}
+
+/// Runs a database console command and returns the process exit code:
+/// `migrate`, `migrate:rollback` or `db:seed`. The web template's `main`
+/// calls it when the app gets an argument: `cargo run -- db:seed`.
+pub fn command(
+    db: &Db,
+    command: &str,
+    migrations: &[&dyn Migration],
+    seeders: &[&dyn Seeder],
+) -> i32 {
+    let result = match command {
+        "migrate" => db
+            .migrate(migrations)
+            .map_err(|error| error.to_string())
+            .map(|()| {
+                println!("Migrated");
+            }),
+        "migrate:rollback" => db.rollback(migrations).map(|names| {
+            names.iter().for_each(|name| println!("Rolled back {name}"));
+        }),
+        "db:seed" => db
+            .migrate(migrations)
+            .and_then(|()| db.seed(seeders))
+            .map_err(|error| error.to_string())
+            .map(|()| println!("Seeded")),
+        _ => {
+            eprintln!("unknown command {command:?}; try migrate, migrate:rollback or db:seed");
+            return 2;
+        }
+    };
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{command} failed: {error}");
+            1
+        }
+    }
+}
+
+/// The migration name for a source file: `file!()` without its folders and
+/// `.rs`. Keeps a migration's recorded name equal to its file name, so a
+/// file named `2026_09_29_000001_create_posts.rs` (loaded with
+/// `#[path = "..."] mod create_posts;`, since a module name cannot start with
+/// a digit) records `2026_09_29_000001_create_posts`.
+///
+/// ```
+/// use rustclamp::db::migration_name;
+///
+/// assert_eq!(
+///     migration_name("app/database/migrations/2026_09_29_000001_create_posts.rs"),
+///     "2026_09_29_000001_create_posts"
+/// );
+/// assert_eq!(migration_name(r"app\database\0002_tags.rs"), "0002_tags");
+/// ```
+pub fn migration_name(file: &'static str) -> &'static str {
+    let base = file.rsplit(['/', '\\']).next().unwrap_or(file);
+    base.strip_suffix(".rs").unwrap_or(base)
+}
+
 /// One change to the database schema, like a Laravel migration class. Its
 /// name orders it and is recorded once it has run, so never rename or edit a
 /// migration that has run anywhere: add a new one.
 pub trait Migration {
     /// A unique name that sorts in run order, such as
-    /// `2026_09_29_000001_create_posts`.
+    /// `2026_09_29_000001_create_posts`. Usually the file's own name:
+    /// `migration_name(file!())`.
     fn name(&self) -> &'static str;
     /// The SQL that applies the change, often [`Schema::create`].
     fn up(&self) -> String;
@@ -320,6 +404,32 @@ mod tests {
         .unwrap();
         let error = db.rollback(&[]).unwrap_err();
         assert!(error.contains("0001"), "{error}");
+    }
+
+    struct Posts(&'static str);
+
+    impl Seeder for Posts {
+        fn run(&self, db: &Db) -> sqlite::Result<()> {
+            db.table("posts").insert(&["title"], [&"one"])?;
+            db.with(|connection| connection.execute_batch(self.0))
+        }
+    }
+
+    #[test]
+    fn seeding_commits_or_leaves_nothing() {
+        let db = memory();
+        let posts = Sql(
+            "0001",
+            "CREATE TABLE posts (title TEXT)",
+            "DROP TABLE posts",
+        );
+        db.migrate(&[&posts]).unwrap();
+        db.seed(&[&Posts("SELECT 1")]).unwrap();
+        assert!(db.seed(&[&Posts("NOT SQL")]).is_err());
+        assert_eq!(count(&db, "SELECT count(*) FROM posts"), 1);
+        assert_eq!(command(&db, "db:seed", &[&posts], &[&Posts("SELECT 1")]), 0);
+        assert_eq!(count(&db, "SELECT count(*) FROM posts"), 2);
+        assert_eq!(command(&db, "nope", &[], &[]), 2);
     }
 
     #[test]

@@ -16,6 +16,8 @@ web = ["config", "log"]
 config = []
 # Optional leveled logging to `storage/logs/app.log` (`rustclamp::log`).
 log = ["config"]
+# Optional build-script helpers (`rustclamp::build`), such as migration discovery.
+build = []
 # Optional SQLite database from `.env` (`rustclamp::db`); compiles SQLite in.
 db = ["config", "dep:rusqlite"]
 

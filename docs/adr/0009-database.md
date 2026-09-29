@@ -23,9 +23,18 @@ into it.
   (`name`, `up`, `down`), with the SQL written by `Schema` (`create`,
   `table`, `drop`; SQLite dialect) or by hand. `Db::migrate` runs each once,
   in a transaction, recorded with its batch in a `migrations` table;
-  `Db::rollback` runs `down` for the last batch, newest first. The web
-  template runs `app/database/migrations.rs` at startup, and
-  `cargo run -- migrate:rollback` rolls back.
+  `Db::rollback` runs `down` for the last batch, newest first.
+- Migrations and seeders are discovered, not registered: the app's
+  `build.rs` calls `rustclamp::build::migrations` and `::seeders` (the std-only
+  `build` feature, a build dependency), which list every file in
+  `app/database/migrations/` and `app/database/seeders/` in file-name order.
+  The file name is the recorded migration name (`migration_name(file!())`);
+  the struct is that name without its leading numbers, in UpperCamelCase.
+  `#[path]` maps a dated file to a module, since a module name cannot start
+  with a digit.
+- `Seeder` structs fill data; `Db::seed` runs each in a transaction.
+  `rustclamp::db::command` runs `migrate`, `migrate:rollback` and `db:seed`
+  from `cargo run -- <command>`; the server still migrates at startup.
 - `db.table("posts")` is a query builder like Laravel's `DB::table`:
   `where_eq`, `where_op`, `where_null`, `order_by`, `limit`, then `get`,
   `first`, `count`, `insert`, `update` or `delete`. Values are always bound;

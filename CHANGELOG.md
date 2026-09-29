@@ -9,10 +9,13 @@
   `views/vendor/{package}/`, and `clamp init NAME --package` (ADR 0008).
 - `rustclamp::db` (optional `db` feature): SQLite via rusqlite with bundled
   SQLite, opened from `DB_CONNECTION`/`DB_DATABASE`. Laravel-style
-  `Migration` structs with `up`/`down`, batches and `Db::rollback`; a `Schema`
-  builder (`create`, `table`, `drop`); a `db.table(...)` query builder.
-  `clamp init NAME --web` turns it on, runs `app/database/migrations.rs` at
-  startup and adds `cargo run -- migrate:rollback` (ADR 0009).
+  `Migration` structs with `up`/`down`, batches and `Db::rollback`;
+  `Seeder` structs and `Db::seed`; a `Schema` builder (`create`, `table`,
+  `drop`); a `db.table(...)` query builder; `db::command` for `migrate`,
+  `migrate:rollback` and `db:seed`.
+- `rustclamp::build` (optional `build` feature): `build.rs` discovery of
+  `app/database/migrations/` and `app/database/seeders/`. `clamp init NAME
+  --web` ships the `build.rs`, so a new file there is all it takes (ADR 0009).
 - `clamp --version`; the CLI is 0.2.0 (release tag `clamp-v0.2.0`).
 - Phase 0 package scaffold and development checks.
 - Synchronous `Clamp::run` entrypoint and a prelude exporting `Clamp`.

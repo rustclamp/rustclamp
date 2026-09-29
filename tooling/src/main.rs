@@ -408,10 +408,7 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
         "app/routes/web.rs",
         include_str!("../templates/web/app/routes/web.rs"),
     ),
-    (
-        "app/database/migrations.rs",
-        include_str!("../templates/web/app/database/migrations.rs"),
-    ),
+    ("build.rs", include_str!("../templates/web/build.rs")),
     (
         "app/routes/api.rs",
         include_str!("../templates/web/app/routes/api.rs"),
@@ -481,7 +478,7 @@ fn create_web(root: &std::path::Path, name: &str) -> Result<(), String> {
     let mut cargo_toml =
         fs::read_to_string(&manifest).map_err(|error| format!("cannot read manifest: {error}"))?;
     cargo_toml.push_str(&format!(
-        "\n[lib]\npath = \"app/lib.rs\"\n\n[[bin]]\nname = \"{name}\"\npath = \"app/main.rs\"\n"
+        "\n[build-dependencies]\nrustclamp = {{ git = \"https://github.com/rustclamp/rustclamp\", branch = \"main\", features = [\"build\"] }}\n\n[lib]\npath = \"app/lib.rs\"\n\n[[bin]]\nname = \"{name}\"\npath = \"app/main.rs\"\n"
     ));
     fs::write(&manifest, cargo_toml).map_err(|error| format!("cannot write manifest: {error}"))?;
     let gitignore = root.join(".gitignore");
