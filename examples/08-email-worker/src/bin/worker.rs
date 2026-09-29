@@ -236,3 +236,115 @@ fn now_ms() -> u64 {
         .try_into()
         .unwrap_or(u64::MAX)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn envelope() -> MessageEnvelope {
+        MessageEnvelope {
+            id: "test-email".into(),
+            name: SUBJECT.into(),
+            schema_version: 1,
+            correlation_id: "test".into(),
+            causation_id: None,
+            deadline_unix_ms: None,
+            payload: json!({"to":"a@example.test","subject":"test","body":"test"}),
+        }
+    }
+
+    fn registry(failure: HandlerFailure) -> HandlerRegistry {
+        TargetComposition::<HandlerTarget, WorkerHandlers>::new(vec![(
+            EMAIL_MODULE,
+            HandlerDeclaration::new(SUBJECT, 1, move |_message: MessageEnvelope| {
+                let failure = match &failure {
+                    HandlerFailure::Retryable(error) => {
+                        HandlerFailure::Retryable(std::io::Error::other(error.to_string()).into())
+                    }
+                    HandlerFailure::Permanent(error) => {
+                        HandlerFailure::Permanent(std::io::Error::other(error.to_string()).into())
+                    }
+                    HandlerFailure::UnknownOutcome(error) => HandlerFailure::UnknownOutcome(
+                        std::io::Error::other(error.to_string()).into(),
+                    ),
+                };
+                async move { Err(failure) }
+            }),
+        )])
+        .build(Some(&HandlerTarget))
+        .expect("test handler is valid")
+        .expect("worker target is selected")
+    }
+
+    #[test]
+    fn retry_backoff_is_bounded_and_exhaustion_dead_letters() {
+        assert_eq!(retry_delay(1), Duration::from_secs(1));
+        assert_eq!(retry_delay(2), Duration::from_secs(5));
+        assert_eq!(retry_delay(3), Duration::from_secs(15));
+        assert_eq!(retry_delay(4), Duration::from_secs(30));
+        assert_eq!(retry_delay(99), Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn handler_failure_classes_have_distinct_delivery_outcomes() {
+        let retry = registry(HandlerFailure::Retryable(
+            std::io::Error::other("temporary").into(),
+        ));
+        assert!(matches!(
+            handle_message(&retry, envelope(), 1).await,
+            DeliveryOutcome::Retry(_)
+        ));
+        assert!(matches!(
+            handle_message(&retry, envelope(), MAX_ATTEMPTS).await,
+            DeliveryOutcome::DeadLetter {
+                classification: "retry_exhausted",
+                ..
+            }
+        ));
+
+        let permanent = registry(HandlerFailure::Permanent(
+            std::io::Error::other("invalid").into(),
+        ));
+        assert!(matches!(
+            handle_message(&permanent, envelope(), 1).await,
+            DeliveryOutcome::DeadLetter {
+                classification: "permanent_failure",
+                ..
+            }
+        ));
+
+        let unknown = registry(HandlerFailure::UnknownOutcome(
+            std::io::Error::other("ambiguous").into(),
+        ));
+        assert!(matches!(
+            handle_message(&unknown, envelope(), 1).await,
+            DeliveryOutcome::DeadLetter {
+                classification: "unknown_outcome",
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn expired_messages_and_missing_routes_do_not_run_handlers() {
+        let registry = registry(HandlerFailure::Retryable(
+            std::io::Error::other("unused").into(),
+        ));
+        let mut expired = envelope();
+        expired.deadline_unix_ms = Some(0);
+        assert!(matches!(
+            handle_message(&registry, expired, 1).await,
+            DeliveryOutcome::DeadLetter {
+                classification: "expired",
+                ..
+            }
+        ));
+
+        let mut unknown_route = envelope();
+        unknown_route.name = "missing".into();
+        assert!(matches!(
+            handle_message(&registry, unknown_route, 1).await,
+            DeliveryOutcome::Reject
+        ));
+    }
+}

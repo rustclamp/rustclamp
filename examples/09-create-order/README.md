@@ -41,3 +41,20 @@ that lose the inbox primary-key race skip the effect and are acknowledged. A
 database failure rolls the inbox and fulfillment back together, leaving the
 broker delivery unacknowledged for redelivery. Inbox IDs are retained without
 expiry; pruning them would weaken deduplication for older redeliveries.
+
+## Inspect the process boundaries
+
+The inspector derives API, publisher, Worker, and Scheduler process projections
+from the Kernel blueprint. It prints reachable modules, selected resource
+providers, handler/job contributions, the versioned message boundary, and the
+resource owners that drain on shutdown.
+
+```sh
+cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin phase7-inspect
+cargo run --offline --locked --manifest-path rustclamp/examples/09-create-order/Cargo.toml --bin measure-jetstream
+```
+
+The measurement binary publishes 1,000 sequential messages and awaits each
+JetStream confirmation, then verifies that a two-message `Discard New` stream
+rejects another publish. Its result is a local broker microbenchmark, not
+end-to-end Worker throughput.

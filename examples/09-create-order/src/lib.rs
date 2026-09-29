@@ -132,14 +132,7 @@ pub async fn fulfill_order_once(
     database: &Database<Primary>,
     message: &MessageEnvelope,
 ) -> Result<bool, Box<dyn Error + Send + Sync>> {
-    if message.name != SUBJECT || message.schema_version != 1 {
-        return Err(std::io::Error::other("unsupported order message route or version").into());
-    }
-    let order_id = message
-        .payload
-        .get("order_id")
-        .and_then(serde_json::Value::as_i64)
-        .ok_or_else(|| std::io::Error::other("order message has no integer order_id"))?;
+    let order_id = order_id_from_message(message)?;
 
     let mut transaction = database.begin().await?;
     let inserted: Option<String> = sqlx::query_scalar(
@@ -160,6 +153,19 @@ pub async fn fulfill_order_once(
         .await?;
     transaction.commit().await?;
     Ok(true)
+}
+
+fn order_id_from_message(message: &MessageEnvelope) -> Result<i64, std::io::Error> {
+    if message.name != SUBJECT || message.schema_version != 1 {
+        return Err(std::io::Error::other(
+            "unsupported order message route or version",
+        ));
+    }
+    message
+        .payload
+        .get("order_id")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| std::io::Error::other("order message has no integer order_id"))
 }
 
 /// Creates the bounded stream used by the supervised publisher.
@@ -279,4 +285,59 @@ pub async fn settle_payment(
     }
     transaction.commit().await?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn order_message(version: u32, payload: serde_json::Value) -> MessageEnvelope {
+        MessageEnvelope {
+            id: "order-1".into(),
+            name: SUBJECT.into(),
+            schema_version: version,
+            correlation_id: "test-correlation".into(),
+            causation_id: None,
+            deadline_unix_ms: None,
+            payload,
+        }
+    }
+
+    #[test]
+    fn order_messages_reject_incompatible_versions_and_poison_payloads() {
+        assert!(order_id_from_message(&order_message(2, json!({"order_id": 1}))).is_err());
+        assert!(order_id_from_message(&order_message(1, json!({"order_id": "bad"}))).is_err());
+        assert_eq!(
+            order_id_from_message(&order_message(1, json!({"order_id": 7}))).unwrap(),
+            7
+        );
+    }
+
+    struct PendingPayment;
+
+    impl PaymentGateway for PendingPayment {
+        fn charge(&self, _order_id: i64) -> PaymentFuture<'_> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    struct RetryablePayment;
+
+    impl PaymentGateway for RetryablePayment {
+        fn charge(&self, _order_id: i64) -> PaymentFuture<'_> {
+            Box::pin(async { Err(PaymentFailure::Retryable) })
+        }
+    }
+
+    #[tokio::test]
+    async fn payment_timeout_is_unknown_and_pre_effect_failure_is_retryable() {
+        assert_eq!(
+            payment_attempt(&PendingPayment, 1, Duration::from_millis(1)).await,
+            PaymentDecision::UnknownOutcome
+        );
+        assert_eq!(
+            payment_attempt(&RetryablePayment, 1, Duration::from_secs(1)).await,
+            PaymentDecision::Retryable
+        );
+    }
 }

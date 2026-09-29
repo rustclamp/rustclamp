@@ -48,3 +48,12 @@
   architecture/evidence documentation.
 - Added release workload comparisons for direct Axum and SQLx paths, including
   measurement-only allocation instrumentation and dependency/build/binary reports.
+- Added transport-neutral message envelopes, bounded in-memory and JetStream
+  messaging, process-separated email workers, classified retries, deadlines,
+  dead-letter handling, and tracing correlation.
+- Added the PostgreSQL transactional outbox/inbox CreateOrder proof, payment
+  uncertainty and compensation, process/ownership inspection, and live crash-
+  window evidence against PostgreSQL and JetStream.
+- Added the dependency-light Scheduler target with controlled-clock, overlap,
+  misfire, admission, and drain checks, plus Phase 7 throughput and dependency
+  measurements.
