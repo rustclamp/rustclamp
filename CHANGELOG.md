@@ -26,6 +26,9 @@
   filled in) and `clamp make:seeder NAME`; `clamp migrate`,
   `migrate:rollback`, `migrate:status` and `db:seed` run the app's
   `db::command`, which gains `migrate:status`.
+- Log channels as in Laravel: `single` (`file` still works), `daily`
+  (`app-YYYY-MM-DD.log`, newest `LOG_DAILY_DAYS` kept), `stderr` and `stack`
+  (`LOG_STACK=daily,stderr`); `Logger::daily`.
 - `db::Model`: a table as a struct (`TABLE`, `from_row`) with `query`,
   `all` and `find`.
 - `rustclamp::build` (optional `build` feature): `build.rs` discovery of

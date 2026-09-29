@@ -14,8 +14,13 @@
 //!
 //! - `LOG_LEVEL`: the lowest level written, `debug` by default. `silent`
 //!   turns logging off.
-//! - `LOG_CHANNEL`: `file` (default) appends to `storage/logs/app.log`;
-//!   `stderr` writes to standard error, for systemd or containers.
+//! - `LOG_CHANNEL`, as in Laravel:
+//!   - `single` (default; `file` is the old name) appends to
+//!     `storage/logs/app.log`;
+//!   - `daily` writes `storage/logs/app-YYYY-MM-DD.log`, one file per UTC
+//!     day, keeping the newest `LOG_DAILY_DAYS` (14 by default);
+//!   - `stderr` writes to standard error, for systemd or containers;
+//!   - `stack` writes to every channel in `LOG_STACK`, such as `daily,stderr`.
 //! - `APP_ENV`: the environment name in each line, `local` by default.
 //!
 //! Each entry is one line, `[2026-09-29 14:03:07] local.INFO: message`, with
@@ -31,8 +36,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 
-/// The log file used by the `file` channel.
+/// The log file used by the `single` channel.
 pub const FILE: &str = "storage/logs/app.log";
+/// The folder the `daily` channel writes `app-YYYY-MM-DD.log` files to.
+pub const DAILY: &str = "storage/logs";
 
 /// Severity, from least to most severe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -145,13 +152,29 @@ pub struct Logger {
     /// `None` is silent.
     min: Option<Level>,
     env: String,
-    /// `None` writes to standard error.
-    file: Option<Mutex<File>>,
+    sinks: Vec<Sink>,
+}
+
+#[derive(Debug)]
+enum Sink {
+    Stderr,
+    Single(Mutex<File>),
+    Daily {
+        folder: std::path::PathBuf,
+        days: usize,
+        /// The day's date and its open file.
+        today: Mutex<Option<(String, File)>>,
+    },
 }
 
 impl Logger {
-    /// A logger configured by `LOG_LEVEL`, `LOG_CHANNEL` and `APP_ENV`. When
-    /// the log file cannot be opened it falls back to standard error and says so.
+    /// A logger configured by `LOG_LEVEL`, `LOG_CHANNEL`, `LOG_STACK`,
+    /// `LOG_DAILY_DAYS` and `APP_ENV`. When a log file cannot be opened it
+    /// falls back to standard error and says so.
+    ///
+    /// # Panics
+    ///
+    /// On an unknown level or channel, naming the key.
     pub fn from_config(config: &Config) -> Self {
         let level = config.get("LOG_LEVEL").unwrap_or("debug");
         let min = match level {
@@ -161,28 +184,51 @@ impl Logger {
             })),
         };
         let env = config.get("APP_ENV").unwrap_or("local");
-        match config.get("LOG_CHANNEL").unwrap_or("file") {
-            "stderr" => Self::stderr(min, env),
-            "file" => Self::file(FILE, min, env).unwrap_or_else(|problem| {
+        let days = config.get_or("LOG_DAILY_DAYS", 14);
+        let sink = |channel: &str, key: &str| match channel.trim() {
+            "stderr" => Sink::Stderr,
+            "single" | "file" => single(Path::new(FILE)).unwrap_or_else(|problem| {
                 eprintln!("log: cannot open {FILE} ({problem}); logging to stderr");
-                Self::stderr(min, env)
+                Sink::Stderr
             }),
-            other => panic!("config key LOG_CHANNEL is set but is not file or stderr: {other}"),
+            "daily" => daily(Path::new(DAILY), days),
+            other => {
+                panic!("config key {key} is set but is not single, daily, stderr or stack: {other}")
+            }
+        };
+        let sinks = match config.get("LOG_CHANNEL").unwrap_or("single") {
+            "stack" => config
+                .get("LOG_STACK")
+                .unwrap_or("single")
+                .split(',')
+                .map(|channel| sink(channel, "LOG_STACK"))
+                .collect(),
+            channel => vec![sink(channel, "LOG_CHANNEL")],
+        };
+        Self {
+            min,
+            env: env.into(),
+            sinks,
         }
     }
 
     /// Appends to `path`, creating it and its folders. `min` of `None` is silent.
     pub fn file(path: impl AsRef<Path>, min: Option<Level>, env: &str) -> std::io::Result<Self> {
-        let path = path.as_ref();
-        if let Some(folder) = path.parent() {
-            fs::create_dir_all(folder)?;
-        }
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
         Ok(Self {
             min,
             env: env.into(),
-            file: Some(Mutex::new(file)),
+            sinks: vec![single(path.as_ref())?],
         })
+    }
+
+    /// Writes `app-YYYY-MM-DD.log` files in `folder`, one per UTC day,
+    /// keeping the newest `days`. `min` of `None` is silent.
+    pub fn daily(folder: impl AsRef<Path>, days: usize, min: Option<Level>, env: &str) -> Self {
+        Self {
+            min,
+            env: env.into(),
+            sinks: vec![daily(folder.as_ref(), days)],
+        }
     }
 
     /// Writes to standard error. `min` of `None` is silent.
@@ -190,7 +236,7 @@ impl Logger {
         Self {
             min,
             env: env.into(),
-            file: None,
+            sinks: vec![Sink::Stderr],
         }
     }
 
@@ -200,14 +246,90 @@ impl Logger {
         if self.min.is_none_or(|min| level < min) {
             return;
         }
-        let line = line(now(), &self.env, level, &message.to_string());
-        match &self.file {
-            Some(file) => {
+        let seconds = now();
+        let line = line(seconds, &self.env, level, &message.to_string());
+        for sink in &self.sinks {
+            sink.write(seconds, &line);
+        }
+    }
+}
+
+fn single(path: &Path) -> std::io::Result<Sink> {
+    if let Some(folder) = path.parent() {
+        fs::create_dir_all(folder)?;
+    }
+    let file = OpenOptions::new().create(true).append(true).open(path)?;
+    Ok(Sink::Single(Mutex::new(file)))
+}
+
+fn daily(folder: &Path, days: usize) -> Sink {
+    Sink::Daily {
+        folder: folder.to_path_buf(),
+        days: days.max(1),
+        today: Mutex::new(None),
+    }
+}
+
+impl Sink {
+    fn write(&self, seconds: u64, line: &str) {
+        match self {
+            Self::Stderr => eprint!("{line}"),
+            Self::Single(file) => {
                 let mut file = file.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 let _ = file.write_all(line.as_bytes());
             }
-            None => eprint!("{line}"),
+            Self::Daily {
+                folder,
+                days,
+                today,
+            } => {
+                let date = timestamp(seconds)[..10].to_owned();
+                let mut today = today
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if today.as_ref().is_none_or(|(open, _)| *open != date) {
+                    let path = folder.join(format!("app-{date}.log"));
+                    let opened = fs::create_dir_all(folder)
+                        .and_then(|()| OpenOptions::new().create(true).append(true).open(&path));
+                    match opened {
+                        Ok(file) => *today = Some((date, file)),
+                        Err(problem) => {
+                            eprint!("log: cannot open {} ({problem}): {line}", path.display());
+                            return;
+                        }
+                    }
+                    prune(folder, *days);
+                }
+                if let Some((_, file)) = today.as_mut() {
+                    let _ = file.write_all(line.as_bytes());
+                }
+            }
         }
+    }
+}
+
+/// Deletes all but the newest `days` daily files in `folder`.
+fn prune(folder: &Path, days: usize) {
+    let mut files: Vec<_> = fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.len() == "app-YYYY-MM-DD.log".len()
+                        && name.starts_with("app-")
+                        && name.ends_with(".log")
+                })
+        })
+        .collect();
+    // The date in the name sorts oldest first.
+    files.sort();
+    let excess = files.len().saturating_sub(days);
+    for old in &files[..excess] {
+        let _ = fs::remove_file(old);
     }
 }
 
@@ -296,11 +418,53 @@ mod tests {
             "LOG_LEVEL=Error\nLOG_CHANNEL=stderr\nAPP_ENV=prod\n",
         ));
         assert_eq!(
-            (logger.min, logger.env.as_str(), logger.file.is_none()),
-            (Some(Level::Error), "prod", true)
+            (logger.min, logger.env.as_str()),
+            (Some(Level::Error), "prod")
         );
+        assert!(matches!(logger.sinks.as_slice(), [Sink::Stderr]));
         let silent = Logger::from_config(&Config::parse("LOG_LEVEL=silent\nLOG_CHANNEL=stderr\n"));
         assert_eq!(silent.min, None);
+    }
+
+    #[test]
+    fn stack_writes_to_each_channel() {
+        let logger = Logger::from_config(&Config::parse(
+            "LOG_CHANNEL=stack\nLOG_STACK=daily, stderr\n",
+        ));
+        assert!(matches!(
+            logger.sinks.as_slice(),
+            [Sink::Daily { days: 14, .. }, Sink::Stderr]
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "LOG_STACK is set but is not single, daily, stderr or stack: loud")]
+    fn unknown_stack_channel_names_the_key() {
+        Logger::from_config(&Config::parse("LOG_CHANNEL=stack\nLOG_STACK=stderr,loud\n"));
+    }
+
+    #[test]
+    fn daily_files_rotate_by_date_and_keep_the_newest() {
+        let folder = std::env::temp_dir().join(format!("clamp-daily-{}", std::process::id()));
+        fs::create_dir_all(&folder).unwrap();
+        for old in ["app-2026-01-01.log", "app-2026-01-02.log", "notes.log"] {
+            fs::write(folder.join(old), "").unwrap();
+        }
+        let sink = daily(&folder, 2);
+        sink.write(1_790_693_195, "one\n"); // 2026-09-29
+        sink.write(1_790_693_196, "two\n");
+        let mut names: Vec<String> = fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        let today = fs::read_to_string(folder.join("app-2026-09-29.log")).unwrap();
+        fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(
+            names,
+            ["app-2026-01-02.log", "app-2026-09-29.log", "notes.log"]
+        );
+        assert_eq!(today, "one\ntwo\n");
     }
 
     #[test]
