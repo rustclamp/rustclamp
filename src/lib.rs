@@ -10,6 +10,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+#[cfg(feature = "web")]
+pub mod web;
+
 /// Entrypoints for running a Clamp application.
 ///
 /// The closure entrypoint has no application state or required runtime.

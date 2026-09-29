@@ -9,6 +9,10 @@ readme = "README.md"
 publish = false
 autoexamples = false
 
+[features]
+# Optional std-only HTTP server for `clamp init --web` apps.
+web = []
+
 [[example]]
 name = "00-pico"
 path = "examples/00-pico/main.rs"
