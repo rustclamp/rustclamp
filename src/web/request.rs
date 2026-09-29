@@ -230,7 +230,7 @@ pub(super) fn encode(text: &str) -> String {
 }
 
 /// Percent-decodes `text`, reading `+` as a space. Invalid escapes stay as they are.
-fn decode(text: &str) -> String {
+pub(super) fn decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

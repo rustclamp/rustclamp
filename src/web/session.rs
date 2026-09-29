@@ -88,14 +88,17 @@ impl PartialEq for Session {
 impl Eq for Session {}
 
 /// Server-side sessions: the cookie holds only a random ID, the values stay
-/// in memory. Add [`Sessions::middleware`] to the routes that need
-/// [`Request::session`], usually a `web` group.
+/// on the server, in memory or, with [`database`](Self::database), in
+/// SQLite so they survive restarts. Add [`Sessions::middleware`] to the routes
+/// that need [`Request::session`], usually a `web` group.
 #[derive(Debug)]
 pub struct Sessions {
     lifetime: Duration,
     secure: bool,
     capacity: usize,
     store: Mutex<HashMap<String, (Data, Instant)>>,
+    #[cfg(feature = "db")]
+    database: Option<crate::db::Db>,
 }
 
 impl Sessions {
@@ -106,7 +109,35 @@ impl Sessions {
             secure: false,
             capacity: CAPACITY,
             store: Mutex::default(),
+            #[cfg(feature = "db")]
+            database: None,
         }
+    }
+
+    /// Keeps sessions in `db`'s `sessions` table, created when missing, so
+    /// visitors stay logged in across restarts and processes. Expired rows
+    /// are deleted as new sessions start. Two requests changing the same
+    /// session at once: the last one to finish wins.
+    ///
+    /// # Panics
+    ///
+    /// When the table cannot be created: the app should stop at startup.
+    #[cfg(feature = "db")]
+    #[must_use]
+    pub fn database(mut self, db: crate::db::Db) -> Self {
+        db.with(|sql| {
+            sql.execute_batch(
+                "CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    last_activity INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS sessions_last_activity ON sessions (last_activity)",
+            )
+        })
+        .unwrap_or_else(|error| panic!("cannot create the sessions table: {error}"));
+        self.database = Some(db);
+        self
     }
 
     /// Marks the cookie `Secure`, so browsers send it over HTTPS only. Enable
@@ -119,6 +150,10 @@ impl Sessions {
 
     /// The session for cookie value `id`, or a new one with a fresh ID.
     fn open(&self, id: Option<&str>) -> (String, Data) {
+        #[cfg(feature = "db")]
+        if let Some(db) = &self.database {
+            return self.open_stored(db, id);
+        }
         let now = Instant::now();
         let mut store = self
             .store
@@ -150,15 +185,62 @@ impl Sessions {
         (id, data)
     }
 
+    #[cfg(feature = "db")]
+    fn open_stored(&self, db: &crate::db::Db, id: Option<&str>) -> (String, Data) {
+        let now = unix_seconds();
+        let fresh = now - self.lifetime.as_secs() as i64;
+        let stored: Option<String> = id.and_then(|id| {
+            db.with(|sql| {
+                sql.query_row(
+                    "SELECT payload FROM sessions WHERE id = ?1 AND last_activity > ?2",
+                    crate::db::sqlite::params![id, fresh],
+                    |row| row.get(0),
+                )
+            })
+            .ok()
+        });
+        if let (Some(id), Some(payload)) = (id, stored) {
+            return (id.to_owned(), Arc::new(Mutex::new(unpack(&payload))));
+        }
+        // A new session is a good moment to forget expired ones.
+        let _ =
+            db.with(|sql| sql.execute("DELETE FROM sessions WHERE last_activity <= ?1", [fresh]));
+        (random_token(), Data::default())
+    }
+
+    /// Writes the session back to the database store, if there is one.
+    fn save(&self, id: &str, data: &Data) {
+        #[cfg(feature = "db")]
+        if let Some(db) = &self.database {
+            let payload = pack(&data.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+            let saved = db.with(|sql| {
+                sql.execute(
+                    "INSERT INTO sessions (id, payload, last_activity) VALUES (?1, ?2, ?3)
+                     ON CONFLICT (id) DO UPDATE SET payload = ?2, last_activity = ?3",
+                    crate::db::sqlite::params![id, payload, unix_seconds()],
+                )
+            });
+            if let Err(error) = saved {
+                crate::log::Log::error(format_args!("session: could not save: {error}"));
+            }
+        }
+        #[cfg(not(feature = "db"))]
+        let _ = (id, data);
+    }
+
     /// Middleware attaching the visitor's [`Session`] to the request and
     /// refreshing its cookie on the response.
     pub fn middleware(self) -> impl Fn(&Request, Next) -> Response + Send + Sync + 'static {
         move |request, next| {
             let (id, data) = self.open(request.cookie(COOKIE));
             let mut request = request.clone();
-            request.session = Some(Session { data });
+            request.session = Some(Session {
+                data: Arc::clone(&data),
+            });
+            let response = next(&request);
+            self.save(&id, &data);
             let secure = if self.secure { "; Secure" } else { "" };
-            next(&request).with_header(
+            response.with_header(
                 "Set-Cookie",
                 &format!(
                     "{COOKIE}={id}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{secure}",
@@ -192,6 +274,37 @@ pub fn csrf() -> impl Fn(&Request, Next) -> Response + Send + Sync + 'static {
             _ => error(419),
         }
     }
+}
+
+/// Seconds since the Unix epoch.
+#[cfg(feature = "db")]
+fn unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |time| time.as_secs() as i64)
+}
+
+/// Session values as a form-encoded string, for the database store.
+#[cfg(feature = "db")]
+fn pack(values: &HashMap<String, String>) -> String {
+    use super::request::encode;
+    values
+        .iter()
+        .map(|(key, value)| format!("{}={}", encode(key), encode(value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// The values [`pack`] wrote.
+#[cfg(feature = "db")]
+fn unpack(payload: &str) -> HashMap<String, String> {
+    use super::request::decode;
+    payload
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(key, value)| (decode(key), decode(value)))
+        .collect()
 }
 
 /// Compares without stopping at the first difference, so timing does not
@@ -280,6 +393,49 @@ mod tests {
             cookie_of(&saved),
             cookie,
             "an existing session keeps its ID"
+        );
+    }
+
+    #[cfg(feature = "db")]
+    #[test]
+    fn database_sessions_survive_a_restart_and_expire() {
+        use crate::config::Config;
+        use crate::db::Db;
+
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let app = |lifetime| {
+            Router::new().group(|web| {
+                web.middleware(Sessions::new(lifetime).database(db.clone()).middleware())
+                    .get("/put", |request| {
+                        request.session().unwrap().put("name", "Neo & co=1");
+                        Response::text(200, "")
+                    })
+                    .get("/get", |request| {
+                        Response::text(
+                            200,
+                            &request.session().unwrap().get("name").unwrap_or_default(),
+                        )
+                    })
+            })
+        };
+        let first = app(Duration::from_secs(60));
+        let cookie = cookie_of(&first.handle(&Request::get("/put")));
+        // A new router is a restarted app: only the database remembers.
+        let restarted = app(Duration::from_secs(60));
+        let got = restarted.handle(&Request::get("/get").with_header("Cookie", &cookie));
+        assert_eq!(got.body, b"Neo & co=1");
+        assert_eq!(cookie_of(&got), cookie);
+
+        let expired = app(Duration::ZERO);
+        let got = expired.handle(&Request::get("/get").with_header("Cookie", &cookie));
+        assert_eq!(got.body, b"");
+        assert_ne!(cookie_of(&got), cookie);
+        let rows: i64 = db
+            .with(|sql| sql.query_row("SELECT count(*) FROM sessions", [], |row| row.get(0)))
+            .unwrap();
+        assert_eq!(
+            rows, 1,
+            "the expired session was deleted, the new one saved"
         );
     }
 

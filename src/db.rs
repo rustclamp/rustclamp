@@ -51,8 +51,10 @@ use crate::config::Config;
 
 mod query;
 mod schema;
+mod states;
 pub use query::Query;
 pub use schema::{Column, Schema, Table};
+pub use states::{Change, States, Transition};
 
 pub use rusqlite as sqlite;
 use rusqlite::Connection;
@@ -64,6 +66,12 @@ pub struct Db {
     // threads; a pool when that shows up in measurements. `:memory:` relies on
     // it: every clone must see the same in-memory database.
     connection: Arc<Mutex<Connection>>,
+}
+
+impl std::fmt::Debug for Db {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Db").finish_non_exhaustive()
+    }
 }
 
 impl Db {
@@ -159,6 +167,40 @@ impl Db {
             }
             Ok(())
         })
+    }
+
+    /// Each migration's name and the batch it ran in, or `None` while
+    /// pending, in the order given.
+    pub fn status(
+        &self,
+        migrations: &[&dyn Migration],
+    ) -> Result<Vec<(&'static str, Option<i64>)>, String> {
+        let ran: Vec<(String, i64)> = self
+            .with(|connection| {
+                let exists: bool = connection.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'migrations')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    return Ok(Vec::new());
+                }
+                connection
+                    .prepare("SELECT name, batch FROM migrations")?
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect()
+            })
+            .map_err(|error: sqlite::Error| error.to_string())?;
+        Ok(migrations
+            .iter()
+            .map(|migration| {
+                let batch = ran
+                    .iter()
+                    .find(|(name, _)| name == migration.name())
+                    .map(|(_, batch)| *batch);
+                (migration.name(), batch)
+            })
+            .collect())
     }
 
     /// Runs each seeder in order, each in its own transaction, so a failing
@@ -280,7 +322,7 @@ pub trait Seeder {
 }
 
 /// Runs a database console command and returns the process exit code:
-/// `migrate`, `migrate:rollback` or `db:seed`. The web template's `main`
+/// `migrate`, `migrate:rollback`, `migrate:status` or `db:seed`. The web template's `main`
 /// calls it when the app gets an argument: `cargo run -- db:seed`.
 pub fn command(
     db: &Db,
@@ -295,6 +337,14 @@ pub fn command(
             .map(|()| {
                 println!("Migrated");
             }),
+        "migrate:status" => db.status(migrations).map(|rows| {
+            for (name, batch) in rows {
+                match batch {
+                    Some(batch) => println!("Ran      {name} (batch {batch})"),
+                    None => println!("Pending  {name}"),
+                }
+            }
+        }),
         "migrate:rollback" => db.rollback(migrations).map(|names| {
             names.iter().for_each(|name| println!("Rolled back {name}"));
         }),
@@ -304,7 +354,9 @@ pub fn command(
             .map_err(|error| error.to_string())
             .map(|()| println!("Seeded")),
         _ => {
-            eprintln!("unknown command {command:?}; try migrate, migrate:rollback or db:seed");
+            eprintln!(
+                "unknown command {command:?}; try migrate, migrate:rollback, migrate:status or db:seed"
+            );
             return 2;
         }
     };
@@ -496,6 +548,12 @@ mod tests {
         assert_eq!(command(&db, "db:seed", &[&posts], &[&Posts("SELECT 1")]), 0);
         assert_eq!(count(&db, "SELECT count(*) FROM posts"), 2);
         assert_eq!(command(&db, "nope", &[], &[]), 2);
+        let pending = Sql("0002", "SELECT 1", "");
+        assert_eq!(
+            db.status(&[&posts, &pending]).unwrap(),
+            [("0001", Some(1)), ("0002", None)]
+        );
+        assert_eq!(memory().status(&[&posts]).unwrap(), [("0001", None)]);
     }
 
     #[test]

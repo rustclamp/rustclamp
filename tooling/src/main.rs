@@ -1,5 +1,7 @@
 //! Command-line interface for resolved Clamp process inspection.
 
+mod make;
+
 use serde_json::{Value, json};
 use std::{
     env, fs,
@@ -122,6 +124,23 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     if command == "--help" || command == "help" {
         println!("{}", usage());
         return Ok(0);
+    }
+    if let Some(kind) = command.strip_prefix("make:") {
+        let root = env::current_dir().map_err(|error| format!("cannot read folder: {error}"))?;
+        let path = make::make(&root, kind, args.get(1))?;
+        println!("Created {path}");
+        return Ok(0);
+    }
+    if matches!(
+        command,
+        "migrate" | "migrate:rollback" | "migrate:status" | "db:seed"
+    ) {
+        // The app runs its own database commands; see `rustclamp::db::command`.
+        let status = Command::new("cargo")
+            .args(["run", "--quiet", "--", command])
+            .status()
+            .map_err(|error| format!("cannot start cargo: {error}"))?;
+        return Ok(status.code().unwrap_or(1).clamp(0, 255) as u8);
     }
     if command == "init" {
         let project = args.get(1).ok_or("init requires a project name or path")?;
@@ -346,7 +365,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, reinstall clamp, or run a Cargo command."
+    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, make migrations and seeders, run database commands, reinstall clamp, or run a Cargo command."
 }
 
 fn create_application(root: &std::path::Path) -> Result<(), String> {

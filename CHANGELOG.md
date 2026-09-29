@@ -18,6 +18,14 @@
   `max`, `email` and `integer` rules, and `Invalid::back` redirecting with
   errors and old input; `Session::flash`; `Request::render` fills
   `<!--csrf-->`, `<!--flash-->`, `<!--errors-->` and `<!--old:field-->`.
+- `Sessions::database(db)`: sessions in a SQLite `sessions` table, so they
+  survive restarts; expired rows are pruned.
+- `db::States`: allowed transitions for a status column, each move recorded
+  in `state_history` with who made it; `history`, `can`, `allowed_from`.
+- `clamp make:migration NAME` (dated stub; `create_x` and `add_y_to_x` are
+  filled in) and `clamp make:seeder NAME`; `clamp migrate`,
+  `migrate:rollback`, `migrate:status` and `db:seed` run the app's
+  `db::command`, which gains `migrate:status`.
 - `db::Model`: a table as a struct (`TABLE`, `from_row`) with `query`,
   `all` and `find`.
 - `rustclamp::build` (optional `build` feature): `build.rs` discovery of
