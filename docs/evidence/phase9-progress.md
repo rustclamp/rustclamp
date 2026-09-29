@@ -60,11 +60,17 @@ binary successfully, and the installed command ran from `/tmp`. The no-argument
 menu and `clamp init` flow both ran. The generated app compiled and ran against
 the local facade; fetching its public Git dependency could not be verified in
 this network-restricted environment.
-Both site sources now carry an installer at `/install.sh`; the marketing
-homepage shows the copyable install command and the docs explain prerequisites.
+The marketing site owns the single installer at `rustclamp.com/install.sh` and
+shows its copyable command on the home page; docs link to that canonical URL.
 The script builds from the three public Git repositories on Linux/macOS. Its
 GitHub main-branch source is ready to become usable when the tooling branch is
 merged; live deployment remains unverified.
+
+No prebuilt binary release exists yet: there are no release tags or binary
+release workflow in this checkout. The source installer compiles `clamp` on
+each machine. A local Linux installation was verified under `/tmp`; it is not a
+published artifact. Cross-platform binary packaging and release verification
+remain open.
 Output still needs comparison against every reference example; required
 configuration and lifecycle boundaries need fuller presentation. Project
 generation is implemented, while its ordinary registry build remains gated on
