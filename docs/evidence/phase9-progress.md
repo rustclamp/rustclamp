@@ -53,9 +53,11 @@ Focused formatting, Clippy, unit, rustdoc, and CLI smoke checks pass. A unit
 test constructs a Kernel blueprint, resolves a provider, and verifies that the
 exported document and `why` output reflect that projection. CLI smoke runs
 covered human tree/why output and JSON inspect output. `tools/check.py` now
-includes this standalone package. Output still needs comparison against every
-reference example; required configuration and lifecycle boundaries need fuller
-presentation. Cargo-backed project commands and generation remain open.
+includes this standalone package. `clamp check`, `test`, `build`, and `run` pass
+arguments and exit status through to Cargo; the check wrapper has a smoke run.
+Output still needs comparison against every reference example; required
+configuration and lifecycle boundaries need fuller presentation. Project
+generation remains open until the framework has a publishable dependency target.
 
 ## Remaining release work
 
