@@ -4,7 +4,7 @@
 //! into the SQL, so they must come from the app's code; a name that is not
 //! `letters, digits, _ or .` panics rather than reach SQLite.
 
-use rusqlite::{Params, Result, Row, ToSql, params_from_iter};
+use rusqlite::{Connection, Params, Result, Row, ToSql, params_from_iter};
 
 use super::Db;
 
@@ -39,7 +39,7 @@ use super::Db;
 /// assert_eq!(db.table("posts").count().unwrap(), 1);
 /// ```
 pub struct Query<'a> {
-    db: &'a Db,
+    source: Source<'a>,
     table: String,
     conditions: Vec<String>,
     values: Vec<&'a dyn ToSql>,
@@ -47,10 +47,27 @@ pub struct Query<'a> {
     limit: Option<u64>,
 }
 
+/// Where a query gets its connection: the shared one, locked per call, or the
+/// one a transaction already holds.
+#[derive(Clone, Copy)]
+enum Source<'a> {
+    Db(&'a Db),
+    Transaction(&'a Connection),
+}
+
 impl<'a> Query<'a> {
     pub(super) fn new(db: &'a Db, table: &str) -> Self {
+        Self::on(Source::Db(db), table)
+    }
+
+    /// A query that runs on `connection`, which the caller already holds.
+    pub(super) fn in_transaction(connection: &'a Connection, table: &str) -> Self {
+        Self::on(Source::Transaction(connection), table)
+    }
+
+    fn on(source: Source<'a>, table: &str) -> Self {
         Self {
-            db,
+            source,
             table: name(table),
             conditions: Vec::new(),
             values: Vec::new(),
@@ -117,7 +134,7 @@ impl<'a> Query<'a> {
                 .map(|rows| format!(" LIMIT {rows}"))
                 .unwrap_or_default()
         );
-        self.db.with(|connection| {
+        self.with(|connection| {
             connection
                 .prepare(&sql)?
                 .query_map(params_from_iter(&self.values), map)?
@@ -133,7 +150,7 @@ impl<'a> Query<'a> {
     /// How many rows match.
     pub fn count(&self) -> Result<i64> {
         let sql = format!("SELECT count(*) FROM {}{}", self.table, self.where_sql());
-        self.db.with(|connection| {
+        self.with(|connection| {
             connection.query_row(&sql, params_from_iter(&self.values), |row| row.get(0))
         })
     }
@@ -148,7 +165,7 @@ impl<'a> Query<'a> {
             names.join(", "),
             vec!["?"; columns.len()].join(", ")
         );
-        self.db.with(|connection| {
+        self.with(|connection| {
             connection.execute(&sql, values)?;
             Ok(connection.last_insert_rowid())
         })
@@ -168,16 +185,21 @@ impl<'a> Query<'a> {
             self.where_sql()
         );
         let all = values.iter().copied().chain(self.values.iter().copied());
-        self.db
-            .with(|connection| connection.execute(&sql, params_from_iter(all)))
+        self.with(|connection| connection.execute(&sql, params_from_iter(all)))
     }
 
     /// Deletes every matching row, and returns how many. Without a condition
     /// that is every row.
     pub fn delete(&self) -> Result<usize> {
         let sql = format!("DELETE FROM {}{}", self.table, self.where_sql());
-        self.db
-            .with(|connection| connection.execute(&sql, params_from_iter(&self.values)))
+        self.with(|connection| connection.execute(&sql, params_from_iter(&self.values)))
+    }
+
+    fn with<T>(&self, work: impl FnOnce(&Connection) -> T) -> T {
+        match self.source {
+            Source::Db(db) => db.with(work),
+            Source::Transaction(connection) => work(connection),
+        }
     }
 
     fn where_sql(&self) -> String {

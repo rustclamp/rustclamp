@@ -174,10 +174,15 @@ impl Db {
     }
 
     /// Runs `work` in a transaction, like Laravel's `DB::transaction`: kept
-    /// when it returns `Ok`, undone when it returns `Err`. It nests: inside
-    /// another transaction, such as a seeder's, it is a savepoint. `work`
-    /// gets the connection; calling other `Db` methods inside it would wait
-    /// forever for the lock it holds.
+    /// when it returns `Ok`, undone when it returns `Err` or panics. It
+    /// nests: inside another transaction, such as a seeder's, it is a
+    /// savepoint. `work` gets a [`Tx`]: query through it (`tx.table(..)`, or
+    /// the [`Connection`] it derefs to), not through this `Db`, whose lock it
+    /// holds; a `Db` call inside `work` waits forever.
+    ///
+    /// The write lock is taken at the first write, so two transactions that
+    /// both read and then write can meet a "database is locked" error; use
+    /// [`Db::transaction_immediate`] for those.
     ///
     /// ```
     /// use rustclamp::config::Config;
@@ -185,9 +190,9 @@ impl Db {
     ///
     /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
     /// db.with(|sql| sql.execute_batch("CREATE TABLE t (n INTEGER)")).unwrap();
-    /// let failed: Result<(), sqlite::Error> = db.transaction(|sql| {
-    ///     sql.execute("INSERT INTO t VALUES (1)", [])?;
-    ///     sql.execute("NOT SQL", [])?;
+    /// let failed: Result<(), sqlite::Error> = db.transaction(|tx| {
+    ///     tx.table("t").insert(&["n"], [&1])?;
+    ///     tx.execute("NOT SQL", [])?;
     ///     Ok(())
     /// });
     /// assert!(failed.is_err());
@@ -195,9 +200,45 @@ impl Db {
     /// ```
     pub fn transaction<T, E: From<sqlite::Error>>(
         &self,
-        work: impl FnOnce(&Connection) -> Result<T, E>,
+        work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
-        self.with(|connection| savepoint(connection, work))
+        self.run_transaction(sqlite::TransactionBehavior::Deferred, work)
+    }
+
+    /// [`Db::transaction`], but it takes the write lock up front (`BEGIN
+    /// IMMEDIATE`), waiting out the busy timeout, so a read-then-write
+    /// cannot fail halfway on a lock another process took meanwhile. Inside
+    /// another transaction it is a savepoint of that one, which keeps
+    /// whatever lock that one has.
+    pub fn transaction_immediate<T, E: From<sqlite::Error>>(
+        &self,
+        work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
+    ) -> Result<T, E> {
+        self.run_transaction(sqlite::TransactionBehavior::Immediate, work)
+    }
+
+    fn run_transaction<T, E: From<sqlite::Error>>(
+        &self,
+        behavior: sqlite::TransactionBehavior,
+        work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let mut connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // rusqlite's Transaction and Savepoint roll back when dropped, so an
+        // `Err` or a panic in `work` leaves no transaction open behind it.
+        if connection.is_autocommit() {
+            let transaction = connection.transaction_with_behavior(behavior)?;
+            let value = work(&Tx(&transaction))?;
+            transaction.commit()?;
+            Ok(value)
+        } else {
+            let savepoint = connection.savepoint()?;
+            let value = work(&Tx(&savepoint))?;
+            savepoint.commit()?;
+            Ok(value)
+        }
     }
 
     /// A query on `table`; see [`Query`].
@@ -328,6 +369,25 @@ impl Db {
             }
             Ok(undone)
         })
+    }
+}
+
+/// The connection inside [`Db::transaction`]. It derefs to [`Connection`]
+/// for raw SQL, and [`Tx::table`] builds queries that run in the transaction.
+pub struct Tx<'a>(&'a Connection);
+
+impl<'a> Tx<'a> {
+    /// A query on `table` inside this transaction; see [`Query`].
+    pub fn table(&self, table: &str) -> Query<'a> {
+        Query::in_transaction(self.0, table)
+    }
+}
+
+impl std::ops::Deref for Tx<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        self.0
     }
 }
 
@@ -768,6 +828,74 @@ mod tests {
                 });
             }
         });
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    // #36: the query builder works inside a transaction, through the handle.
+    #[test]
+    fn transaction_queries_through_the_handle() {
+        let db = memory();
+        db.migrate(&[&Sql("0001", "CREATE TABLE posts (title TEXT)", "")])
+            .unwrap();
+        let failed: sqlite::Result<()> = db.transaction(|tx| {
+            tx.table("posts").insert(&["title"], [&"a"])?;
+            assert_eq!(tx.table("posts").count()?, 1);
+            tx.execute("NOT SQL", [])?;
+            Ok(())
+        });
+        assert!(failed.is_err());
+        db.transaction(|tx| tx.table("posts").insert(&["title"], [&"b"]))
+            .unwrap();
+        assert_eq!(db.table("posts").count().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_panic_in_a_transaction_leaves_none_open() {
+        let db = memory();
+        db.migrate(&[&Sql("0001", "CREATE TABLE posts (title TEXT)", "")])
+            .unwrap();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: sqlite::Result<()> = db.transaction_immediate(|tx| {
+                tx.table("posts").insert(&["title"], [&"a"])?;
+                panic!("boom");
+            });
+        }));
+        assert!(panicked.is_err());
+        assert!(db.with(Connection::is_autocommit));
+        assert_eq!(db.table("posts").count().unwrap(), 0);
+    }
+
+    // Two processes that read, then write: deferred ones can both hold a read
+    // lock and one gets BUSY on the upgrade; immediate ones queue instead.
+    #[test]
+    fn immediate_transactions_read_then_write_without_busy() {
+        let folder =
+            std::env::temp_dir().join(format!("rustclamp-db-immediate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let config = Config::parse(&format!(
+            "DB_DATABASE={}",
+            folder.join("tx.sqlite").display()
+        ));
+        Db::open(&config)
+            .migrate(&[&Sql("0001", "CREATE TABLE hits (n INTEGER)", "")])
+            .unwrap();
+        let start = std::sync::Barrier::new(8);
+        std::thread::scope(|threads| {
+            for _ in 0..8 {
+                threads.spawn(|| {
+                    let db = Db::open(&config);
+                    start.wait();
+                    for _ in 0..20 {
+                        db.transaction_immediate(|tx| {
+                            let n = tx.table("hits").count()?;
+                            tx.table("hits").insert(&["n"], [&n])
+                        })
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(Db::open(&config).table("hits").count().unwrap(), 160);
         let _ = std::fs::remove_dir_all(folder);
     }
 

@@ -17,6 +17,11 @@
     `{{ old.email }}`. `<!--flash-->`/`<!--errors-->` become
     `@if(flash)…{{ flash }}…@endif` and `@foreach(errors as error)`.
 
+- `Db::transaction` hands `work` a `Tx` instead of `&Connection` (#36). `Tx`
+  derefs to `Connection`, so `|sql| sql.execute(..)` and `|c| helper(c)`
+  keep compiling; a closure annotated `|c: &Connection|` must drop the
+  annotation or take `&Tx`.
+
 ### Changed
 
 - `Uuid::v7` comes from `rustclamp_core::Reference` (ADR 0021), so v7 IDs and
@@ -35,6 +40,11 @@
   requests no longer scans the whole store on every request.
 
 ### Added
+
+- `Db::transaction_immediate`: `BEGIN IMMEDIATE`, so a read-then-write
+  cannot fail halfway with "database is locked" (#36).
+- `Tx::table`: the query builder inside a transaction. Calling `db.table(..)`
+  there waited forever on the lock the transaction holds (#36).
 
 - Every web request has a `Reference` (UUIDv7, ADR 0021): `Request::reference()`,
   sent back in `X-Request-Id`, appended as `ref=<reference>` to each log line
@@ -284,3 +294,5 @@
 - `Db::connect` no longer fails with "database is locked" when several
   processes open a new database at once (#34): `busy_timeout` is set before
   the switch to WAL, and the switch retries until the same 5 s deadline.
+- A panic inside `Db::transaction` rolls it back. Before, the savepoint stayed
+  open and every later transaction nested inside it and never committed.
