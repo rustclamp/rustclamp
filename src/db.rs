@@ -131,9 +131,24 @@ impl Db {
                 let _ = std::fs::create_dir_all(folder);
             }
             Connection::open(path).and_then(|connection| {
-                // WAL lets readers work while a write is in progress.
-                connection.pragma_update(None, "journal_mode", "WAL")?;
-                connection.busy_timeout(std::time::Duration::from_secs(5))?;
+                let patience = std::time::Duration::from_secs(5);
+                connection.busy_timeout(patience)?;
+                // WAL lets readers work while a write is in progress. The
+                // switch upgrades a shared lock to an exclusive one, and SQLite
+                // answers BUSY at once there (deadlock avoidance) without
+                // calling the busy handler, so racing first opens retry (#34).
+                let deadline = std::time::Instant::now() + patience;
+                loop {
+                    match connection.pragma_update(None, "journal_mode", "WAL") {
+                        Err(rusqlite::Error::SqliteFailure(error, _))
+                            if error.code == rusqlite::ErrorCode::DatabaseBusy
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        result => break result?,
+                    }
+                }
                 Ok(connection)
             })
         }
@@ -733,6 +748,26 @@ mod tests {
         let path = folder.join("nested/database.sqlite");
         Db::open(&Config::parse(&format!("DB_DATABASE={}", path.display())));
         assert!(path.exists());
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    // #34: with WAL set before busy_timeout, racing first opens failed at once
+    // with "database is locked". Each Db here is its own connection, so the
+    // threads contend for the file lock the way separate processes do.
+    #[test]
+    fn concurrent_first_opens_wait_instead_of_failing() {
+        let folder = std::env::temp_dir().join(format!("rustclamp-db-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let config = format!("DB_DATABASE={}", folder.join("race.sqlite").display());
+        let start = std::sync::Barrier::new(12);
+        std::thread::scope(|threads| {
+            for _ in 0..12 {
+                threads.spawn(|| {
+                    start.wait();
+                    Db::open(&Config::parse(&config));
+                });
+            }
+        });
         let _ = std::fs::remove_dir_all(folder);
     }
 
