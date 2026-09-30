@@ -231,14 +231,19 @@ pub(super) fn field(pairs: &str, key: &str) -> Option<String> {
 
 /// Percent-encodes `text` for a form body or query string.
 pub(super) fn encode(text: &str) -> String {
-    text.bytes()
-        .map(|byte| match byte {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (byte as char).to_string()
+                out.push(byte as char);
             }
-            _ => format!("%{byte:02X}"),
-        })
-        .collect()
+            _ => {
+                let _ = write!(out, "%{byte:02X}");
+            }
+        }
+    }
+    out
 }
 
 /// Percent-decodes `text`, reading `+` as a space. Invalid escapes stay as they are.

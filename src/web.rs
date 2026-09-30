@@ -352,7 +352,7 @@ fn package_view_in(
 ) -> Response {
     let full = format!("vendor/{package}/{name}");
     let source = built_view(public, &full).unwrap_or_else(|| embedded.to_owned());
-    rendered(public, &full, &source, &Value::map(data))
+    rendered(public, &full, &source, Value::map(data))
 }
 
 /// The `{name}` values when `path` matches `pattern`, segment by segment.
@@ -457,10 +457,10 @@ pub fn view(name: &str) -> Response {
 /// render("blog", &[("title", &"Blog"), ("posts", &posts)]);
 /// ```
 pub fn render(name: &str, data: &[(&str, &dyn ToValue)]) -> Response {
-    render_value(name, &Value::map(data))
+    render_value(name, Value::map(data))
 }
 
-fn render_value(name: &str, data: &Value) -> Response {
+fn render_value(name: &str, data: Value) -> Response {
     let public = Path::new(PUBLIC);
     match built_view(public, name) {
         Some(source) => rendered(public, name, &source, data),
@@ -484,7 +484,7 @@ fn built_view(public: &Path, name: &str) -> Option<String> {
 }
 
 /// `200` with `source` rendered, or a logged `500`.
-fn rendered(public: &Path, name: &str, source: &str, data: &Value) -> Response {
+fn rendered(public: &Path, name: &str, source: &str, data: Value) -> Response {
     match view::render(name, source, data, &|name| built_view(public, name)) {
         Ok(body) => html(200, body.into_bytes()),
         Err(problem) => {
@@ -496,11 +496,26 @@ fn rendered(public: &Path, name: &str, source: &str, data: &Value) -> Response {
 
 /// Escapes text for HTML content and quoted attribute values.
 pub fn escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+    let mut out = String::with_capacity(text.len());
+    escape_into(text, &mut out);
+    out
+}
+
+/// [`escape`], appending to `out`.
+fn escape_into(text: &str, out: &mut String) {
+    let mut rest = text;
+    while let Some(at) = rest.find(['&', '<', '>', '"', '\'']) {
+        out.push_str(&rest[..at]);
+        out.push_str(match rest.as_bytes()[at] {
+            b'&' => "&amp;",
+            b'<' => "&lt;",
+            b'>' => "&gt;",
+            b'"' => "&quot;",
+            _ => "&#39;",
+        });
+        rest = &rest[at + 1..];
+    }
+    out.push_str(rest);
 }
 
 /// The Content-Security-Policy [`security_headers`] sends. Scripts only from
@@ -551,7 +566,9 @@ pub fn error(status: u16) -> Response {
         format!("errors/{}xx", status / 100),
     ] {
         if let Some(source) = built_view(public, &name) {
-            match view::render(&name, &source, &data, &|name| built_view(public, name)) {
+            match view::render(&name, &source, data.clone(), &|name| {
+                built_view(public, name)
+            }) {
                 Ok(body) => return html(status, body.into_bytes()),
                 Err(problem) => {
                     Log::error(format_args!("{problem}"));
@@ -947,7 +964,7 @@ fn respond(mut stream: TcpStream, routes: &Router) {
         response.body.len()
     );
     for (name, value) in &response.headers {
-        head.push_str(&format!("{name}: {value}\r\n"));
+        let _ = std::fmt::Write::write_fmt(&mut head, format_args!("{name}: {value}\r\n"));
     }
     head.push_str("\r\n");
     let _ = stream.write_all(head.as_bytes());

@@ -17,8 +17,9 @@
 //! missing key of a map is empty text.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
-use super::escape;
+use super::{escape, escape_into};
 
 /// Data a view reads: text, a flag, a list or a map of named values.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,19 +143,21 @@ const MAX_DEPTH: usize = 32;
 pub(super) fn render(
     name: &str,
     source: &str,
-    data: &Value,
+    data: Value,
     load: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, String> {
     let mut scope = match data {
-        Value::Map(pairs) => pairs.clone(),
+        Value::Map(pairs) => pairs,
         _ => Vec::new(),
     };
+    let template = parse(source).map_err(|problem| format!("view {name} {problem}"))?;
     let mut renderer = Renderer {
         load,
+        templates: HashMap::from([(name.to_owned(), Rc::new(template))]),
         sections: HashMap::new(),
         depth: 0,
     };
-    renderer.view(name, source, &mut scope)
+    renderer.view(name, &mut scope)
 }
 
 #[derive(Debug)]
@@ -205,36 +208,51 @@ struct Template {
 
 struct Renderer<'a> {
     load: &'a dyn Fn(&str) -> Option<String>,
+    /// Views already read and parsed during this render, by name.
+    templates: HashMap<String, Rc<Template>>,
     /// Section bodies, rendered; the first definition (the child's) wins.
     sections: HashMap<String, String>,
     depth: usize,
 }
 
 impl Renderer<'_> {
-    // ponytail: parses the view and its layout on every request; cache parsed
-    // templates if profiling shows it matters.
-    fn view(
-        &mut self,
-        name: &str,
-        source: &str,
-        scope: &mut Vec<(String, Value)>,
-    ) -> Result<String, String> {
+    /// The view `name`, read and parsed once per render (an `@include` in a
+    /// `@foreach` reuses it), or `None` when `load` has no such view.
+    // ponytail: memo lives for one render, so `clamp dev` rebuilds need no
+    // invalidation; a cross-request cache would need mtime checks per file.
+    fn template(&mut self, name: &str) -> Option<Result<Rc<Template>, String>> {
+        if let Some(template) = self.templates.get(name) {
+            return Some(Ok(Rc::clone(template)));
+        }
+        let source = (self.load)(name)?;
+        Some(match parse(&source) {
+            Ok(template) => {
+                let template = Rc::new(template);
+                self.templates.insert(name.to_owned(), Rc::clone(&template));
+                Ok(template)
+            }
+            Err(problem) => Err(format!("view {name} {problem}")),
+        })
+    }
+
+    /// Renders the view `name`, which [`Self::template`] has already loaded.
+    fn view(&mut self, name: &str, scope: &mut Vec<(String, Value)>) -> Result<String, String> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
             return Err(format!(
                 "view {name}: nested more than {MAX_DEPTH} views deep"
             ));
         }
-        let template = parse(source).map_err(|problem| format!("view {name} {problem}"))?;
+        let template = Rc::clone(&self.templates[name]);
         let mut out = String::new();
         self.nodes(&template.nodes, scope, &mut out)
             .map_err(|problem| format!("view {name} {problem}"))?;
-        let out = match template.extends {
+        let out = match &template.extends {
             // What the child printed outside its sections is dropped, as in Blade.
             Some(layout) => {
-                let source = (self.load)(&layout)
-                    .ok_or_else(|| format!("view {name}: layout {layout} not found"))?;
-                self.view(&layout, &source, scope)?
+                self.template(layout)
+                    .ok_or_else(|| format!("view {name}: layout {layout} not found"))??;
+                self.view(layout, scope)?
             }
             None => out,
         };
@@ -253,8 +271,8 @@ impl Renderer<'_> {
                 Node::Text(text) => out.push_str(text),
                 Node::Echo { path, raw, line } => {
                     match lookup(scope, path).map_err(|problem| at(*line, &problem))? {
-                        Value::Text(text) if *raw => out.push_str(&text),
-                        Value::Text(text) => out.push_str(&escape(&text)),
+                        Value::Text(text) if *raw => out.push_str(text),
+                        Value::Text(text) => escape_into(text, out),
                         Value::Bool(true) => out.push('1'),
                         Value::Bool(false) => {}
                         Value::List(_) | Value::Map(_) => {
@@ -284,7 +302,7 @@ impl Renderer<'_> {
                     line,
                 } => {
                     let items = match lookup(scope, list).map_err(|problem| at(*line, &problem))? {
-                        Value::List(items) => items,
+                        Value::List(items) => items.clone(),
                         Value::Bool(false) => Vec::new(),
                         _ => return Err(at(*line, &format!("{list} is not a list"))),
                     };
@@ -304,22 +322,22 @@ impl Renderer<'_> {
                     out.push_str(self.sections.get(name).map_or("", String::as_str))
                 }
                 Node::Include { name, with, line } => {
-                    let source = (self.load)(name)
-                        .ok_or_else(|| at(*line, &format!("included view {name} not found")))?;
+                    self.template(name)
+                        .ok_or_else(|| at(*line, &format!("included view {name} not found")))??;
                     // Evaluate every value before binding any, so `a: b, b: a` reads the caller's.
                     let mut values = Vec::with_capacity(with.len());
                     for (key, arg) in with {
                         let value = match arg {
-                            Arg::Path(path) => {
-                                lookup(scope, path).map_err(|problem| at(*line, &problem))?
-                            }
+                            Arg::Path(path) => lookup(scope, path)
+                                .map_err(|problem| at(*line, &problem))?
+                                .clone(),
                             Arg::Literal(value) => value.clone(),
                         };
                         values.push((key.clone(), value));
                     }
                     let count = values.len();
                     scope.extend(values);
-                    let rendered = self.view(name, &source, scope);
+                    let rendered = self.view(name, scope);
                     scope.truncate(scope.len() - count);
                     out.push_str(&rendered?);
                 }
@@ -335,7 +353,8 @@ fn at(line: usize, problem: &str) -> String {
 
 /// The value at `path` (`post.title`): the first name must be defined, a
 /// missing map key is empty text.
-fn lookup(scope: &[(String, Value)], path: &str) -> Result<Value, String> {
+fn lookup<'s>(scope: &'s [(String, Value)], path: &str) -> Result<&'s Value, String> {
+    static EMPTY: Value = Value::Text(String::new());
     let mut keys = path.split('.');
     let first = keys.next().unwrap_or_default();
     let mut value = scope
@@ -352,10 +371,10 @@ fn lookup(scope: &[(String, Value)], path: &str) -> Result<Value, String> {
         };
         match pairs.iter().find(|(name, _)| name == key) {
             Some((_, found)) => value = found,
-            None => return Ok(Value::Text(String::new())),
+            None => return Ok(&EMPTY),
         }
     }
-    Ok(value.clone())
+    Ok(value)
 }
 
 /// The directives, with whether each takes `(arguments)`.
@@ -721,7 +740,7 @@ mod tests {
     }
 
     fn show(source: &str, data: &[(&str, &dyn ToValue)]) -> Result<String, String> {
-        render("test", source, &Value::map(data), &views(&[]))
+        render("test", source, Value::map(data), &views(&[]))
     }
 
     #[test]
@@ -776,7 +795,7 @@ mod tests {
         let title = "A & B";
         let data = Value::map(&[("title", &title), ("user", &"neo")]);
         assert_eq!(
-            render("child", child, &data, &load).unwrap(),
+            render("child", child, data.clone(), &load).unwrap(),
             "<title>A &amp; B</title><nav>neo</nav><main><p>neo</p></main>"
         );
     }
@@ -792,11 +811,10 @@ mod tests {
             @include('components.card', post: featured, compact: false, label: '')[{{ label }}]";
         let data = Value::map(&[("featured", &featured), ("label", &"outer")]);
         assert_eq!(
-            render("page", source, &data, &load).unwrap(),
+            render("page", source, data.clone(), &load).unwrap(),
             "<h2>&lt;Top&gt;</h2><small>New</small><h2>&lt;Top&gt;</h2>[outer]"
         );
-        let problem =
-            render("page", "@include('components.card', post)", &data, &load).unwrap_err();
+        let problem = render("page", "@include('components.card', post)", data, &load).unwrap_err();
         assert!(problem.contains("@include values look like"), "{problem}");
     }
 
@@ -836,7 +854,20 @@ mod tests {
     #[test]
     fn self_including_view_stops() {
         let load = views(&[("loop", "@include('loop')")]);
-        let problem = render("loop", "@include('loop')", &Value::map(&[]), &load).unwrap_err();
+        let problem = render("loop", "@include('loop')", Value::map(&[]), &load).unwrap_err();
         assert!(problem.contains("nested more than 32"), "{problem}");
+    }
+
+    #[test]
+    fn included_view_is_loaded_once_per_render() {
+        let loads = std::cell::Cell::new(0);
+        let load = |_: &str| {
+            loads.set(loads.get() + 1);
+            Some("<{{ n }}>".to_owned())
+        };
+        let data = Value::map(&[("ns", &vec!["1", "2", "3"])]);
+        let source = "@foreach(ns as n)@include('item')@endforeach";
+        assert_eq!(render("list", source, data, &load).unwrap(), "<1><2><3>");
+        assert_eq!(loads.get(), 1);
     }
 }

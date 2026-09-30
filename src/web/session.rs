@@ -388,7 +388,12 @@ pub(super) fn random_token() -> String {
     std::fs::File::open("/dev/urandom")
         .and_then(|mut source| std::io::Read::read_exact(&mut source, &mut bytes))
         .expect("sessions need the operating system random source /dev/urandom");
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    bytes
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+            hex
+        })
 }
 
 #[cfg(test)]

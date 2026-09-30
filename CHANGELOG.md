@@ -17,6 +17,12 @@
     `{{ old.email }}`. `<!--flash-->`/`<!--errors-->` become
     `@if(flash)…{{ flash }}…@endif` and `@foreach(errors as error)`.
 
+### Changed
+
+- Faster view rendering, same output: a render reads and parses each view once,
+  so an `@include` inside `@foreach` no longer rereads its file on every
+  iteration. `{{ }}` escapes in one pass without copying the value.
+
 ### Added
 
 - Account flows (ADR 0016), with `auth` + `mail`: `Auth::register` (no
