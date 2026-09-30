@@ -54,6 +54,19 @@ def local_dependency_repositories(root, repo):
     return repositories - {repo}
 
 
+def has_path_dependency(package_dir):
+    """True when the manifest names any path dependency, sibling repo or in-repo (e.g. macros)."""
+    package = tomllib.loads((package_dir / "Cargo.toml").read_text())
+    sections = [package.get(section, {}) for section in ("dependencies", "build-dependencies")]
+    sections.extend(
+        target.get(section, {})
+        for target in package.get("target", {}).values()
+        for section in ("dependencies", "build-dependencies")
+    )
+    return any(isinstance(declaration, dict) and "path" in declaration
+               for section in sections for declaration in section.values())
+
+
 def allowed_package_closure(package):
     pending = [package]
     packages = set()
@@ -442,7 +455,7 @@ def main():
                 check(isolated)
                 if repo == "rustclamp":
                     check_pico_runtime_absence(isolated_root)
-                if local_dependencies:
+                if local_dependencies or has_path_dependency(isolated):
                     # Unpublished internal path dependencies cannot be resolved from
                     # the registry during cargo package's archive verification.
                     run("cargo", "package", "--list", "--offline", "--locked", "--allow-dirty", cwd=isolated)
