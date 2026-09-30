@@ -2,17 +2,17 @@
 
 use async_nats::jetstream::{self, AckKind, consumer::pull::Config, stream};
 use futures_util::StreamExt;
-use rustclamp_core::ModuleId;
+use rustclamp_core::{Clock, ModuleId};
 use rustclamp_kernel::TargetComposition;
 use rustclamp_messaging::MessageEnvelope;
 use rustclamp_worker::{
-    DispatchError, HandlerDeclaration, HandlerFailure, HandlerRegistry, HandlerTarget,
+    DeadReason, Delivery, HandlerDeclaration, HandlerRegistry, HandlerTarget, Outcome, RetryPolicy,
     WorkerHandlers,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::error::Error;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 const STREAM: &str = "RUSTCLAMP_EMAIL";
 const SUBJECT: &str = "email.send";
@@ -73,9 +73,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         )
         .await?;
 
-    let handler = HandlerDeclaration::new(SUBJECT, 1, |message: MessageEnvelope| async move {
-        let email: EmailPayload = serde_json::from_value(message.payload)
-            .map_err(|error| HandlerFailure::Permanent(Box::new(error)))?;
+    let handler = HandlerDeclaration::typed(SUBJECT, 1, |email: EmailPayload, _| async move {
         println!(
             "delivered email to {}: {} — {}",
             email.to, email.subject, email.body
@@ -143,7 +141,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-fn retry_delay(attempt: i64) -> Duration {
+fn retry_delay(attempt: u32) -> Duration {
     match attempt {
         1 => Duration::from_secs(1),
         2 => Duration::from_secs(5),
@@ -152,94 +150,75 @@ fn retry_delay(attempt: i64) -> Duration {
     }
 }
 
+struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> SystemTime {
+        SystemTime::now()
+    }
+}
+
 async fn handle_message(
     registry: &HandlerRegistry,
     envelope: MessageEnvelope,
     attempts: i64,
 ) -> DeliveryOutcome {
-    let correlation_id = envelope.correlation_id.clone();
-    let message_id = envelope.id.clone();
-    let budget = if let Some(deadline) = envelope.deadline_unix_ms {
-        let remaining = deadline.saturating_sub(now_ms());
-        if remaining == 0 {
-            return DeliveryOutcome::DeadLetter {
-                classification: "expired",
-                reason: "message deadline passed before execution".into(),
-            };
-        }
-        MAX_HANDLER_TIME.min(Duration::from_millis(remaining))
-    } else {
-        MAX_HANDLER_TIME
-    };
-    let dispatch = registry.dispatch(envelope);
+    let policy = RetryPolicy::new(MAX_ATTEMPTS as u32, retry_delay);
+    let attempt = u32::try_from(attempts).unwrap_or(u32::MAX);
     #[cfg(feature = "tracing")]
-    let dispatch = {
+    let (correlation_id, message_id) = (envelope.correlation_id.clone(), envelope.id.clone());
+    let delivery = registry.deliver(
+        Delivery {
+            message: envelope,
+            attempt,
+        },
+        &policy,
+        &SystemClock,
+    );
+    #[cfg(feature = "tracing")]
+    let delivery = {
         use tracing::Instrument;
-        dispatch.instrument(tracing::info_span!(
+        delivery.instrument(tracing::info_span!(
             "worker.delivery",
             %correlation_id,
             %message_id,
-            attempt = attempts
+            attempt
         ))
     };
-    #[cfg(not(feature = "tracing"))]
-    let _ = (correlation_id, message_id);
-
-    let result = match tokio::time::timeout(budget, dispatch).await {
-        Ok(result) => result,
-        Err(_) => {
-            return DeliveryOutcome::DeadLetter {
-                classification: "unknown_outcome",
-                reason: "handler timed out; a remote side effect may have occurred".into(),
-            };
-        }
+    let Ok(outcome) = tokio::time::timeout(MAX_HANDLER_TIME, delivery).await else {
+        return DeliveryOutcome::DeadLetter {
+            classification: "unknown_outcome",
+            reason: "handler timed out; a remote side effect may have occurred".into(),
+        };
     };
-
-    match result {
-        Ok(()) => DeliveryOutcome::Ack,
-        Err(DispatchError::NoHandler { .. }) => DeliveryOutcome::Reject,
-        Err(DispatchError::Decode(error)) => DeliveryOutcome::DeadLetter {
-            classification: "invalid_envelope",
-            reason: error.to_string(),
+    match outcome {
+        Outcome::Done(_) => DeliveryOutcome::Ack,
+        Outcome::Retry(delay) => DeliveryOutcome::Retry(delay),
+        Outcome::DeadLetter {
+            reason: DeadReason::NoHandler,
+            ..
+        } => DeliveryOutcome::Reject,
+        Outcome::DeadLetter { reason, error } => DeliveryOutcome::DeadLetter {
+            classification: match reason {
+                DeadReason::Expired => "expired",
+                DeadReason::RetryExhausted => "retry_exhausted",
+                DeadReason::UnknownOutcome => "unknown_outcome",
+                DeadReason::Permanent | DeadReason::InvalidPayload | DeadReason::NoHandler => {
+                    "permanent_failure"
+                }
+            },
+            reason: error.map_or_else(
+                || "message deadline passed before execution".into(),
+                |e| e.to_string(),
+            ),
         },
-        Err(DispatchError::Handler(HandlerFailure::Permanent(error))) => {
-            DeliveryOutcome::DeadLetter {
-                classification: "permanent_failure",
-                reason: error.to_string(),
-            }
-        }
-        Err(DispatchError::Handler(HandlerFailure::UnknownOutcome(error))) => {
-            DeliveryOutcome::DeadLetter {
-                classification: "unknown_outcome",
-                reason: error.to_string(),
-            }
-        }
-        Err(DispatchError::Handler(HandlerFailure::Retryable(error)))
-            if attempts >= MAX_ATTEMPTS =>
-        {
-            DeliveryOutcome::DeadLetter {
-                classification: "retry_exhausted",
-                reason: error.to_string(),
-            }
-        }
-        Err(DispatchError::Handler(HandlerFailure::Retryable(_))) => {
-            DeliveryOutcome::Retry(retry_delay(attempts))
-        }
     }
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustclamp_worker::HandlerFailure;
 
     fn envelope() -> MessageEnvelope {
         MessageEnvelope {
@@ -256,7 +235,7 @@ mod tests {
     fn registry(failure: HandlerFailure) -> HandlerRegistry {
         TargetComposition::<HandlerTarget, WorkerHandlers>::new(vec![(
             EMAIL_MODULE,
-            HandlerDeclaration::new(SUBJECT, 1, move |_message: MessageEnvelope| {
+            HandlerDeclaration::new(SUBJECT, 1, move |_delivery: Delivery| {
                 let failure = match &failure {
                     HandlerFailure::Retryable(error) => {
                         HandlerFailure::Retryable(std::io::Error::other(error.to_string()).into())

@@ -1,6 +1,6 @@
 # ADR 0018: Worker-app stress test — cancellation, shutdown, composition
 
-Status: Accepted (decisions 1–5), 2026-09-30. Proposals A–C open.
+Status: Accepted (decisions 1–5, proposal A implemented), 2026-09-30. Proposals B–C open.
 
 ## Context
 
@@ -43,7 +43,7 @@ are the composition model, see ADR 0017).
 
 ## Open proposals
 
-**A. Handler signature (worker; gaps 2, 3, 5).** Handlers can neither return a
+**A. Handler signature (worker; gaps 2, 3, 5) — implemented.** Handlers take `Delivery { message, attempt }` and return a `Value`; `HandlerDeclaration::typed` decodes payloads (`DispatchError::InvalidPayload`) and backs `HandlerRegistry::validate`; `RetryPolicy` + `deliver()` classify each attempt (`Outcome`, `DeadReason`), which replaced example 08's hand-written classification. Original proposal: Handlers can neither return a
 value nor learn the delivery attempt, and they observe cancellation only by
 being dropped. All three change `HandlerFuture`, so they should land as one
 breaking change: a handler receives `Delivery { message, attempt }` and returns

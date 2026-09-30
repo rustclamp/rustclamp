@@ -1083,6 +1083,7 @@ version = "0.1.0"
 dependencies = [
  "rustclamp-core",
  "rustclamp-messaging",
+ "serde",
  "serde_json",
 ]
 
