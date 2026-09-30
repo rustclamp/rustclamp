@@ -1,5 +1,21 @@
 //! SQLite `CURRENT_TIMESTAMP` values (`YYYY-MM-DD HH:MM:SS`, UTC) for display.
 
+/// `time` written the way `CURRENT_TIMESTAMP` writes it, so rows stamped by
+/// the app's clock and by SQLite sort together; times before 1970 are 1970.
+///
+/// ```
+/// use std::time::{Duration, UNIX_EPOCH};
+///
+/// let time = UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+/// assert_eq!(rustclamp::db::timestamp::format(time), "2001-09-09 01:46:40");
+/// ```
+pub fn format(time: std::time::SystemTime) -> String {
+    let seconds = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    crate::utc::timestamp(seconds)
+}
+
 /// The day, `YYYY-MM-DD`; a value too short to hold one is returned as-is.
 ///
 /// ```

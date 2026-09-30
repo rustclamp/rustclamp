@@ -2,14 +2,16 @@
 //! spatie/laravel-model-states with an activity log.
 
 use std::fmt;
+use std::time::SystemTime;
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, ToSql, params};
 
-use super::Db;
+use super::{Db, Tx, query::name, savepoint, timestamp};
 
-/// The states a column may hold and the moves allowed between them. Every
-/// move is recorded in the `state_history` table (created when missing):
-/// which row, from and to what, who made it and when.
+/// The states a column may hold and the moves allowed between them. With
+/// [`States::with_history`], every move is also recorded in the
+/// `state_history` table (created when missing): which row, from and to
+/// what, who made it and when.
 ///
 /// ```
 /// use rustclamp::config::Config;
@@ -19,7 +21,8 @@ use super::Db;
 ///     "orders",
 ///     "status",
 ///     &[("pending", "paid"), ("pending", "cancelled"), ("paid", "shipped")],
-/// );
+/// )
+/// .with_history();
 ///
 /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
 /// db.with(|sql| {
@@ -46,6 +49,7 @@ pub struct States {
     table: &'static str,
     column: &'static str,
     transitions: &'static [(&'static str, &'static str)],
+    history: bool,
 }
 
 /// One recorded move, oldest first from [`States::history`].
@@ -107,7 +111,16 @@ impl States {
             table,
             column,
             transitions,
+            history: false,
         }
+    }
+
+    /// Also records every move in `state_history`, read back with
+    /// [`States::history`]. Without it no table is created.
+    #[must_use]
+    pub const fn with_history(mut self) -> Self {
+        self.history = true;
+        self
     }
 
     /// Whether `from` → `to` is allowed.
@@ -125,9 +138,8 @@ impl States {
             .collect()
     }
 
-    /// Moves row `id` to `to` and records the move with `by`, in one
-    /// transaction: the check, the update and the history row happen
-    /// together or not at all.
+    /// Moves row `id` to `to`, stamped now, in a transaction of its own; see
+    /// [`States::transition_in`].
     pub fn transition(
         &self,
         db: &Db,
@@ -135,9 +147,25 @@ impl States {
         to: &str,
         by: Option<&str>,
     ) -> Result<(), Transition> {
+        db.transaction(|tx| self.transition_in(tx, id, to, by, SystemTime::now(), &[]))
+    }
+
+    /// Moves row `id` to `to` inside the caller's transaction, also setting
+    /// the `set` columns (such as `("completed_at", &stamp)`), and records
+    /// the move with `by` and `at` when history is on. `at` comes from the
+    /// app's clock, so a test clock stamps test times. The check, the update
+    /// and the history row happen together or not at all.
+    pub fn transition_in(
+        &self,
+        tx: &Tx<'_>,
+        id: i64,
+        to: &str,
+        by: Option<&str>,
+        at: SystemTime,
+        set: &[(&str, &dyn ToSql)],
+    ) -> Result<(), Transition> {
         let (table, column) = (self.table, self.column);
-        db.with(create_history)?;
-        db.transaction(|connection| {
+        savepoint(tx, |connection| {
             let from: String = connection
                 .query_row(
                     &format!("SELECT {column} FROM {table} WHERE id = ?1"),
@@ -152,21 +180,36 @@ impl States {
                     to: to.to_owned(),
                 });
             }
+            let columns: String = set
+                .iter()
+                .map(|(extra, _)| format!(", {} = ?", name(extra)))
+                .collect();
+            let values = [&to as &dyn ToSql]
+                .into_iter()
+                .chain(set.iter().map(|(_, value)| *value))
+                .chain([&id as &dyn ToSql]);
             connection.execute(
-                &format!("UPDATE {table} SET {column} = ?1 WHERE id = ?2"),
-                params![to, id],
+                &format!("UPDATE {table} SET {column} = ?{columns} WHERE id = ?"),
+                rusqlite::params_from_iter(values),
             )?;
-            connection.execute(
-                "INSERT INTO state_history (model, model_id, field, from_state, to_state, by)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![table, id, column, from, to, by],
-            )?;
+            if self.history {
+                create_history(connection)?;
+                connection.execute(
+                    "INSERT INTO state_history (model, model_id, field, from_state, to_state, by, at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![table, id, column, from, to, by, timestamp::format(at)],
+                )?;
+            }
             Ok(())
         })
     }
 
-    /// Every recorded move of row `id`, oldest first.
+    /// Every recorded move of row `id`, oldest first; none without
+    /// [`States::with_history`].
     pub fn history(&self, db: &Db, id: i64) -> rusqlite::Result<Vec<Change>> {
+        if !self.history {
+            return Ok(Vec::new());
+        }
         db.with(|connection| {
             create_history(connection)?;
             connection
@@ -213,7 +256,8 @@ mod tests {
         "posts",
         "status",
         &[("draft", "published"), ("published", "archived")],
-    );
+    )
+    .with_history();
 
     fn db() -> Db {
         let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
@@ -276,5 +320,48 @@ mod tests {
             ]
         );
         assert!(POST.allowed_from("archived").is_empty());
+    }
+
+    #[test]
+    fn transitions_take_the_apps_time_and_extra_columns() {
+        let db = db();
+        db.with(|sql| sql.execute_batch("ALTER TABLE posts ADD COLUMN published_at TEXT"))
+            .unwrap();
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        let stamp = timestamp::format(at);
+        db.transaction(|tx| {
+            POST.transition_in(
+                tx,
+                1,
+                "published",
+                Some("neo"),
+                at,
+                &[("published_at", &stamp)],
+            )
+        })
+        .unwrap();
+        assert_eq!(POST.history(&db, 1).unwrap()[0].at, "2001-09-09 01:46:40");
+        let published: String = db
+            .with(|sql| sql.query_row("SELECT published_at FROM posts", [], |row| row.get(0)))
+            .unwrap();
+        assert_eq!(published, "2001-09-09 01:46:40");
+    }
+
+    #[test]
+    fn without_history_no_table_is_created() {
+        const QUIET: States = States::new("posts", "status", &[("draft", "published")]);
+        let db = db();
+        QUIET.transition(&db, 1, "published", None).unwrap();
+        assert!(QUIET.history(&db, 1).unwrap().is_empty());
+        let tables: i64 = db
+            .with(|sql| {
+                sql.query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE name = 'state_history'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(tables, 0);
     }
 }
