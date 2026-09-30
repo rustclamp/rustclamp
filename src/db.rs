@@ -59,6 +59,9 @@ pub use states::{Change, States, Transition};
 
 pub use rusqlite as sqlite;
 use rusqlite::Connection;
+/// `#[derive(Model)]` with `#[model(table = "posts")]`: reads each field
+/// from the column of the same name. See [`Model`](trait@Model).
+pub use rustclamp_macros::Model;
 
 /// A shared database connection. Clones share the same connection.
 #[derive(Clone)]
@@ -315,32 +318,63 @@ impl Db {
 
 /// A table's rows as a Rust type, like a Laravel model: name the table and
 /// say how a row becomes `Self` once, then query with the builder.
+/// `#[derive(Model)]` does both, reading each field from the column of the
+/// same name.
 ///
 /// ```
 /// use rustclamp::config::Config;
-/// use rustclamp::db::{Db, Model, sqlite::{Result, Row, params}};
+/// use rustclamp::db::{Db, Model, sqlite::params};
 ///
+/// #[derive(Model)]
+/// #[model(table = "posts")]
 /// struct Post {
 ///     id: i64,
 ///     title: String,
-/// }
-///
-/// impl Model for Post {
-///     const TABLE: &'static str = "posts";
-///
-///     fn from_row(row: &Row<'_>) -> Result<Self> {
-///         Ok(Self { id: row.get("id")?, title: row.get("title")? })
-///     }
+///     published_at: Option<String>,
 /// }
 ///
 /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
-/// db.with(|sql| sql.execute_batch("CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT)"))
+/// db.with(|sql| sql.execute_batch("CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT, published_at TEXT)"))
 ///     .unwrap();
 /// let id = Post::query(&db).insert(&["title"], params!["Hello"]).unwrap();
 /// assert_eq!(Post::find(&db, id).unwrap().unwrap().title, "Hello");
 /// let titles: Vec<Post> = Post::query(&db).order_by_desc("id").get(Post::from_row).unwrap();
 /// assert_eq!(titles[0].id, id);
 /// assert_eq!(Post::all(&db).unwrap().len(), 1);
+/// assert_eq!(Post::all(&db).unwrap()[0].published_at, None);
+/// ```
+///
+/// By hand, when a field is not a column of the same name:
+///
+/// ```
+/// use rustclamp::db::{Model, sqlite::{Result, Row}};
+///
+/// struct Tag {
+///     label: String,
+/// }
+///
+/// impl Model for Tag {
+///     const TABLE: &'static str = "tags";
+///
+///     fn from_row(row: &Row<'_>) -> Result<Self> {
+///         Ok(Self { label: row.get("name")? })
+///     }
+/// }
+/// ```
+///
+/// The derive names its table, and needs named fields:
+///
+/// ```compile_fail
+/// #[derive(rustclamp::db::Model)]
+/// struct Post {
+///     id: i64,
+/// }
+/// ```
+///
+/// ```compile_fail
+/// #[derive(rustclamp::db::Model)]
+/// #[model(table = "points")]
+/// struct Point(i64, i64);
 /// ```
 pub trait Model: Sized {
     /// The table the rows live in.

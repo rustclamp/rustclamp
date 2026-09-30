@@ -413,7 +413,17 @@ dependencies = [
  "hmac",
  "pulldown-cmark",
  "rusqlite",
+ "rustclamp-macros",
  "sha2",
+]
+
+[[package]]
+name = "rustclamp-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

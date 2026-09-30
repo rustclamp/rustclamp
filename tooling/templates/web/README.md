@@ -62,7 +62,7 @@ tests; add one with `.package(...)` in `app/lib.rs`, and override its views in
 `app/resources/views/vendor/{package}/`.
 The database is `rustclamp::db`, the `db` feature: SQLite compiled in, opened
 from `DB_CONNECTION` and `DB_DATABASE`. Handlers reach it with `request.db()`;
-`Model` maps a table to a struct, `request.db().table("posts")` builds queries and
+`#[derive(Model)]` with `#[model(table = "posts")]` maps a table to a struct, `request.db().table("posts")` builds queries and
 `Db::with` lends the connection for anything else; use `rustclamp::db::sqlite`
 (rusqlite) for its types rather than adding `rusqlite`.
 

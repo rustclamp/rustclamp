@@ -81,6 +81,10 @@
   without `name()` panics rather than guessing). `log::request_log` is the
   request-logging middleware the web template used to carry in
   `app/http/middleware/`.
+- `#[derive(Model)]` (ADR 0014) with `#[model(table = "posts")]` writes
+  `Model::from_row`, reading each field from the column of the same name.
+  It comes from the new `rustclamp-macros` proc-macro crate, pulled in by the
+  `db` feature and re-exported as `rustclamp::db::Model`.
 - Views are templates (ADR 0012): a std-only Blade subset rendered at request
   time from the Vite-built HTML. `{{ name }}` escapes, `{!! name !!}` does
   not; `@if`/`@else`, `@foreach`, `@extends`/`@section`/`@yield`,
