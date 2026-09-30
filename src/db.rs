@@ -78,6 +78,21 @@ impl std::fmt::Debug for Db {
     }
 }
 
+/// Where [`Db::blocking`]'s thread leaves its result for the future.
+struct Slot<T> {
+    result: Option<std::thread::Result<T>>,
+    waker: Option<std::task::Waker>,
+}
+
+impl<T> Default for Slot<T> {
+    fn default() -> Self {
+        Self {
+            result: None,
+            waker: None,
+        }
+    }
+}
+
 /// Why [`Db::try_connect`] could not open the database.
 #[derive(Debug)]
 pub enum DbError {
@@ -249,6 +264,60 @@ impl Db {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         work(&connection)
+    }
+
+    /// [`Db::with`] for async callers: runs `work` with the connection on its
+    /// own thread and returns a future for its result, so the caller's
+    /// executor thread never waits on the connection lock or on SQLite. The
+    /// thread starts when this is called, like Tokio's `spawn_blocking`; the
+    /// future works on any executor. A panic in `work` panics the awaiting task.
+    ///
+    /// ```
+    /// use rustclamp::config::Config;
+    /// use rustclamp::db::Db;
+    ///
+    /// # fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+    /// #     struct Wake(std::thread::Thread);
+    /// #     impl std::task::Wake for Wake { fn wake(self: std::sync::Arc<Self>) { self.0.unpark() } }
+    /// #     let waker = std::sync::Arc::new(Wake(std::thread::current())).into();
+    /// #     let mut future = std::pin::pin!(future);
+    /// #     loop {
+    /// #         if let std::task::Poll::Ready(value) = future.as_mut().poll(&mut std::task::Context::from_waker(&waker)) { return value }
+    /// #         std::thread::park();
+    /// #     }
+    /// # }
+    /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    /// let one: i64 = block_on(db.blocking(|sql| sql.query_row("SELECT 1", [], |row| row.get(0)))).unwrap();
+    /// assert_eq!(one, 1);
+    /// ```
+    pub fn blocking<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Connection) -> T + Send + 'static,
+    ) -> impl std::future::Future<Output = T> + Send + 'static {
+        // ponytail: a thread per call, no pool: the pool waits for
+        // measurements (ADR 0009); a bounded worker set replaces this if
+        // thread spawn shows up.
+        let slot = Arc::new(Mutex::new(Slot::default()));
+        let (db, done) = (self.clone(), slot.clone());
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| db.with(work)));
+            let mut slot = done.lock().unwrap_or_else(PoisonError::into_inner);
+            slot.result = Some(result);
+            if let Some(waker) = slot.waker.take() {
+                waker.wake();
+            }
+        });
+        std::future::poll_fn(move |cx| {
+            let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            match slot.result.take() {
+                Some(Ok(value)) => std::task::Poll::Ready(value),
+                Some(Err(panic)) => std::panic::resume_unwind(panic),
+                None => {
+                    slot.waker = Some(cx.waker().clone());
+                    std::task::Poll::Pending
+                }
+            }
+        })
     }
 
     /// Runs `work` in a transaction, like Laravel's `DB::transaction`: kept
@@ -823,6 +892,57 @@ mod tests {
 
     fn memory() -> Db {
         Db::open(&Config::parse("DB_DATABASE=:memory:"))
+    }
+
+    /// Polls `future` on this thread, parking until its waker fires.
+    fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+        struct Wake(std::thread::Thread);
+        impl std::task::Wake for Wake {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let waker = Arc::new(Wake(std::thread::current())).into();
+        let mut future = std::pin::pin!(future);
+        loop {
+            if let std::task::Poll::Ready(value) = future
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(&waker))
+            {
+                return value;
+            }
+            std::thread::park();
+        }
+    }
+
+    #[test]
+    fn blocking_runs_off_the_calling_thread_and_shares_the_connection() {
+        let db = memory();
+        let caller = std::thread::current().id();
+        let (ran_on, one) = block_on(db.blocking(|sql| {
+            sql.execute_batch("CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1)")
+                .unwrap();
+            (std::thread::current().id(), 1)
+        }));
+        assert_ne!(ran_on, caller);
+        assert_eq!(one, 1);
+        assert_eq!(count(&db, "SELECT count(*) FROM t"), 1, "same connection");
+        // Many at once all complete.
+        let all: Vec<_> = (0..8)
+            .map(|n| db.blocking(move |sql| sql.execute("INSERT INTO t VALUES (?1)", [n])))
+            .collect();
+        for one in all {
+            assert_eq!(block_on(one).unwrap(), 1);
+        }
+        assert_eq!(count(&db, "SELECT count(*) FROM t"), 9);
+    }
+
+    #[test]
+    fn blocking_panics_reach_the_awaiter_and_leave_the_db_usable() {
+        let db = memory();
+        let caught = std::panic::catch_unwind(|| block_on(db.blocking(|_| panic!("boom"))));
+        assert!(caught.is_err());
+        assert_eq!(count(&db, "SELECT 1"), 1);
     }
 
     #[test]
