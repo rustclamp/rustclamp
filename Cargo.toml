@@ -35,6 +35,10 @@ mail = ["config", "db", "log", "dep:rustls", "dep:webpki-roots"]
 auth = ["web", "db", "crypto"]
 # Optional Markdown to HTML that is safe to print (`rustclamp::web::markdown`).
 markdown = ["web", "dep:pulldown-cmark"]
+# Optional bounded in-process cache (`rustclamp::cache`).
+cache = []
+# Optional counters and gauges with a Prometheus text renderer (`rustclamp::metrics`).
+metrics = []
 crypto = ["config", "dep:argon2", "dep:chacha20poly1305", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom"]
 
 [[example]]
