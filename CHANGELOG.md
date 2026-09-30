@@ -46,6 +46,10 @@
 
 ### Added
 
+- `Config::get_parsed` and `Config::try_require` return a `ConfigError`
+  instead of panicking, so CLIs and services can pick their own exit code;
+  `Config::from_env` reads the environment without `./.env` (#41).
+
 - `Db::transaction_immediate`: `BEGIN IMMEDIATE`, so a read-then-write
   cannot fail halfway with "database is locked" (#36).
 - `Tx::table`: the query builder inside a transaction. Calling `db.table(..)`
