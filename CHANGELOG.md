@@ -51,6 +51,11 @@
 
 ### Added
 
+- `rustclamp::error`: the `ExitError` trait (`exit_code()`, `problem()`) with
+  a `Problem` in the shape of `HttpError`, implemented for `ConfigError`,
+  `DbError` and `ServeError`, and `error::run` / `run_json`, which print the
+  error and exit with its code (#44). Kernel errors are not covered yet.
+
 - JSON APIs on the std server (#28, #29, #30): the router answers `405` with
   `Allow` for a path that exists under other methods (a `HEAD` on a `GET`
   route is now `405`, not `404`); `Router::json_errors` renders `404`, `405`,

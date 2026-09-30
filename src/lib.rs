@@ -20,6 +20,7 @@ pub mod config;
 pub mod crypto;
 #[cfg(feature = "db")]
 pub mod db;
+pub mod error;
 #[cfg(feature = "log")]
 pub mod log;
 #[cfg(feature = "mail")]
