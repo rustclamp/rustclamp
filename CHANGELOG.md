@@ -41,6 +41,10 @@
 
 ### Added
 
+- `crypto::random_bytes`, `crypto::constant_time_eq`, `crypto::sha1` (for
+  protocols such as the WebSocket handshake, not for security) and
+  `crypto::base64_encode`/`base64_decode` (#43).
+
 - `Db::transaction_immediate`: `BEGIN IMMEDIATE`, so a read-then-write
   cannot fail halfway with "database is locked" (#36).
 - `Tx::table`: the query builder inside a transaction. Calling `db.table(..)`
