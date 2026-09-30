@@ -19,6 +19,18 @@
 
 ### Added
 
+- Login and roles (ADR 0013), the optional `auth` feature: `web::auth::Auth`
+  (`attempt`, `create_user`, `sync_role`, `at_least`), `authenticate`,
+  `required` and `role("admin")` middleware, `allows` with the before rule
+  (`blocked` refused, `super-admin` allowed), `Request::user`/`auth`,
+  `Session::invalidate` for logout. One `role` column per user. Logins are
+  throttled per email and address; unknown email and wrong password are
+  indistinguishable. `App` takes `roles` and runs `user:create`. The router
+  answers every `403` as `404`, logged with `http_status_code=403`, with the
+  same body and headers as a real 404. The login throttle
+  (`LOGIN_PER_MINUTE`, default 5) honours `TRUST_PROXY`.
+  `testing::Client::with_header`.
+  `testing::Client::cookie`.
 - Security: `security_headers` also sends a strict Content-Security-Policy
   (`web::CONTENT_SECURITY_POLICY`; scripts only from the app's files, a
   route's own policy wins), HSTS and a Permissions-Policy.

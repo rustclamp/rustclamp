@@ -26,6 +26,8 @@
 //! web::serve(routes);
 //! ```
 
+#[cfg(feature = "auth")]
+pub mod auth;
 mod form;
 #[cfg(feature = "markdown")]
 pub mod markdown;
@@ -247,14 +249,36 @@ impl Router {
     /// Runs the middleware, then the first matching route, else a static file
     /// for `GET`, else `404`.
     pub fn handle(&self, request: &Request) -> Response {
-        if self.state.0.is_empty() {
-            return run(&self.middleware, request, &|request| self.dispatch(request));
+        let response = if self.state.0.is_empty() {
+            run(&self.middleware, request, &|request| self.dispatch(request))
+        } else {
+            let mut request = request.clone();
+            request.state = self.state.clone();
+            run(&self.middleware, &request, &|request| {
+                self.dispatch(request)
+            })
+        };
+        // A 403 would confirm the page exists to someone not allowed to see
+        // it, so it is answered as the 404 page and logged with its real status.
+        if response.status == 403 {
+            Log::notice(format_args!(
+                "http_status_code=403 {} {}",
+                request.method, request.path
+            ));
+            // Keep the middleware's headers (security headers), so the
+            // disguised 404 matches a real one down to its headers. Cookies
+            // go: a URL that matches no route never runs session middleware,
+            // so a session cookie would give the page away. A refused request
+            // never moved the session, so nothing is lost.
+            let mut hidden = error(404);
+            hidden.headers = response
+                .headers
+                .into_iter()
+                .filter(|(name, _)| !name.eq_ignore_ascii_case("set-cookie"))
+                .collect();
+            return hidden;
         }
-        let mut request = request.clone();
-        request.state = self.state.clone();
-        run(&self.middleware, &request, &|request| {
-            self.dispatch(request)
-        })
+        response
     }
 
     fn dispatch(&self, request: &Request) -> Response {
@@ -682,6 +706,8 @@ pub fn asset(path: &str) -> Response {
 ///         migrations: database::migrations,
 ///         seeders: database::seeders,
 ///         routes,
+///         # #[cfg(feature = "auth")]
+///         # roles: &["super-admin", "admin", "user", "blocked"],
 ///     }
 /// }
 ///
@@ -705,6 +731,10 @@ pub struct App {
     /// Adds the app's routes to a router that already shares the database
     /// and disks and sends security headers.
     pub routes: fn(Router, &crate::config::Config, &crate::db::Db) -> Router,
+    /// The app's roles, highest first (ADR 0013), such as
+    /// `&["super-admin", "admin", "user", "blocked"]`.
+    #[cfg(feature = "auth")]
+    pub roles: &'static [&'static str],
 }
 
 #[cfg(feature = "db")]
@@ -726,6 +756,12 @@ impl App {
         let config = crate::config::Config::load();
         Log::init(Logger::new(&(self.logging)(&config)));
         let db = Db::connect(&(self.database)(&config));
+        #[cfg(feature = "auth")]
+        if std::env::args().nth(1).as_deref() == Some("user:create") {
+            std::process::exit(
+                self.create_user(&db, &std::env::args().skip(2).collect::<Vec<_>>()),
+            );
+        }
         if let Some(command) = std::env::args().nth(1) {
             let (migrations, seeders) = ((self.migrations)(), (self.seeders)());
             std::process::exit(crate::db::command(&db, &command, &migrations, &seeders));
@@ -745,7 +781,35 @@ impl App {
             .state(db.clone())
             .state(crate::storage::Storage::new((self.filesystems)(config)))
             .middleware(security_headers);
+        #[cfg(feature = "auth")]
+        let router = router.state(auth::Auth::from_config(self.roles, config));
         (self.routes)(router, config, &db)
+    }
+
+    /// `user:create <email> <role> [name]`: migrates, creates the user and
+    /// prints a generated password once, so no seeder ships a default one.
+    #[cfg(feature = "auth")]
+    fn create_user(&self, db: &crate::db::Db, args: &[String]) -> i32 {
+        let [email, role, rest @ ..] = args else {
+            eprintln!("usage: user:create <email> <role> [name]");
+            return 2;
+        };
+        if let Err(error) = db.migrate(&(self.migrations)()) {
+            eprintln!("migration failed: {error}");
+            return 1;
+        }
+        let name = rest.first().map_or(email.as_str(), String::as_str);
+        let password = session::random_token()[..24].to_owned();
+        match auth::Auth::new(self.roles).create_user(db, name, email, &password, role) {
+            Ok(_) => {
+                println!("Created {email} ({role}). Password, shown once: {password}");
+                0
+            }
+            Err(error) => {
+                eprintln!("could not create {email}: {error}");
+                1
+            }
+        }
     }
 
     /// For tests: the app on a fresh in-memory database, migrated and seeded,
@@ -1096,6 +1160,20 @@ mod tests {
         fs::remove_dir_all(&public).unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(body(response), "<main><h2>&lt;Hi&gt;</h2></main>");
+    }
+
+    #[test]
+    fn forbidden_is_answered_as_not_found() {
+        let routes = Router::new()
+            .middleware(security_headers)
+            .get("/secret", |_| Response::text(403, "no"));
+        let hidden = routes.handle(&Request::get("/secret"));
+        let missing = routes.handle(&Request::get("/missing"));
+        assert_eq!(hidden.status, 404);
+        assert_eq!(
+            hidden, missing,
+            "indistinguishable from a real 404, headers included"
+        );
     }
 
     #[test]

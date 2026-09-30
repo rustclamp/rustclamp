@@ -96,7 +96,7 @@ impl Throttle {
     }
 
     /// The client key for `request`: its forwarded or peer address.
-    fn client(&self, request: &Request) -> String {
+    pub(super) fn client(&self, request: &Request) -> String {
         let forwarded = self
             .trust_forwarded
             .then(|| request.header("x-forwarded-for"))

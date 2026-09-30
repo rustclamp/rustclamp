@@ -24,6 +24,7 @@ use super::{Request, Response, Router};
 pub struct Client<'a> {
     routes: &'a Router,
     peer: std::net::IpAddr,
+    headers: Vec<(String, String)>,
     cookies: Mutex<Vec<(String, String)>>,
     token: Mutex<Option<String>>,
 }
@@ -34,6 +35,7 @@ impl<'a> Client<'a> {
         Self {
             routes,
             peer: [127, 0, 0, 1].into(),
+            headers: Vec::new(),
             cookies: Mutex::default(),
             token: Mutex::default(),
         }
@@ -47,6 +49,14 @@ impl<'a> Client<'a> {
     #[must_use]
     pub fn from(mut self, peer: &str) -> Self {
         self.peer = peer.parse().expect("an IP address");
+        self
+    }
+
+    /// The same visitor sending header `name` with every request, such as the
+    /// `X-Forwarded-For` a proxy adds.
+    #[must_use]
+    pub fn with_header(mut self, name: &str, value: &str) -> Self {
+        self.headers.push((name.to_owned(), value.to_owned()));
         self
     }
 
@@ -76,6 +86,14 @@ impl<'a> Client<'a> {
         self.send(Request::post(path).with_body(body))
     }
 
+    /// The value of cookie `name`, as last set by the app.
+    pub fn cookie(&self, name: &str) -> Option<String> {
+        let jar = self.cookies.lock().unwrap_or_else(|e| e.into_inner());
+        jar.iter()
+            .find(|(kept, _)| kept == name)
+            .map(|(_, value)| value.clone())
+    }
+
     fn send(&self, request: Request) -> Response {
         let jar = self
             .cookies
@@ -83,6 +101,9 @@ impl<'a> Client<'a> {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let mut request = request.with_peer(self.peer);
+        for (name, value) in &self.headers {
+            request = request.with_header(name, value);
+        }
         if !jar.is_empty() {
             let header = jar
                 .iter()

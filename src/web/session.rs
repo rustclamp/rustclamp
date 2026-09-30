@@ -68,6 +68,13 @@ impl Session {
         self.renew.store(true, Ordering::Relaxed);
     }
 
+    /// Clears every value and moves the session to a new ID, as on logout:
+    /// nothing from before, not even the CSRF token, carries over.
+    pub fn invalidate(&self) {
+        self.lock().clear();
+        self.renew.store(true, Ordering::Relaxed);
+    }
+
     /// This session's CSRF token, created on first use.
     pub fn csrf_token(&self) -> String {
         self.lock()
@@ -374,7 +381,7 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 ///
 /// Where `/dev/urandom` is missing (Windows), so the request fails with `500`
 /// instead of issuing guessable tokens.
-fn random_token() -> String {
+pub(super) fn random_token() -> String {
     // ponytail: std-only keeps the facade dependency-free (ADR 0003); Unix only.
     // Windows support needs `getrandom` and a boundary exception.
     let mut bytes = [0u8; 32];
