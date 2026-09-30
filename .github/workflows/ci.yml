@@ -41,3 +41,15 @@ jobs:
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
+      # Every web starter kit must install and build: plain, Vue and React.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Web kits
+        working-directory: rustclamp/tooling
+        run: |
+          cargo build --locked --bin clamp
+          for kit in web vue react; do
+            ./target/debug/clamp init "$RUNNER_TEMP/kit-$kit" --$kit
+            (cd "$RUNNER_TEMP/kit-$kit" && npm install --no-audit --no-fund && npm run build)
+          done

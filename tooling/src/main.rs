@@ -157,14 +157,19 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     if command == "init" {
         let project = args.get(1).ok_or("init requires a project name or path")?;
         let flags: Vec<&str> = args[2..].iter().map(String::as_str).collect();
-        let template = match flags.as_slice() {
-            [] | ["--blank"] | ["--template", "blank" | "hello-world"] => "blank",
-            ["--app"] | ["--template", "app" | "application"] => "app",
-            ["--web"] | ["--template", "web"] => "web",
-            ["--tui"] | ["--template", "tui"] => "tui",
-            ["--package"] | ["--template", "package"] => "package",
+        let (template, frontend) = match flags.as_slice() {
+            [] | ["--blank"] | ["--template", "blank" | "hello-world"] => ("blank", None),
+            ["--app"] | ["--template", "app" | "application"] => ("app", None),
+            ["--web"] | ["--template", "web"] => ("web", None),
+            ["--vue"] | ["--template", "vue"] => ("web", Some("vue")),
+            ["--react"] | ["--template", "react"] => ("web", Some("react")),
+            ["--tui"] | ["--template", "tui"] => ("tui", None),
+            ["--package"] | ["--template", "package"] => ("package", None),
             _ => {
-                return Err("usage: clamp init NAME [--blank|--app|--web|--tui|--package]".into());
+                return Err(
+                    "usage: clamp init NAME [--blank|--app|--web|--vue|--react|--tui|--package]"
+                        .into(),
+                );
             }
         };
         // Written directly rather than with `cargo new`, which would also add the
@@ -219,7 +224,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
             .map_err(|error| format!("cannot write Procfile.dev: {error}"))?;
         match template {
             "app" => create_application(root)?,
-            "web" => create_web(root, name)?,
+            "web" => create_web(root, name, frontend)?,
             "tui" => create_tui(root)?,
             _ => {
                 fs::write(
@@ -377,7 +382,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp key:generate [--force]\n  clamp env:encrypt | env:decrypt [--key=KEY] [--env=NAME] [--force]\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, make migrations and seeders, run database commands, manage APP_KEY and encrypted .env files, reinstall clamp, or run a Cargo command."
+    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--vue|--react|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp key:generate [--force]\n  clamp env:encrypt | env:decrypt [--key=KEY] [--env=NAME] [--force]\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web (plain, Vue or React) or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, make migrations and seeders, run database commands, manage APP_KEY and encrypted .env files, reinstall clamp, or run a Cargo command."
 }
 
 fn create_application(root: &std::path::Path) -> Result<(), String> {
@@ -499,18 +504,70 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
     ("README.md", include_str!("../templates/web/README.md")),
 ];
 
+/// Where the welcome page mounts the example component; plain `--web` has none.
+const COMPONENT_MOUNT: &str = "        <div class=\"mt-4 flex justify-center\" data-component=\"Counter\" data-props='{\"start\":0}'></div>\n";
+
+/// `--vue`: written over [`WEB_TEMPLATE`].
+const VUE_OVERLAY: &[(&str, &str)] = &[
+    (
+        "package.json",
+        include_str!("../templates/web-vue/package.json"),
+    ),
+    (
+        "vite.config.ts",
+        include_str!("../templates/web-vue/vite.config.ts"),
+    ),
+    (
+        "app/resources/js/app.ts",
+        include_str!("../templates/web-vue/app/resources/js/app.ts"),
+    ),
+    (
+        "app/resources/js/components/Counter.vue",
+        include_str!("../templates/web-vue/app/resources/js/components/Counter.vue"),
+    ),
+];
+
+/// `--react`: written over [`WEB_TEMPLATE`].
+const REACT_OVERLAY: &[(&str, &str)] = &[
+    (
+        "package.json",
+        include_str!("../templates/web-react/package.json"),
+    ),
+    (
+        "vite.config.ts",
+        include_str!("../templates/web-react/vite.config.ts"),
+    ),
+    (
+        "app/resources/js/app.ts",
+        include_str!("../templates/web-react/app/resources/js/app.ts"),
+    ),
+    (
+        "app/resources/js/components/Counter.tsx",
+        include_str!("../templates/web-react/app/resources/js/components/Counter.tsx"),
+    ),
+];
+
 /// Laravel-style layout: Rust and frontend sources in `app/`, web root in
-/// `public/`, tests in `tests/`.
-fn create_web(root: &std::path::Path, name: &str) -> Result<(), String> {
+/// `public/`, tests in `tests/`. `frontend` (`vue` or `react`) adds that
+/// framework's components, mounted on server-rendered pages.
+fn create_web(root: &std::path::Path, name: &str, frontend: Option<&str>) -> Result<(), String> {
     let crate_name = name.replace('-', "_");
-    for (path, contents) in WEB_TEMPLATE {
+    let (overlay, component): (&[(&str, &str)], &str) = match frontend {
+        Some("vue") => (VUE_OVERLAY, COMPONENT_MOUNT),
+        Some("react") => (REACT_OVERLAY, COMPONENT_MOUNT),
+        _ => (&[], ""),
+    };
+    // The overlay comes last, so its files replace the plain ones.
+    for (path, contents) in WEB_TEMPLATE.iter().chain(overlay) {
         let file = root.join(path);
         if let Some(parent) = file.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
         }
-        fs::write(&file, contents.replace("__CRATE__", &crate_name))
-            .map_err(|error| format!("cannot write {path}: {error}"))?;
+        let contents = contents
+            .replace("__CRATE__", &crate_name)
+            .replace("        __COMPONENT__\n", component);
+        fs::write(&file, contents).map_err(|error| format!("cannot write {path}: {error}"))?;
     }
     let _ = fs::remove_dir(root.join("src"));
     let manifest = root.join("Cargo.toml");
