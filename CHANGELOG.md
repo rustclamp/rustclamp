@@ -51,6 +51,11 @@
 
 ### Added
 
+- `auth` bearer API tokens (ADR 0023, proposed, #33): `Auth::issue_token` /
+  `revoke_token`, the `bearer` middleware and `token_role` guard, and
+  `Request::principal()`. Tokens are stored as SHA-256; the app owns the
+  `api_tokens` table. Username-only accounts are designed in the ADR, not
+  built.
 - `rustclamp::error`: the `ExitError` trait (`exit_code()`, `problem()`) with
   a `Problem` in the shape of `HttpError`, implemented for `ConfigError`,
   `DbError` and `ServeError`, and `error::run` / `run_json`, which print the

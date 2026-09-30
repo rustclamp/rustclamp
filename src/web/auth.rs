@@ -18,6 +18,9 @@ use std::time::Duration;
 
 #[cfg(feature = "mail")]
 mod account;
+mod token;
+
+pub use token::{Principal, bearer, token_role};
 
 use super::request::State;
 use super::{Next, Request, Response, Throttle, ToValue, Value, error, redirect};
@@ -318,11 +321,14 @@ impl Auth {
     /// Whether `user` holds `role` or one above it, through [`allows`]:
     /// `super-admin` always passes, `blocked` never does.
     pub fn at_least(&self, user: &User, role: &str) -> bool {
+        allows(user, |user| self.ranks_at_least(&user.role, role))
+    }
+
+    /// Whether `held` is `needed` or above it in the app's order; a slug
+    /// outside the list never is.
+    fn ranks_at_least(&self, held: &str, needed: &str) -> bool {
         let rank = |slug: &str| self.roles.iter().position(|known| *known == slug);
-        allows(user, |user| match (rank(&user.role), rank(role)) {
-            (Some(held), Some(needed)) => held <= needed,
-            _ => false,
-        })
+        matches!((rank(held), rank(needed)), (Some(held), Some(needed)) if held <= needed)
     }
 
     fn known(&self, role: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -337,10 +343,15 @@ impl Auth {
 /// The before rule every check goes through: `blocked` is refused,
 /// `super-admin` is allowed, anyone else is decided by `policy`.
 pub fn allows(user: &User, policy: impl FnOnce(&User) -> bool) -> bool {
-    match user.role.as_str() {
+    allows_role(&user.role, || policy(user))
+}
+
+/// [`allows`] for anything that holds a role, such as a token's [`Principal`].
+fn allows_role(role: &str, policy: impl FnOnce() -> bool) -> bool {
+    match role {
         "blocked" => false,
         "super-admin" => true,
-        _ => policy(user),
+        _ => policy(),
     }
 }
 
