@@ -220,7 +220,7 @@ impl<'a> Query<'a> {
 }
 
 /// `identifier` checked to be a plain name, so it cannot carry SQL.
-fn name(identifier: &str) -> String {
+pub(super) fn name(identifier: &str) -> String {
     assert!(
         !identifier.is_empty()
             && identifier

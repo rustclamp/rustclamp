@@ -24,6 +24,8 @@ pub mod log;
 pub mod mail;
 #[cfg(feature = "storage")]
 pub mod storage;
+#[cfg(any(feature = "log", feature = "db"))]
+mod utc;
 #[cfg(feature = "uuid")]
 pub mod uuid;
 #[cfg(feature = "web")]

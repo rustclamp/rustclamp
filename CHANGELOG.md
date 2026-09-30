@@ -22,6 +22,11 @@
   keep compiling; a closure annotated `|c: &Connection|` must drop the
   annotation or take `&Tx`.
 
+- `db::States` records history only after `.with_history()`; without it no
+  `state_history` table is created and `history()` returns nothing (#40).
+  Add `.with_history()` to a `States` whose history you read (nejctest's
+  blog and ladder level 04 do).
+
 ### Changed
 
 - Without `LOG_CHANNEL` (and no `app/config/logging.rs`), `Log` writes to
@@ -45,6 +50,11 @@
   requests no longer scans the whole store on every request.
 
 ### Added
+
+- `States::transition_in` moves a row inside the caller's transaction, at a
+  time the app passes (its clock), setting extra columns such as
+  `completed_at` too; `db::timestamp::format` writes a `SystemTime` the way
+  `CURRENT_TIMESTAMP` does (#40).
 
 
 - `crypto::random_bytes`, `crypto::constant_time_eq`, `crypto::sha1` (for
