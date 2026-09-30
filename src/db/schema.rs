@@ -27,7 +27,8 @@ impl Schema {
     pub fn create(name: &str, define: impl FnOnce(&mut Table)) -> String {
         let mut table = Table::new(name);
         define(&mut table);
-        let columns: Vec<String> = table.columns.iter().map(Column::sql).collect();
+        let mut columns: Vec<String> = table.columns.iter().map(Column::sql).collect();
+        columns.extend(table.constraints.iter().cloned());
         let mut sql = format!("CREATE TABLE {name} (\n    {}\n);", columns.join(",\n    "));
         for index in &table.indexes {
             sql.push('\n');
@@ -50,6 +51,10 @@ impl Schema {
     pub fn table(name: &str, define: impl FnOnce(&mut Table)) -> String {
         let mut table = Table::new(name);
         define(&mut table);
+        assert!(
+            table.constraints.is_empty(),
+            "ALTER TABLE cannot add a primary key; use Schema::create"
+        );
         let mut statements: Vec<String> = table
             .columns
             .iter()
@@ -69,6 +74,7 @@ impl Schema {
 pub struct Table {
     name: String,
     columns: Vec<Column>,
+    constraints: Vec<String>,
     indexes: Vec<String>,
 }
 
@@ -77,6 +83,7 @@ impl Table {
         Self {
             name: name.to_owned(),
             columns: Vec::new(),
+            constraints: Vec::new(),
             indexes: Vec::new(),
         }
     }
@@ -88,7 +95,9 @@ impl Table {
             nullable: false,
             unique: false,
             default: None,
+            check: None,
             references: None,
+            on_delete: OnDelete::Cascade,
         });
         self.columns.last_mut().expect("just pushed")
     }
@@ -96,6 +105,19 @@ impl Table {
     /// `id INTEGER PRIMARY KEY`: SQLite's row id, assigned on insert.
     pub fn id(&mut self) {
         self.column("id", "INTEGER PRIMARY KEY");
+    }
+
+    /// `id INTEGER PRIMARY KEY AUTOINCREMENT`: like [`id`](Self::id), but SQLite
+    /// never reuses the id of a deleted row.
+    pub fn auto_id(&mut self) {
+        self.column("id", "INTEGER PRIMARY KEY AUTOINCREMENT");
+    }
+
+    /// A primary key over `columns` together, for tables such as a join table
+    /// that have no `id`. Only in [`Schema::create`].
+    pub fn primary_key(&mut self, columns: &[&str]) {
+        self.constraints
+            .push(format!("PRIMARY KEY ({})", columns.join(", ")));
     }
 
     /// `public_id`: a unique UUID, the only ID shown outside the app (URLs,
@@ -177,7 +199,34 @@ pub struct Column {
     nullable: bool,
     unique: bool,
     default: Option<String>,
+    check: Option<String>,
     references: Option<String>,
+    on_delete: OnDelete,
+}
+
+/// What happens to a row when the row its foreign key points at is deleted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnDelete {
+    /// Delete this row too.
+    #[default]
+    Cascade,
+    /// Set the column to `NULL`; the column must be [`nullable`](Column::nullable).
+    SetNull,
+    /// Refuse the delete, at once.
+    Restrict,
+    /// Refuse the delete when the statement ends (SQLite's default).
+    NoAction,
+}
+
+impl OnDelete {
+    fn sql(self) -> &'static str {
+        match self {
+            Self::Cascade => "CASCADE",
+            Self::SetNull => "SET NULL",
+            Self::Restrict => "RESTRICT",
+            Self::NoAction => "NO ACTION",
+        }
+    }
 }
 
 impl Column {
@@ -200,7 +249,21 @@ impl Column {
         self
     }
 
-    /// A foreign key to `table`'s `id`; deleting that row deletes this one.
+    /// Only rows where the SQL condition holds, such as `"score >= 0"`.
+    pub fn check(&mut self, sql: &str) -> &mut Self {
+        self.check = Some(sql.to_owned());
+        self
+    }
+
+    /// What deleting the referenced row does to this one; the default is
+    /// [`OnDelete::Cascade`]. Only meaningful after [`references`](Self::references).
+    pub fn on_delete(&mut self, action: OnDelete) -> &mut Self {
+        self.on_delete = action;
+        self
+    }
+
+    /// A foreign key to `table`'s `id`; deleting that row deletes this one
+    /// unless [`on_delete`](Self::on_delete) says otherwise.
     pub fn references(&mut self, table: &str) -> &mut Self {
         self.references = Some(table.to_owned());
         self
@@ -217,8 +280,14 @@ impl Column {
         if let Some(default) = &self.default {
             sql.push_str(&format!(" DEFAULT {default}"));
         }
+        if let Some(check) = &self.check {
+            sql.push_str(&format!(" CHECK ({check})"));
+        }
         if let Some(table) = &self.references {
-            sql.push_str(&format!(" REFERENCES {table} (id) ON DELETE CASCADE"));
+            sql.push_str(&format!(
+                " REFERENCES {table} (id) ON DELETE {}",
+                self.on_delete.sql()
+            ));
         }
         sql
     }
@@ -242,6 +311,86 @@ mod tests {
         fn down(&self) -> String {
             String::new()
         }
+    }
+
+    #[test]
+    fn constraints_are_enforced_by_sqlite() {
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let create = |name, sql| Up(name, sql);
+        let migrations = [
+            create(
+                "0001",
+                Schema::create("users", |table| {
+                    table.auto_id();
+                    table.integer("age").check("age >= 0");
+                }),
+            ),
+            create(
+                "0002",
+                Schema::create("memberships", |table| {
+                    table.foreign_id("user_id").references("users");
+                    table.integer("team");
+                    table.primary_key(&["user_id", "team"]);
+                }),
+            ),
+            create(
+                "0003",
+                Schema::create("notes", |table| {
+                    table.id();
+                    table
+                        .foreign_id("user_id")
+                        .nullable()
+                        .references("users")
+                        .on_delete(OnDelete::SetNull);
+                }),
+            ),
+            create(
+                "0004",
+                Schema::create("logs", |table| {
+                    table.id();
+                    table
+                        .foreign_id("user_id")
+                        .references("users")
+                        .on_delete(OnDelete::Restrict);
+                }),
+            ),
+        ];
+        let all: Vec<&dyn Migration> = migrations.iter().map(|m| m as &dyn Migration).collect();
+        db.migrate(&all).unwrap();
+        let run = |sql: &str| db.with(|c| c.execute(sql, []));
+        assert!(run("INSERT INTO users (age) VALUES (-1)").is_err(), "CHECK");
+        run("INSERT INTO users (age) VALUES (30)").unwrap();
+        run("INSERT INTO users (age) VALUES (31)").unwrap();
+        run("DELETE FROM users WHERE id = 2").unwrap();
+        run("INSERT INTO users (age) VALUES (32)").unwrap();
+        let id: i64 = db
+            .with(|c| c.query_row("SELECT max(id) FROM users", [], |r| r.get(0)))
+            .unwrap();
+        assert_eq!(id, 3, "AUTOINCREMENT does not reuse ids");
+        run("INSERT INTO memberships VALUES (1, 7)").unwrap();
+        assert!(
+            run("INSERT INTO memberships VALUES (1, 7)").is_err(),
+            "composite PK"
+        );
+        run("INSERT INTO memberships VALUES (1, 8)").unwrap();
+        run("INSERT INTO notes (user_id) VALUES (1)").unwrap();
+        run("INSERT INTO logs (user_id) VALUES (3)").unwrap();
+        assert!(run("DELETE FROM users WHERE id = 3").is_err(), "RESTRICT");
+        run("DELETE FROM users WHERE id = 1").unwrap();
+        let orphaned: Option<i64> = db
+            .with(|c| c.query_row("SELECT user_id FROM notes", [], |r| r.get(0)))
+            .unwrap();
+        assert_eq!(orphaned, None, "SET NULL");
+        let memberships: i64 = db
+            .with(|c| c.query_row("SELECT count(*) FROM memberships", [], |r| r.get(0)))
+            .unwrap();
+        assert_eq!(memberships, 0, "CASCADE stays the default");
+    }
+
+    #[test]
+    #[should_panic(expected = "ALTER TABLE cannot add a primary key")]
+    fn alter_rejects_primary_key() {
+        Schema::table("t", |table| table.primary_key(&["a"]));
     }
 
     #[test]

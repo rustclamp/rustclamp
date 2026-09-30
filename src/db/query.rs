@@ -41,6 +41,7 @@ use super::Db;
 pub struct Query<'a> {
     source: Source<'a>,
     table: String,
+    joins: Vec<String>,
     conditions: Vec<String>,
     values: Vec<&'a dyn ToSql>,
     order: Vec<String>,
@@ -69,6 +70,7 @@ impl<'a> Query<'a> {
         Self {
             source,
             table: name(table),
+            joins: Vec::new(),
             conditions: Vec::new(),
             values: Vec::new(),
             order: Vec::new(),
@@ -98,6 +100,65 @@ impl<'a> Query<'a> {
         self
     }
 
+    /// Keeps rows where `column` is one of `values`. An empty list keeps
+    /// nothing.
+    pub fn where_in(mut self, column: &str, values: &[&'a dyn ToSql]) -> Self {
+        if values.is_empty() {
+            self.conditions.push("0".to_owned());
+        } else {
+            let marks = vec!["?"; values.len()].join(", ");
+            self.conditions
+                .push(format!("{} IN ({marks})", name(column)));
+            self.values.extend_from_slice(values);
+        }
+        self
+    }
+
+    /// Keeps rows for which the subquery `select` returns a row, such as
+    /// `"SELECT 1 FROM tags WHERE tags.post_id = posts.id AND tags.name = ?"`.
+    /// `params` bind its `?` marks, in order.
+    ///
+    /// `select` is written into the SQL as is, so it is a `&'static str`: it
+    /// must come from the app's code, and anything from a request goes in
+    /// `params`.
+    pub fn where_exists(mut self, select: &'static str, params: &[&'a dyn ToSql]) -> Self {
+        self.conditions.push(format!("EXISTS ({select})"));
+        self.values.extend_from_slice(params);
+        self
+    }
+
+    /// [`where_exists`](Self::where_exists), negated.
+    pub fn where_not_exists(mut self, select: &'static str, params: &[&'a dyn ToSql]) -> Self {
+        self.conditions.push(format!("NOT EXISTS ({select})"));
+        self.values.extend_from_slice(params);
+        self
+    }
+
+    /// `INNER JOIN table ON left = right`, with `left` and `right` written
+    /// `table.column`. With a join, [`get`](Self::get) and
+    /// [`first`](Self::first) read only this query's own table's columns, so
+    /// a [`Model`](trait@super::Model) still maps; name the joined table in a
+    /// condition or [`order_by_raw`](Self::order_by_raw) to use its columns.
+    /// Joins apply to reads; SQLite has no joined `UPDATE` or `DELETE`.
+    pub fn join(self, table: &str, left: &str, right: &str) -> Self {
+        self.joined("INNER", table, left, right)
+    }
+
+    /// [`join`](Self::join) as a `LEFT JOIN`: rows without a match stay.
+    pub fn left_join(self, table: &str, left: &str, right: &str) -> Self {
+        self.joined("LEFT", table, left, right)
+    }
+
+    fn joined(mut self, kind: &str, table: &str, left: &str, right: &str) -> Self {
+        self.joins.push(format!(
+            " {kind} JOIN {} ON {} = {}",
+            name(table),
+            name(left),
+            name(right)
+        ));
+        self
+    }
+
     /// Keeps rows where `column` is `NULL`.
     pub fn where_null(mut self, column: &str) -> Self {
         self.conditions.push(format!("{} IS NULL", name(column)));
@@ -116,6 +177,16 @@ impl<'a> Query<'a> {
         self
     }
 
+    /// Sorts by an SQL expression, such as `"lower(title) DESC"` or
+    /// `"score / views"`. It is written into the SQL as is and not checked, so
+    /// it is a `&'static str`: it must come from the app's code. For a column
+    /// picked by a request, match it against a fixed list and use
+    /// [`order_by`](Self::order_by), which checks the name.
+    pub fn order_by_raw(mut self, expression: &'static str) -> Self {
+        self.order.push(expression.to_owned());
+        self
+    }
+
     /// Returns at most `rows` rows.
     pub fn limit(mut self, rows: u64) -> Self {
         self.limit = Some(rows);
@@ -126,8 +197,14 @@ impl<'a> Query<'a> {
     /// name: `row.get("title")`.
     pub fn get<T>(&self, map: impl FnMut(&Row<'_>) -> Result<T>) -> Result<Vec<T>> {
         let sql = format!(
-            "SELECT * FROM {}{}{}{}",
+            "SELECT {} FROM {}{}{}{}{}",
+            if self.joins.is_empty() {
+                "*".to_owned()
+            } else {
+                format!("{}.*", self.table)
+            },
             self.table,
+            self.joins.concat(),
             self.where_sql(),
             self.order_sql(),
             self.limit
@@ -149,7 +226,12 @@ impl<'a> Query<'a> {
 
     /// How many rows match.
     pub fn count(&self) -> Result<i64> {
-        let sql = format!("SELECT count(*) FROM {}{}", self.table, self.where_sql());
+        let sql = format!(
+            "SELECT count(*) FROM {}{}{}",
+            self.table,
+            self.joins.concat(),
+            self.where_sql()
+        );
         self.with(|connection| {
             connection.query_row(&sql, params_from_iter(&self.values), |row| row.get(0))
         })
@@ -186,6 +268,14 @@ impl<'a> Query<'a> {
         );
         let all = values.iter().copied().chain(self.values.iter().copied());
         self.with(|connection| connection.execute(&sql, params_from_iter(all)))
+    }
+
+    /// [`update`](Self::update) with `(column, value)` pairs, so a column and
+    /// its value cannot get out of step.
+    pub fn update_values(&self, set: &[(&str, &dyn ToSql)]) -> Result<usize> {
+        let columns: Vec<&str> = set.iter().map(|(column, _)| *column).collect();
+        let values: Vec<&dyn ToSql> = set.iter().map(|(_, value)| *value).collect();
+        self.update(&columns, &values)
     }
 
     /// Deletes every matching row, and returns how many. Without a condition
@@ -241,6 +331,115 @@ mod tests {
     fn names_cannot_carry_sql() {
         let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
         let _ = db.table("posts").order_by("id; DROP TABLE posts");
+    }
+
+    fn blog() -> Db {
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        db.with(|sql| {
+            sql.execute_batch(
+                "CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT, views INTEGER);
+                 CREATE TABLE tags (post_id INTEGER, name TEXT);
+                 INSERT INTO posts VALUES (1, 'a', 5), (2, 'B', 30), (3, 'c', 10);
+                 INSERT INTO tags VALUES (1, 'rust'), (2, 'rust'), (2, 'sql');",
+            )
+        })
+        .unwrap();
+        db
+    }
+
+    fn titles(query: super::Query<'_>) -> Vec<String> {
+        query.get(|row| row.get("title")).unwrap()
+    }
+
+    #[test]
+    fn where_in_binds_and_empty_matches_nothing() {
+        let db = blog();
+        let ids: [&dyn rusqlite::ToSql; 2] = [&1, &3];
+        assert_eq!(titles(db.table("posts").where_in("id", &ids)), ["a", "c"]);
+        assert_eq!(db.table("posts").where_in("id", &[]).count().unwrap(), 0);
+        let quote = "1) OR (1=1";
+        assert_eq!(
+            db.table("posts")
+                .where_in("title", &[&quote])
+                .count()
+                .unwrap(),
+            0
+        );
+        // Later conditions keep their own values after the list.
+        assert_eq!(
+            titles(
+                db.table("posts")
+                    .where_in("id", &ids)
+                    .where_op("views", ">", &6)
+            ),
+            ["c"]
+        );
+    }
+
+    #[test]
+    fn exists_takes_a_subquery_with_bound_params() {
+        let db = blog();
+        let tagged = "SELECT 1 FROM tags WHERE tags.post_id = posts.id AND tags.name = ?";
+        assert_eq!(
+            titles(db.table("posts").where_exists(tagged, &[&"sql"])),
+            ["B"]
+        );
+        assert_eq!(
+            titles(
+                db.table("posts")
+                    .where_not_exists(tagged, &[&"rust"])
+                    .order_by("id")
+            ),
+            ["c"]
+        );
+        assert_eq!(
+            titles(
+                db.table("posts")
+                    .where_exists(tagged, &[&"rust"])
+                    .where_op("views", ">", &10)
+            ),
+            ["B"]
+        );
+    }
+
+    #[test]
+    fn joins_and_raw_order() {
+        let db = blog();
+        let joined = || db.table("posts").join("tags", "tags.post_id", "posts.id");
+        assert_eq!(titles(joined().where_eq("tags.name", &"sql")), ["B"]);
+        assert_eq!(joined().count().unwrap(), 3);
+        let all = db
+            .table("posts")
+            .left_join("tags", "tags.post_id", "posts.id")
+            .where_null("tags.name");
+        assert_eq!(titles(all), ["c"]);
+        assert_eq!(
+            titles(db.table("posts").order_by_raw("lower(title) DESC")),
+            ["c", "B", "a"]
+        );
+    }
+
+    #[test]
+    fn update_takes_named_values() {
+        let db = blog();
+        let changed = db
+            .table("posts")
+            .where_eq("id", &2)
+            .update_values(&[("title", &"z"), ("views", &99)])
+            .unwrap();
+        assert_eq!(changed, 1);
+        let row = db
+            .table("posts")
+            .where_eq("id", &2)
+            .first(|r| Ok((r.get::<_, String>("title")?, r.get::<_, i64>("views")?)));
+        assert_eq!(row.unwrap(), Some(("z".to_owned(), 99)));
+    }
+
+    #[test]
+    #[should_panic(expected = "not a table or column name")]
+    fn join_names_cannot_carry_sql() {
+        let db = blog();
+        let _ = db.table("posts").join("tags; DROP TABLE posts", "a", "b");
     }
 
     #[test]

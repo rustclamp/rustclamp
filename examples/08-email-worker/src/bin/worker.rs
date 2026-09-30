@@ -193,7 +193,7 @@ async fn handle_message(
     };
     match outcome {
         Outcome::Done(_) => DeliveryOutcome::Ack,
-        Outcome::Retry(delay) => DeliveryOutcome::Retry(delay),
+        Outcome::Retry { delay, .. } => DeliveryOutcome::Retry(delay),
         Outcome::DeadLetter {
             reason: DeadReason::NoHandler,
             ..

@@ -589,11 +589,7 @@ pub fn json_status(status: u16, body: &str) -> Response {
 /// of `rustclamp-http`'s `HttpError`: `type`, `title` (the [`reason`]),
 /// `status` and `detail`.
 pub fn problem(status: u16, detail: &str) -> Response {
-    let body = format!(
-        r#"{{"type":"about:blank","title":"{}","status":{status},"detail":"{}"}}"#,
-        reason(status),
-        json_escape(detail)
-    );
+    let body = crate::error::Problem::new(status, reason(status), detail).json();
     Response::new(status, "application/problem+json", body)
 }
 
@@ -606,22 +602,6 @@ fn problem_page(response: Response) -> Response {
     let mut json = problem(response.status, reason(response.status));
     json.headers = response.headers;
     json
-}
-
-fn json_escape(text: &str) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            c if c < ' ' => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 /// A `302` redirect to `location`.
