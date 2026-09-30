@@ -4,8 +4,7 @@ use std::time::{Duration, Instant};
 
 use super::{Next, Request, Response, error};
 
-/// Most clients tracked at once. At the cap, expired windows are pruned, then
-/// the oldest window is dropped, so memory stays bounded under address rotation.
+/// Most clients tracked at once by default; see [`Throttle::capacity`].
 const CAPACITY: usize = 10_000;
 
 /// A fixed-window rate limiter: at most `max` hits per key in each window.
@@ -60,6 +59,17 @@ impl Throttle {
     #[must_use]
     pub fn trust_forwarded(mut self, trust: bool) -> Self {
         self.trust_forwarded = trust;
+        self
+    }
+
+    /// Tracks at most `clients` keys at once (10,000 by default), so memory
+    /// stays bounded when addresses rotate. When a new key arrives at the cap,
+    /// expired windows are dropped first; only when every window is still live
+    /// is the oldest one dropped, and that client starts a fresh window early.
+    /// Set it above your peak number of clients per window to rule that out.
+    #[must_use]
+    pub fn capacity(mut self, clients: usize) -> Self {
+        self.capacity = clients.max(1);
         self
     }
 
@@ -153,8 +163,7 @@ mod tests {
 
     #[test]
     fn memory_stays_bounded() {
-        let mut limiter = Throttle::new(1, Duration::from_millis(50));
-        limiter.capacity = 3;
+        let limiter = Throttle::new(1, Duration::from_millis(50)).capacity(3);
         for key in ["a", "b", "c"] {
             limiter.hit(key).unwrap();
         }

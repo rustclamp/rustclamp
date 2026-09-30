@@ -24,6 +24,11 @@
 
 ### Changed
 
+- Without `LOG_CHANNEL` (and no `app/config/logging.rs`), `Log` writes to
+  stderr unless the working directory has a `storage/` folder, so a CLI or
+  service started elsewhere no longer creates a stray `storage/logs/app.log`
+  (#47). Set `LOG_CHANNEL=single` to keep the file anywhere.
+
 - `Uuid::v7` comes from `rustclamp_core::Reference` (ADR 0021), so v7 IDs and
   request references share one generator. The `uuid` feature now pulls in
   `rustclamp-core` (no dependencies of its own); Pico is unchanged.
@@ -41,9 +46,17 @@
 
 ### Added
 
+
 - `crypto::random_bytes`, `crypto::constant_time_eq`, `crypto::sha1` (for
   protocols such as the WebSocket handshake, not for security) and
   `crypto::base64_encode`/`base64_decode` (#43).
+
+
+- `Throttle::capacity` sets how many clients are tracked at once (10,000 by
+  default). At the cap a live window is dropped only when none has expired;
+  size it above your peak clients per window (#32).
+
+
 
 - `Db::transaction_immediate`: `BEGIN IMMEDIATE`, so a read-then-write
   cannot fail halfway with "database is locked" (#36).
