@@ -278,3 +278,9 @@
   Tailwind-only welcome page, `config/app.rs`, a base
   `http/controllers/controller.rs`, a health controller, a `request_log`
   middleware, and `http/requests/` and `models/` folders.
+
+### Fixed
+
+- `Db::connect` no longer fails with "database is locked" when several
+  processes open a new database at once (#34): `busy_timeout` is set before
+  the switch to WAL, and the switch retries until the same 5 s deadline.
