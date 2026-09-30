@@ -38,6 +38,10 @@ pub struct Request {
     pub(super) params: Vec<(String, String)>,
     /// Values from [`Router::state`](super::Router::state).
     pub(super) state: State,
+    /// Values from [`Request::with_extension`], such as the signed-in user.
+    pub(super) extensions: State,
+    /// The declared body was over the limit and was not read.
+    pub(super) too_large: bool,
     /// Names this request in logs and in `X-Request-Id` (ADR 0021).
     pub(super) reference: Minted,
     /// Whether the client lets the connection stay open for another request:
@@ -93,6 +97,8 @@ impl Request {
             session: None,
             params: Vec::new(),
             state: State::default(),
+            extensions: State::default(),
+            too_large: false,
             keep_alive: false,
             reference: Minted(Reference::new()),
         }
@@ -165,6 +171,13 @@ impl Request {
             .map(|(_, value)| value.as_str())
     }
 
+    /// The route segment `{name}` parsed as `T`, or `None` when it is missing
+    /// or does not parse. With a typed segment, `/users/{id:u64}`, the route
+    /// only matches when it does.
+    pub fn param_as<T: std::str::FromStr>(&self, name: &str) -> Option<T> {
+        self.param(name)?.parse().ok()
+    }
+
     /// The visitor's session, when the route runs behind
     /// [`Sessions::middleware`](super::Sessions::middleware).
     pub fn session(&self) -> Option<&Session> {
@@ -175,6 +188,48 @@ impl Request {
     /// [`Router::state`](super::Router::state).
     pub fn state<T: Any>(&self) -> Option<&T> {
         self.state.0.iter().find_map(|value| value.downcast_ref())
+    }
+
+    /// A copy of the request that also carries `value`, read with
+    /// [`extension`](Self::extension): how middleware hands the handler what it
+    /// found, such as the authenticated user, without a header a client could
+    /// forge. One value per type; a second of the same type replaces the first.
+    ///
+    /// ```
+    /// use rustclamp::web::{Request, Response, Router};
+    ///
+    /// struct UserId(u64);
+    ///
+    /// let app = Router::new()
+    ///     .middleware(|request, next| next(&request.clone().with_extension(UserId(7))))
+    ///     .get("/me", |request| {
+    ///         Response::text(200, &request.extension::<UserId>().unwrap().0.to_string())
+    ///     });
+    /// assert_eq!(app.handle(&Request::get("/me")).body, b"7");
+    /// ```
+    #[must_use]
+    pub fn with_extension<T: Any + Send + Sync>(mut self, value: T) -> Self {
+        let kept = Arc::make_mut(&mut self.extensions.0);
+        kept.retain(|kept| (**kept).type_id() != std::any::TypeId::of::<T>());
+        kept.push(Arc::new(value));
+        self
+    }
+
+    /// The value of type `T` middleware added with
+    /// [`with_extension`](Self::with_extension).
+    pub fn extension<T: Any>(&self) -> Option<&T> {
+        self.extensions
+            .0
+            .iter()
+            .find_map(|value| value.downcast_ref())
+    }
+
+    /// Whether the client declared a body over the limit
+    /// ([`Router::body_limit`](super::Router::body_limit)). Such a body is not
+    /// read, so [`body`](Self::body) is empty; the matched route answers `413`
+    /// once the middleware has run.
+    pub fn body_too_large(&self) -> bool {
+        self.too_large
     }
 
     /// The value of cookie `name`.
@@ -190,9 +245,29 @@ impl Request {
     }
 }
 
+/// The body limit when the app set none: [`MAX_BODY`], or
+/// [`MAX_UPLOAD`](super::MAX_UPLOAD) for multipart forms.
+pub(super) fn default_limit(request: &Request) -> usize {
+    if request
+        .header("content-type")
+        .is_some_and(super::upload::is_multipart)
+    {
+        super::MAX_UPLOAD
+    } else {
+        MAX_BODY
+    }
+}
+
 /// Reads one request: request line, headers, then a `Content-Length` body.
-/// A malformed or oversized request is answered with the returned error.
-pub(super) fn parse(reader: &mut impl BufRead, peer: Option<IpAddr>) -> Result<Request, Response> {
+/// `limit` says, from the request line and headers, how large a body to
+/// accept; a larger one is left unread and the request is marked
+/// [`too_large`](Request::body_too_large), for the router to answer `413` after
+/// its middleware. A malformed request is answered with the returned error.
+pub(super) fn parse(
+    reader: &mut impl BufRead,
+    peer: Option<IpAddr>,
+    limit: &dyn Fn(&Request) -> usize,
+) -> Result<Request, Response> {
     let line = read_line(reader)?;
     let mut parts = line.split_whitespace();
     let (Some(method), Some(target), Some(version)) = (parts.next(), parts.next(), parts.next())
@@ -222,16 +297,11 @@ pub(super) fn parse(reader: &mut impl BufRead, peer: Option<IpAddr>) -> Result<R
     }
     if let Some(length) = request.header("content-length") {
         let length: usize = length.parse().map_err(|_| error(400))?;
-        let multipart = request
-            .header("content-type")
-            .is_some_and(super::upload::is_multipart);
-        let max = if multipart {
-            super::MAX_UPLOAD
-        } else {
-            MAX_BODY
-        };
-        if length > max {
-            return Err(error(413));
+        if length > limit(&request) {
+            // The unread body would be taken for the next request.
+            request.too_large = true;
+            request.keep_alive = false;
+            return Ok(request);
         }
         let mut body = vec![0; length];
         reader.read_exact(&mut body).map_err(|_| error(400))?;
@@ -311,7 +381,7 @@ mod tests {
     use super::*;
 
     fn parse_raw(raw: &str) -> Result<Request, u16> {
-        parse(&mut raw.as_bytes(), None).map_err(|response| response.status)
+        parse(&mut raw.as_bytes(), None, &default_limit).map_err(|response| response.status)
     }
 
     #[test]
@@ -348,7 +418,16 @@ mod tests {
             "POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
             MAX_BODY + 1
         );
-        assert_eq!(parse_raw(&big).unwrap_err(), 413);
+        // Not an error: the router answers 413 after its middleware.
+        let big = parse_raw(&big).unwrap();
+        assert!(big.body_too_large() && big.body.is_empty() && !big.keep_alive);
+        let small = parse(
+            &mut "POST / HTTP/1.1\r\nContent-Length: 4\r\n\r\nabcd".as_bytes(),
+            None,
+            &|_| 3,
+        )
+        .unwrap();
+        assert!(small.body_too_large());
         // Multipart forms may be larger, up to MAX_UPLOAD; this body is
         // missing, so it fails later with 400.
         let upload = |length| {
@@ -357,9 +436,10 @@ mod tests {
             )
         };
         assert_eq!(parse_raw(&upload(MAX_BODY + 1)).unwrap_err(), 400);
-        assert_eq!(
-            parse_raw(&upload(super::super::MAX_UPLOAD + 1)).unwrap_err(),
-            413
+        assert!(
+            parse_raw(&upload(super::super::MAX_UPLOAD + 1))
+                .unwrap()
+                .body_too_large()
         );
         let long = format!("GET /{} HTTP/1.1\r\n\r\n", "a".repeat(MAX_LINE as usize));
         assert_eq!(parse_raw(&long).unwrap_err(), 431);

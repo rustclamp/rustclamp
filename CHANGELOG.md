@@ -51,6 +51,16 @@
 
 ### Added
 
+- JSON APIs on the std server (#28, #29, #30): the router answers `405` with
+  `Allow` for a path that exists under other methods (a `HEAD` on a `GET`
+  route is now `405`, not `404`); `Router::json_errors` renders `404`, `405`,
+  `413` and `500` as `application/problem+json` (`web::problem`, the shape of
+  `HttpError`); `json_status` and a public `reason`;
+  `Router::body_limit` (router or group) decides `413` from the headers, so
+  middleware runs first and the body is never read (`Request::body_too_large`);
+  `Request::with_extension`/`extension` hand typed values from middleware to
+  handlers; `{id:u64}` route segments and `Request::param_as`.
+
 - `Router::reveal_forbidden` answers `403` as `403`, for APIs whose clients
   already know the resource; by default a `403` is still the `404` page
   (#27).
