@@ -56,43 +56,56 @@ adds signal joining). **No change to the core traits.**
    **succeeded** — including the failing part when it failed in `start` or
    `ready`, since `initialize` acquired resources. A part whose own
    `initialize` failed is not stopped.
-5. **Failures are collected, not short-circuited.** A failing `drain` or `stop`
-   is recorded and the sequence continues. `run` returns `Result<(), RunError>`
-   where `RunError.failures` lists every `Failure { phase, name, message }` in
-   order.
+5. **Failures are collected, not short-circuited.** A failing or panicking
+   `drain` or `stop` hook is recorded and the sequence continues (hooks run
+   under `catch_unwind`; a panic becomes a `Failure`). `run` returns
+   `Result<(), RunError>` where `RunError.failures` lists every
+   `Failure { phase, name, message }` in order. Errors are rendered with
+   `Display` into `String`, and `Phase`, `Failure` and `RunError` are
+   `#[non_exhaustive]`, so a structured cause can be added later without a
+   break.
 6. **One token.** `shutdown_token()` returns the token; cancelling it is
    equivalent to a signal.
-7. **Signals (`signal` feature).** `run()` installs the SIGINT/SIGTERM and
-   SIGHUP handlers before startup work, and runs `run_until(shutdown_signal)`.
-   SIGHUP calls the optional `on_reload(FnMut())` hook and does not stop the app.
+7. **Signals (`signal` feature).** `run()` installs the SIGINT/SIGTERM
+   handlers before startup work and runs `run_until(shutdown_signal)`.
    `run_until(future)` is the signal-free form used by tests.
+8. **Reload is a service, not a trait.** There is no `Reload` trait in core
+   and no runner hook. The app calls `reload_signal()` before `run()` and
+   moves the stream into a `service` that selects on `recv()` and
+   `token.cancelled()`. This also keeps `signal` building off Unix.
+9. **Lifecycle hooks stay synchronous.** Startup runs before any service, and
+   `drain`/`stop` run after the services are joined, so nothing else needs the
+   runtime thread while a hook blocks it. Async init/stop is not needed for
+   this ADR; an app that needs it wraps the call in `block_on` or a service.
+10. **`ready` failures stay fatal.** Any `ready` error unwinds startup. No
+    degraded or optional policy is applied to parts.
+11. **A service that exits early ends the app**, even with `Ok`. Restart is
+    opt-in: wrap the closure body in `supervise_async`.
+12. **Order is registration order.** Deriving it from `Requires`/`Provides` is
+    left to the kernel.
+13. **Aborted services are awaited.** When the drain timeout expires the
+    stragglers are aborted, then joined for a short grace period (1 s) before
+    parts drain and stop, so a service cannot still hold a part's handles when
+    it stops. Each straggler is reported by name; a task that never yields
+    cannot be aborted and is reported as not stopping.
+
+## Sharing a module with services
+
+`Part::new(module)` moves the module into the runner (behind a mutex). A
+service that needs the same state (a pool, a queue handle) must get it from
+the module itself: keep the shared state in an `Arc` field and clone the
+`Arc` handle into the service closure **before** wrapping the module in a
+`Part`.
 
 ## Open questions
 
-1. **Drain is unbounded for parts.** `Drain::drain` is synchronous and
-   deadline-free, so the drain timeout only bounds services. Bounding a part's
-   drain needs either the trait to take a deadline (core change) or the
-   runner to run it on the blocking pool and abandon it on timeout (leaks a
-   thread; needs `M: 'static` behind a mutex, which it already has).
-2. **Should the traits be async?** Real init/stop (open a pool, flush a
-   queue) is async. Today the runner calls the sync hooks inline on the runtime
-   thread, which blocks it. Options: keep sync (init is cheap; wrap in
-   `spawn_blocking`), add async twins in runtime, or change core. This ADR
-   keeps them sync.
-3. **Reload has no core trait.** `on_reload` is a plain closure. A `Reload`
-   trait in core would let modules opt in like the others; not added
-   speculatively.
-4. **Error type.** Hooks render errors with `Display` into `String`, losing
-   the source chain. Acceptable until an app needs to match on a cause.
-5. **`Ready` semantics.** The core doc says "process policy decides global
-   readiness". The runner treats any `ready` error as fatal. A degraded/optional
-   policy (`FailurePolicy`) is not applied to parts.
-6. **Service restart.** A service that exits early ends the app; the
-   existing `Supervisor` restart policies are not used. Wrap the closure body
-   in `supervise_async` if an app wants restart-once.
-7. **Dependency order.** Order is registration order. Deriving it from
-   `Requires`/`Provides` in the frozen process is a kernel concern and is left
-   out.
+1. **Drain is unbounded for parts. Deferred.** `Drain::drain` is synchronous
+   and deadline-free, so the drain timeout only bounds services, and total
+   shutdown time is `drain_timeout` plus the unbounded part drains. Abandoning
+   a `spawn_blocking` drain on timeout is not an option: the abandoned closure
+   still holds the module's mutex, so `stop` would block on it forever
+   (deadlock). Bounding it properly needs the trait to take a deadline, a core
+   change.
 
 ## Consequences
 
@@ -100,6 +113,6 @@ adds signal joining). **No change to the core traits.**
 - The stress-ladder's hand-written `join!` glue becomes `AppRunner` plus
   closures; the facade can adopt it without a new dependency direction (the
   runner takes closures, so scheduler/worker stay unknown to runtime).
-- Core is untouched, so this ADR can be rejected or reshaped (open questions
-  1-3) without a breaking release.
-- Blocking hooks run on the runtime thread until question 2 is decided.
+- Core is untouched, so this ADR can be rejected or reshaped (the open
+  question) without a breaking release.
+- Blocking hooks run on the runtime thread; this is safe because no service runs during them (Decision 9).
