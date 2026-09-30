@@ -36,6 +36,12 @@
 
 ### Added
 
+- Every web request has a `Reference` (UUIDv7, ADR 0021): `Request::reference()`,
+  sent back in `X-Request-Id`, appended as `ref=<reference>` to each log line
+  written while the request is handled, passed to error views as
+  `{{ reference }}` and shown on the built-in 5xx page. A client's own
+  `X-Request-Id` is never used.
+
 - Account flows (ADR 0016), with `auth` + `mail`: `Auth::register` (no
   enumeration, no auto-login), email verification (24 h signed link,
   `auth::verified` guard, `resend_verification`), `forgot`/`open_reset`/

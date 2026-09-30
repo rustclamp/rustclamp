@@ -308,7 +308,13 @@ impl Logger {
             return;
         }
         let seconds = now();
-        let line = line(seconds, &self.env, level, &message.to_string());
+        let message = message.to_string();
+        #[cfg(feature = "uuid")]
+        let message = match reference() {
+            Some(reference) => format!("{message} ref={reference}"),
+            None => message,
+        };
+        let line = line(seconds, &self.env, level, &message);
         for sink in &self.sinks {
             sink.write(seconds, &line);
         }
@@ -394,6 +400,38 @@ fn prune(folder: &Path, days: usize) {
     }
 }
 
+#[cfg(feature = "uuid")]
+thread_local! {
+    static REFERENCE: std::cell::Cell<Option<rustclamp_core::Reference>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Runs `work` with `reference` added to every entry this thread logs
+/// meanwhile, as `ref=<reference>` (ADR 0021). The web server runs each
+/// request in one.
+// ponytail: per thread, so threads a handler spawns log without it; pass the
+// reference along when that matters
+#[cfg(feature = "web")]
+pub(crate) fn with_reference<T>(
+    reference: rustclamp_core::Reference,
+    work: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<rustclamp_core::Reference>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            REFERENCE.set(self.0);
+        }
+    }
+    let _restore = Restore(REFERENCE.replace(Some(reference)));
+    work()
+}
+
+/// The reference [`with_reference`] set for this thread, if any.
+#[cfg(feature = "uuid")]
+pub(crate) fn reference() -> Option<rustclamp_core::Reference> {
+    REFERENCE.get()
+}
+
 /// One formatted entry, ending in a newline.
 fn line(seconds: u64, env: &str, level: Level, message: &str) -> String {
     let message = message
@@ -451,6 +489,30 @@ mod tests {
         assert_eq!(
             line(0, "production", Level::Warning, "disk low\nfake entry\\n"),
             "[1970-01-01 00:00:00] production.WARNING: disk low\\nfake entry\\\\n\n"
+        );
+    }
+
+    #[cfg(feature = "web")]
+    #[test]
+    fn entries_in_a_reference_scope_carry_it() {
+        let folder = std::env::temp_dir().join(format!("clamp-ref-{}", std::process::id()));
+        let path = folder.join("app.log");
+        let logger = Logger::file(&path, Some(Level::Debug), "test").unwrap();
+        let reference = rustclamp_core::Reference::new();
+        with_reference(reference, || logger.log(Level::Info, "inside"));
+        logger.log(Level::Info, "outside");
+        let written = fs::read_to_string(&path).unwrap();
+        fs::remove_dir_all(&folder).unwrap();
+        let entries: Vec<_> = written
+            .lines()
+            .map(|line| line.split("] ").nth(1).unwrap())
+            .collect();
+        assert_eq!(
+            entries,
+            [
+                format!("test.INFO: inside ref={reference}"),
+                "test.INFO: outside".to_owned()
+            ]
         );
     }
 
