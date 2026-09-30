@@ -55,6 +55,10 @@
   already know the resource; by default a `403` is still the `404` page
   (#27).
 
+- `web::try_serve` returns a `ServeError` (bad `PORT`/`WEB_THREADS`, or no
+  port to bind) instead of panicking or exiting, and `web::serve_on` serves
+  a listener the app bound itself; `serve` behaves as before (#31).
+
 - `rustclamp::time` (feature `time`, included by `log` and `db`):
   `format_rfc3339`/`parse_rfc3339` (offsets, fractions), `format_date`/
   `parse_date` and `add_days` on `SystemTime`, no time crate (#42).
