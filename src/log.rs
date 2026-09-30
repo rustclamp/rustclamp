@@ -16,8 +16,10 @@
 //! - `LOG_LEVEL`: the lowest level written, `debug` by default. `silent`
 //!   turns logging off.
 //! - `LOG_CHANNEL`, as in Laravel:
-//!   - `single` (default; `file` is the old name) appends to
-//!     `storage/logs/app.log`;
+//!   - `single` (`file` is the old name) appends to `storage/logs/app.log`.
+//!     It is the default when the working directory has a `storage/` folder,
+//!     as an app's does; elsewhere, such as a CLI run from any folder, the
+//!     default is `stderr`, so no stray `storage/logs` is created;
 //!   - `daily` writes `storage/logs/app-YYYY-MM-DD.log`, one file per UTC
 //!     day, keeping the newest `LOG_DAILY_DAYS` (14 by default);
 //!   - `stderr` writes to standard error, for systemd or containers;
@@ -210,19 +212,28 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// `LOG_LEVEL` (`debug`), `LOG_CHANNEL` (`single`), `LOG_STACK`
-    /// (`single`), `LOG_DAILY_DAYS` (14) and `APP_ENV` (`local`).
+    /// `LOG_LEVEL` (`debug`), `LOG_CHANNEL` (`single` when `./storage`
+    /// exists, else `stderr`), `LOG_STACK` (`single`), `LOG_DAILY_DAYS` (14)
+    /// and `APP_ENV` (`local`).
     pub fn from_config(config: &Config) -> Self {
         // ponytail: the same defaults as the web template's
         // `app/config/logging.rs`, for apps without one
         Self {
             level: config.get("LOG_LEVEL").unwrap_or("debug").into(),
-            channel: config.get("LOG_CHANNEL").unwrap_or("single").into(),
+            channel: config
+                .get("LOG_CHANNEL")
+                .unwrap_or(default_channel(Path::new("storage")))
+                .into(),
             stack: config.get("LOG_STACK").unwrap_or("single").into(),
             daily_days: config.get_or("LOG_DAILY_DAYS", 14),
             env: config.get("APP_ENV").unwrap_or("local").into(),
         }
     }
+}
+
+/// `single` when the app's `storage` folder exists, else `stderr` (#47).
+fn default_channel(storage: &Path) -> &'static str {
+    if storage.is_dir() { "single" } else { "stderr" }
 }
 
 impl Logger {
@@ -475,6 +486,15 @@ fn timestamp(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_channel_is_a_file_only_inside_an_app() {
+        let folder = std::env::temp_dir().join(format!("rustclamp-log-{}", std::process::id()));
+        assert_eq!(default_channel(&folder), "stderr");
+        fs::create_dir_all(&folder).unwrap();
+        assert_eq!(default_channel(&folder), "single");
+        let _ = fs::remove_dir_all(folder);
+    }
 
     #[test]
     fn timestamps_are_utc_dates() {

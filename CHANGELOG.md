@@ -24,6 +24,11 @@
 
 ### Changed
 
+- Without `LOG_CHANNEL` (and no `app/config/logging.rs`), `Log` writes to
+  stderr unless the working directory has a `storage/` folder, so a CLI or
+  service started elsewhere no longer creates a stray `storage/logs/app.log`
+  (#47). Set `LOG_CHANNEL=single` to keep the file anywhere.
+
 - `Uuid::v7` comes from `rustclamp_core::Reference` (ADR 0021), so v7 IDs and
   request references share one generator. The `uuid` feature now pulls in
   `rustclamp-core` (no dependencies of its own); Pico is unchanged.
