@@ -61,6 +61,10 @@
   `Request::with_extension`/`extension` hand typed values from middleware to
   handlers; `{id:u64}` route segments and `Request::param_as`.
 
+- `rustclamp::cache` (optional `cache` feature): a bounded in-process cache with
+  LRU eviction, optional TTL, `get_or_insert_with` and invalidation.
+- `rustclamp::metrics` (optional `metrics` feature): counters and gauges with a
+  Prometheus text `render()`; the app mounts its own `/metrics` route.
 - `Router::reveal_forbidden` answers `403` as `403`, for APIs whose clients
   already know the resource; by default a `403` is still the `404` page
   (#27).
