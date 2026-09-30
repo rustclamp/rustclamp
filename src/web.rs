@@ -40,12 +40,12 @@ mod view;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Component, Path};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::log::Log;
@@ -1009,7 +1009,8 @@ impl std::error::Error for ServeError {
 }
 
 /// Answers connections from `listener`, bound by the app itself, on
-/// `threads` worker threads, until the listener fails. Accepted
+/// `threads` worker threads, until the listener fails ([`serve_until`] stops
+/// and drains on request). Accepted
 /// connections wait in a queue of four per thread; when it is full, the
 /// operating system's backlog holds the rest, so a flood cannot spawn threads
 /// or grow memory without bound.
@@ -1025,12 +1026,76 @@ impl std::error::Error for ServeError {
 // Memory: each thread holds one parsed request, so the worst case is
 // WEB_THREADS x the largest body (10 MiB uploads: 32 x 10 MiB = 320 MiB).
 pub fn serve_on(listener: TcpListener, routes: Router, threads: usize) {
+    serve_until(listener, routes, threads, &Shutdown::new(), Duration::ZERO);
+}
+
+/// Stops [`serve_until`]: clone it into a signal handler or another thread
+/// and call [`stop`](Shutdown::stop).
+#[derive(Clone, Debug, Default)]
+pub struct Shutdown(Arc<ShutdownState>);
+
+#[derive(Debug, Default)]
+struct ShutdownState {
+    stopped: AtomicBool,
+    /// Where `serve_until` listens, so `stop` can wake its blocked accept.
+    address: OnceLock<SocketAddr>,
+}
+
+impl Shutdown {
+    /// A handle that has not been stopped.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Stops accepting connections and starts the drain. Calling it again,
+    /// or before `serve_until` starts, is fine.
+    pub fn stop(&self) {
+        self.0.stopped.store(true, Ordering::SeqCst);
+        if let Some(address) = self.0.address.get() {
+            let _ = TcpStream::connect_timeout(address, Duration::from_secs(1));
+        }
+    }
+
+    /// Whether [`stop`](Shutdown::stop) was called.
+    #[must_use]
+    pub fn is_stopped(&self) -> bool {
+        self.0.stopped.load(Ordering::SeqCst)
+    }
+}
+
+/// [`serve_on`] until `shutdown` is stopped, then drains: no new connections,
+/// requests already sent are answered with `Connection: close`, idle
+/// kept-alive connections are closed. Waits up to `grace` for the last open
+/// connection to close and returns whether every one did.
+// ponytail: after the drain the worker threads stay parked on the empty
+// queue; the process exiting reclaims them. Join them if a server must
+// restart in-process many times.
+pub fn serve_until(
+    listener: TcpListener,
+    routes: Router,
+    threads: usize,
+    shutdown: &Shutdown,
+    grace: Duration,
+) -> bool {
+    if let Ok(mut address) = listener.local_addr() {
+        // A listener on 0.0.0.0 or [::] is reached through loopback.
+        if address.ip().is_unspecified() {
+            address.set_ip(match address.ip() {
+                IpAddr::V4(_) => Ipv4Addr::LOCALHOST.into(),
+                IpAddr::V6(_) => Ipv6Addr::LOCALHOST.into(),
+            });
+        }
+        let _ = shutdown.0.address.set(address);
+    }
     let threads = threads.max(1);
     let routes = Arc::new(routes);
     let (send, receive) = std::sync::mpsc::sync_channel::<Connection>(threads * 4);
     let queue = Arc::new(Queue {
         send,
         waiting: AtomicUsize::new(0),
+        open: Arc::new(AtomicUsize::new(0)),
+        shutdown: shutdown.clone(),
     });
     let receive = Arc::new(std::sync::Mutex::new(receive));
     for _ in 0..threads {
@@ -1056,20 +1121,36 @@ pub fn serve_on(listener: TcpListener, routes: Router, threads: usize) {
             }
         });
     }
-    for stream in listener.incoming().flatten() {
+    for stream in listener.incoming() {
+        // Checked after accept too: `stop` wakes it with a connection of its own.
+        if shutdown.is_stopped() {
+            break;
+        }
+        let Ok(stream) = stream else { continue };
         // Head and body go out as two writes; without this the body waits
         // for the client's delayed ACK on a kept-alive connection.
         let _ = stream.set_nodelay(true);
         queue.waiting.fetch_add(1, Ordering::Relaxed);
+        queue.open.fetch_add(1, Ordering::SeqCst);
         let connection = Connection {
             reader: BufReader::new(stream),
             idle_since: Instant::now(),
             served: 0,
+            _open: Open(Arc::clone(&queue.open)),
         };
         if queue.send.send(connection).is_err() {
-            return;
+            return false;
         }
     }
+    drop(listener);
+    let deadline = Instant::now() + grace;
+    while queue.open.load(Ordering::SeqCst) > 0 {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
 }
 
 /// How long a connection may wait for its next request before it is closed.
@@ -1084,12 +1165,25 @@ struct Connection {
     reader: BufReader<TcpStream>,
     idle_since: Instant,
     served: usize,
+    _open: Open,
+}
+
+/// Counts a connection as open until it is dropped, however it closes.
+struct Open(Arc<AtomicUsize>);
+
+impl Drop for Open {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// Connections waiting for a thread, and how many.
 struct Queue {
     send: SyncSender<Connection>,
     waiting: AtomicUsize,
+    /// Accepted connections not yet closed, for the drain.
+    open: Arc<AtomicUsize>,
+    shutdown: Shutdown,
 }
 
 impl Queue {
@@ -1124,7 +1218,7 @@ fn serve_connection(mut connection: Connection, routes: &Router, queue: &Queue) 
             Wait::Yield => return queue.requeue(connection),
         }
         connection.served += 1;
-        if !respond(&mut connection, routes) {
+        if !respond(&mut connection, routes, &queue.shutdown) {
             return;
         }
         connection.idle_since = Instant::now();
@@ -1151,7 +1245,8 @@ fn next_request(connection: &mut Connection, queue: &Queue) -> Wait {
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                if connection.idle_since.elapsed() >= IDLE_TIMEOUT {
+                // Draining: a request that already arrived is answered above.
+                if connection.idle_since.elapsed() >= IDLE_TIMEOUT || queue.shutdown.is_stopped() {
                     return Wait::Closed;
                 }
                 if queue.others_waiting() {
@@ -1165,8 +1260,9 @@ fn next_request(connection: &mut Connection, queue: &Queue) -> Wait {
 }
 
 /// Reads one request from `connection` and writes its response. Returns
-/// whether the connection stays open for another request.
-fn respond(connection: &mut Connection, routes: &Router) -> bool {
+/// whether the connection stays open for another request; never once
+/// `shutdown` is stopped.
+fn respond(connection: &mut Connection, routes: &Router, shutdown: &Shutdown) -> bool {
     let stream = connection.reader.get_ref();
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let peer = stream.peer_addr().ok().map(|address| address.ip());
@@ -1193,7 +1289,8 @@ fn respond(connection: &mut Connection, routes: &Router) -> bool {
                 });
             (
                 response,
-                request.keep_alive && !last,
+                // Checked after the handler: a stop during a slow request still says close.
+                request.keep_alive && !last && !shutdown.is_stopped(),
                 request.method == "HEAD",
             )
         }
@@ -1315,6 +1412,55 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn stop_finishes_requests_in_flight_closes_idle_ones_and_returns() {
+        use std::io::Read;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let routes = Router::new()
+            .get("/hi", |_| Response::text(200, "hi"))
+            .get("/slow", |_| {
+                std::thread::sleep(Duration::from_millis(300));
+                Response::text(200, "done")
+            });
+        let shutdown = Shutdown::new();
+        let handle = shutdown.clone();
+        let server = std::thread::spawn(move || {
+            serve_until(listener, routes, 4, &handle, Duration::from_secs(5))
+        });
+
+        // A kept-alive connection, idle after its first answer.
+        let mut idle = TcpStream::connect(address).unwrap();
+        idle.write_all(b"GET /hi HTTP/1.1\r\n\r\n").unwrap();
+        let mut first = [0; 16];
+        idle.read_exact(&mut first).unwrap();
+        // A request still running when the stop comes.
+        let mut slow = TcpStream::connect(address).unwrap();
+        slow.write_all(b"GET /slow HTTP/1.1\r\n\r\n").unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+
+        let stopped = Instant::now();
+        shutdown.stop();
+        let mut answer = String::new();
+        slow.read_to_string(&mut answer).unwrap();
+        assert!(answer.contains("Connection: close\r\n"), "{answer}");
+        assert!(answer.ends_with("done"), "{answer}");
+        let mut rest = Vec::new();
+        idle.read_to_end(&mut rest).unwrap();
+        assert!(
+            server.join().unwrap(),
+            "connections left open after the drain"
+        );
+        // Idle connections close on stop, not after the 5 s idle timeout.
+        assert!(
+            stopped.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            stopped.elapsed()
+        );
+        assert!(TcpStream::connect(address).is_err(), "still accepting");
     }
 
     #[test]
