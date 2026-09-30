@@ -438,11 +438,16 @@ dependencies = [
  "hmac",
  "pulldown-cmark",
  "rusqlite",
+ "rustclamp-core",
  "rustclamp-macros",
  "rustls",
  "sha2",
  "webpki-roots",
 ]
+
+[[package]]
+name = "rustclamp-core"
+version = "0.1.0"
 
 [[package]]
 name = "rustclamp-macros"

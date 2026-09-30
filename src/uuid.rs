@@ -18,8 +18,6 @@
 //! ```
 
 use std::fmt;
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A 128-bit UUID. Displays in the usual lowercase hyphenated form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -36,24 +34,10 @@ impl Uuid {
 
     /// A time-ordered UUID (version 7): 48 bits of Unix milliseconds, then
     /// random bits. IDs made by this process are strictly increasing, even
-    /// within one millisecond.
+    /// within one millisecond. Made by [`rustclamp_core::Reference`], so
+    /// request references and v7 IDs share one sequence.
     pub fn v7() -> Self {
-        static LAST: Mutex<[u8; 16]> = Mutex::new([0; 16]);
-        let millis = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |time| time.as_millis() as u64);
-        let mut bytes = random();
-        bytes[..6].copy_from_slice(&millis.to_be_bytes()[2..]);
-        bytes[6] = (bytes[6] & 0x0f) | 0x70;
-        bytes[8] = (bytes[8] & 0x3f) | 0x80;
-        let mut last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Same millisecond, or a clock step back: count up from the last ID
-        // instead (RFC 9562, section 6.2, method 2).
-        if bytes <= *last {
-            bytes = increment(*last);
-        }
-        *last = bytes;
-        Self(bytes)
+        Self(*rustclamp_core::Reference::new().as_bytes())
     }
 
     /// Parses the hyphenated form, in either case.
@@ -96,43 +80,6 @@ impl fmt::Display for Uuid {
     }
 }
 
-/// `bytes` plus one in the random bits after the version and variant, which
-/// stay intact.
-fn increment(mut bytes: [u8; 16]) -> [u8; 16] {
-    for index in (0..16).rev() {
-        if index == 6 || index == 8 {
-            // Version and variant nibbles: carry through the low bits only.
-            let (high, low) = if index == 6 {
-                (bytes[6] & 0xf0, bytes[6] & 0x0f)
-            } else {
-                (bytes[8] & 0xc0, bytes[8] & 0x3f)
-            };
-            let max = if index == 6 { 0x0f } else { 0x3f };
-            if low < max {
-                bytes[index] = high | (low + 1);
-                return bytes;
-            }
-            bytes[index] = high;
-            continue;
-        }
-        if index < 6 {
-            // Out of random bits: move into the next millisecond.
-            let (sum, carry) = bytes[index].overflowing_add(1);
-            bytes[index] = sum;
-            if !carry {
-                return bytes;
-            }
-            continue;
-        }
-        let (sum, carry) = bytes[index].overflowing_add(1);
-        bytes[index] = sum;
-        if !carry {
-            return bytes;
-        }
-    }
-    bytes
-}
-
 /// 16 bytes from the operating system's random source.
 ///
 /// # Panics
@@ -161,6 +108,8 @@ mod tests {
 
     #[test]
     fn v7_carries_the_time_and_stays_ordered() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
         let before = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -174,17 +123,6 @@ mod tests {
             ids.iter()
                 .all(|id| id.version() == 7 && id.as_bytes()[8] >> 6 == 0b10)
         );
-    }
-
-    #[test]
-    fn increment_keeps_version_and_variant() {
-        let mut bytes = [0xff; 16];
-        bytes[6] = 0x7f;
-        bytes[8] = 0xbf;
-        bytes[..6].copy_from_slice(&[0, 0, 0, 0, 0, 1]);
-        let next = increment(bytes);
-        assert_eq!(next[..6], [0, 0, 0, 0, 0, 2], "carries into the time");
-        assert_eq!((next[6] >> 4, next[8] >> 6), (7, 0b10));
     }
 
     #[test]

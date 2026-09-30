@@ -19,6 +19,9 @@
 
 ### Changed
 
+- `Uuid::v7` comes from `rustclamp_core::Reference` (ADR 0021), so v7 IDs and
+  request references share one generator. The `uuid` feature now pulls in
+  `rustclamp-core` (no dependencies of its own); Pico is unchanged.
 - Faster view rendering, same output: a render reads and parses each view once,
   so an `@include` inside `@foreach` no longer rereads its file on every
   iteration. `{{ }}` escapes in one pass without copying the value.
