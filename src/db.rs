@@ -154,7 +154,10 @@ impl Db {
     /// the app should stop at startup rather than run without its data. CLIs
     /// and services that exit with their own code use [`Db::try_connect`].
     pub fn connect(settings: &Settings) -> Self {
-        if settings.database != ":memory:"
+        // Only for an engine try_connect accepts: an unsupported one must stop
+        // the app without leaving a `storage/` folder behind.
+        if settings.connection == "sqlite"
+            && settings.database != ":memory:"
             && let Some(folder) = std::path::Path::new(&settings.database).parent()
         {
             let _ = std::fs::create_dir_all(folder);
@@ -982,8 +985,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "DB_CONNECTION")]
-    fn unsupported_engine_stops_the_app() {
-        Db::open(&Config::parse("DB_CONNECTION=mysql"));
+    fn unsupported_engine_stops_the_app_without_a_folder() {
+        let folder =
+            std::env::temp_dir().join(format!("rustclamp-db-engine-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let settings = Settings {
+            connection: "mysql".into(),
+            database: folder.join("database.sqlite").display().to_string(),
+        };
+        let stopped = std::panic::catch_unwind(|| Db::connect(&settings)).unwrap_err();
+        let message = stopped.downcast_ref::<String>().unwrap();
+        assert!(message.contains("DB_CONNECTION"), "{message}");
+        assert!(!folder.exists(), "no folder for an engine that is refused");
     }
 }
