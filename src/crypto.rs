@@ -183,6 +183,89 @@ pub fn hmac_verify(key: &[u8], data: &[u8], signature: &str) -> bool {
     mac.verify_slice(&expected).is_ok()
 }
 
+/// `len` bytes from the operating system's random source, for tokens and
+/// short codes.
+///
+/// # Panics
+///
+/// When the operating system has no random source to give.
+pub fn random_bytes(len: usize) -> Vec<u8> {
+    let mut bytes = vec![0; len];
+    getrandom::fill(&mut bytes).expect("tokens need the operating system random source");
+    bytes
+}
+
+/// Whether `a` and `b` are equal, taking the same time wherever they differ,
+/// for comparing secrets such as API keys. Only the length can leak.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len()
+        && std::hint::black_box(a.iter().zip(b).fold(0, |diff, (x, y)| diff | (x ^ y))) == 0
+}
+
+/// The SHA-1 digest of `data`, for protocols that name it, such as the
+/// WebSocket handshake. SHA-1 is broken for signatures and passwords: use
+/// [`sha256`], [`hmac_sha256`] or [`Hash`] there.
+pub fn sha1(data: &[u8]) -> [u8; 20] {
+    // ponytail: FIPS 180-4 by hand, not a crate: the dependency allowlist
+    // (ADR 0010) has no sha1, and protocols hash a few bytes, not streams.
+    let mut state: [u32; 5] = [
+        0x6745_2301,
+        0xEFCD_AB89,
+        0x98BA_DCFE,
+        0x1032_5476,
+        0xC3D2_E1F0,
+    ];
+    let mut message = data.to_vec();
+    message.push(0x80);
+    while message.len() % 64 != 56 {
+        message.push(0);
+    }
+    message.extend_from_slice(&(data.len() as u64 * 8).to_be_bytes());
+    for block in message.chunks_exact(64) {
+        let mut w = [0u32; 80];
+        for (i, word) in block.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e] = state;
+        for (i, word) in w.iter().enumerate() {
+            let (f, k) = match i {
+                0..20 => ((b & c) | (!b & d), 0x5A82_7999),
+                20..40 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..60 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+            let t = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*word);
+            (e, d, c, b, a) = (d, c, b.rotate_left(30), a, t);
+        }
+        for (s, v) in state.iter_mut().zip([a, b, c, d, e]) {
+            *s = s.wrapping_add(v);
+        }
+    }
+    let mut digest = [0; 20];
+    for (out, word) in digest.chunks_exact_mut(4).zip(state) {
+        out.copy_from_slice(&word.to_be_bytes());
+    }
+    digest
+}
+
+/// `bytes` as standard, padded base64.
+pub fn base64_encode(bytes: &[u8]) -> String {
+    Base64::encode_string(bytes)
+}
+
+/// Standard, padded base64 back to bytes; `None` when `text` is not base64.
+pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    Base64::decode_vec(text).ok()
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -200,6 +283,36 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protocol_primitives() {
+        // RFC 6455's handshake example: base64(sha1(key + GUID)).
+        let accept = sha1(b"dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+        assert_eq!(base64_encode(&accept), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+        // FIPS 180 vectors: empty, one block, and a message spanning two.
+        assert_eq!(hex(&sha1(b"")), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(
+            hex(&sha1(b"abc")),
+            "a9993e364706816aba3e25717850c26c9cd0d89d"
+        );
+        assert_eq!(
+            hex(&sha1(
+                b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+            )),
+            "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
+        );
+        assert_eq!(
+            hex(&sha1(&[b'a'; 1000])),
+            "291e9a6c66994949b57ba5e650361e98fc36b1ba"
+        );
+        assert_eq!(base64_decode("aGk=").as_deref(), Some(&b"hi"[..]));
+        assert_eq!(base64_decode("not base64!"), None);
+        assert!(constant_time_eq(b"key-1", b"key-1"));
+        assert!(!constant_time_eq(b"key-1", b"key-2"));
+        assert!(!constant_time_eq(b"key", b"key-1"));
+        assert_eq!(random_bytes(32).len(), 32);
+        assert_ne!(random_bytes(16), random_bytes(16));
+    }
 
     #[test]
     fn digests_match_known_answers() {

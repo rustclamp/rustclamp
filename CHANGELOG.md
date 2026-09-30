@@ -47,9 +47,15 @@
 ### Added
 
 
+- `crypto::random_bytes`, `crypto::constant_time_eq`, `crypto::sha1` (for
+  protocols such as the WebSocket handshake, not for security) and
+  `crypto::base64_encode`/`base64_decode` (#43).
+
+
 - `Throttle::capacity` sets how many clients are tracked at once (10,000 by
   default). At the cap a live window is dropped only when none has expired;
   size it above your peak clients per window (#32).
+
 
 
 - `Db::transaction_immediate`: `BEGIN IMMEDIATE`, so a read-then-write
