@@ -36,6 +36,9 @@ pub struct Request {
     pub(super) params: Vec<(String, String)>,
     /// Values from [`Router::state`](super::Router::state).
     pub(super) state: State,
+    /// Whether the client lets the connection stay open for another request:
+    /// HTTP/1.1 without `Connection: close`.
+    pub(super) keep_alive: bool,
 }
 
 /// Values the app shares with every handler, such as its database.
@@ -73,6 +76,7 @@ impl Request {
             session: None,
             params: Vec::new(),
             state: State::default(),
+            keep_alive: false,
         }
     }
 
@@ -166,7 +170,7 @@ impl Request {
 pub(super) fn parse(reader: &mut impl BufRead, peer: Option<IpAddr>) -> Result<Request, Response> {
     let line = read_line(reader)?;
     let mut parts = line.split_whitespace();
-    let (Some(method), Some(target), Some(_version)) = (parts.next(), parts.next(), parts.next())
+    let (Some(method), Some(target), Some(version)) = (parts.next(), parts.next(), parts.next())
     else {
         return Err(error(400));
     };
@@ -183,6 +187,10 @@ pub(super) fn parse(reader: &mut impl BufRead, peer: Option<IpAddr>) -> Result<R
         let (name, value) = line.split_once(':').ok_or_else(|| error(400))?;
         request = request.with_header(name.trim(), value.trim());
     }
+    request.keep_alive = version == "HTTP/1.1"
+        && !request
+            .header("connection")
+            .is_some_and(|value| value.eq_ignore_ascii_case("close"));
     // ponytail: no chunked bodies; clients that stream must send Content-Length
     if request.header("transfer-encoding").is_some() {
         return Err(error(411));
@@ -231,14 +239,19 @@ pub(super) fn field(pairs: &str, key: &str) -> Option<String> {
 
 /// Percent-encodes `text` for a form body or query string.
 pub(super) fn encode(text: &str) -> String {
-    text.bytes()
-        .map(|byte| match byte {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (byte as char).to_string()
+                out.push(byte as char);
             }
-            _ => format!("%{byte:02X}"),
-        })
-        .collect()
+            _ => {
+                let _ = write!(out, "%{byte:02X}");
+            }
+        }
+    }
+    out
 }
 
 /// Percent-decodes `text`, reading `+` as a space. Invalid escapes stay as they are.

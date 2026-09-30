@@ -17,6 +17,20 @@
     `{{ old.email }}`. `<!--flash-->`/`<!--errors-->` become
     `@if(flash)…{{ flash }}…@endif` and `@foreach(errors as error)`.
 
+### Changed
+
+- Faster view rendering, same output: a render reads and parses each view once,
+  so an `@include` inside `@foreach` no longer rereads its file on every
+  iteration. `{{ }}` escapes in one pass without copying the value.
+- `web::serve` keeps connections open between requests (HTTP/1.1
+  keep-alive): up to 1000 requests or 5 s idle per connection. A thread
+  never waits on an idle connection while others are queued, and busy
+  connections take turns. HTTP/1.0 and `Connection: close` still close.
+  `HEAD` responses no longer carry a body.
+- A full in-memory session store drops its least recently used tenth at
+  once instead of one session per new visitor, so a flood of cookieless
+  requests no longer scans the whole store on every request.
+
 ### Added
 
 - Account flows (ADR 0016), with `auth` + `mail`: `Auth::register` (no
