@@ -206,16 +206,16 @@ impl Sessions {
             *touched = now;
             return (id.unwrap_or_default().to_owned(), Arc::clone(data));
         }
-        // ponytail: O(n) scans, only at capacity
+        // ponytail: O(n) scans at capacity, then room for a tenth more, so a flood
+        // of cookieless requests pays one scan per capacity/10 new sessions
         if store.len() >= self.capacity {
             store.retain(|_, (_, touched)| now.duration_since(*touched) < self.lifetime);
-            if store.len() >= self.capacity
-                && let Some(oldest) = store
-                    .iter()
-                    .min_by_key(|(_, (_, touched))| *touched)
-                    .map(|(id, _)| id.clone())
-            {
-                store.remove(&oldest);
+            if store.len() >= self.capacity {
+                // Drop the least recently used, enough to leave that room.
+                let drop = store.len() + 1 - self.capacity + self.capacity / 10;
+                let mut times: Vec<Instant> = store.values().map(|(_, touched)| *touched).collect();
+                let cutoff = *times.select_nth_unstable(drop - 1).1;
+                store.retain(|_, (_, touched)| *touched > cutoff);
             }
         }
         // An unknown or expired ID is never reused, so a visitor cannot pick their own.
@@ -633,6 +633,17 @@ mod tests {
             sessions.open(None);
         }
         assert_eq!(ids(&sessions).len(), 3);
+    }
+
+    #[test]
+    fn a_full_store_makes_room_for_a_tenth_more() {
+        let mut sessions = Sessions::new(Duration::from_secs(60));
+        sessions.capacity = 20;
+        for _ in 0..21 {
+            sessions.open(None);
+        }
+        // The 21st dropped the oldest three (one over, plus a tenth), then joined.
+        assert_eq!(sessions.store.lock().unwrap().len(), 18);
     }
 
     #[test]
