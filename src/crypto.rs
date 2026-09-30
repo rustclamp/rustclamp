@@ -204,7 +204,7 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 /// The SHA-1 digest of `data`, for protocols that name it, such as the
 /// WebSocket handshake. SHA-1 is broken for signatures and passwords: use
-/// [`sha256`], [`hmac_sha256`] or [`Hash`] there.
+/// [`sha256`], [`hmac_sha256`] or [`Hash`](struct@Hash) there.
 pub fn sha1(data: &[u8]) -> [u8; 20] {
     // ponytail: FIPS 180-4 by hand, not a crate: the dependency allowlist
     // (ADR 0010) has no sha1, and protocols hash a few bytes, not streams.
