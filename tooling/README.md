@@ -56,7 +56,10 @@ status through to Cargo in the current directory. `clamp init <project-name>`
 creates a minimal Hello World project (`--blank`, the default). Add `--app` for a
 larger Rust project layout with a composition module and sample health module,
 `--web` for a Rust server with routes (Laravel-style `app/` with `routes/` and `resources/`, `public/`, `tests/`) and a Vite+ and Tailwind 4
-frontend (needs Node/npm; `clamp dev` runs `vp build --watch` beside `cargo run`), or `--tui` for an
+frontend (needs Node/npm; `clamp dev` runs `vp build --watch` beside `cargo run`),
+`--vue` or `--react` for the same web app with Vue or React components mounted on its
+server-rendered pages (`<div data-component="Counter" data-props='{…}'>` loads
+`resources/js/components/Counter.vue` or `.tsx`), or `--tui` for an
 interactive terminal loop. `--package` creates a self-contained web package
 instead: a library with its own routes, views, static files, settings and tests,
 which an app adds with `Router::package` (ADR 0008). Every other project gets
