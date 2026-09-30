@@ -16,13 +16,15 @@ web = ["config", "log", "storage", "uuid"]
 # Optional `.env` and environment configuration (`rustclamp::config`).
 config = []
 # Optional leveled logging to `storage/logs/app.log` (`rustclamp::log`).
-log = ["config"]
+log = ["config", "time"]
+# Optional std-only UTC dates and times on SystemTime (`rustclamp::time`).
+time = []
 # Optional std-only files on named disks (`rustclamp::storage`).
 storage = []
 # Optional build-script helpers (`rustclamp::build`), such as migration discovery.
 build = []
 # Optional SQLite database from `.env` (`rustclamp::db`); compiles SQLite in.
-db = ["config", "uuid", "dep:rusqlite", "dep:rustclamp-macros"]
+db = ["config", "time", "uuid", "dep:rusqlite", "dep:rustclamp-macros"]
 # Optional std-only UUID v4 and v7 (`rustclamp::uuid`); v7 comes from
 # `rustclamp_core::Reference` (ADR 0021).
 uuid = ["dep:rustclamp-core"]

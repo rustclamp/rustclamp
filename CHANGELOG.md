@@ -51,6 +51,10 @@
 
 ### Added
 
+- `rustclamp::time` (feature `time`, included by `log` and `db`):
+  `format_rfc3339`/`parse_rfc3339` (offsets, fractions), `format_date`/
+  `parse_date` and `add_days` on `SystemTime`, no time crate (#42).
+
 - `States::transition_in` moves a row inside the caller's transaction, at a
   time the app passes (its clock), setting extra columns such as
   `completed_at` too; `db::timestamp::format` writes a `SystemTime` the way
