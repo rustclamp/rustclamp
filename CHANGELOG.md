@@ -59,6 +59,11 @@
   port to bind) instead of panicking or exiting, and `web::serve_on` serves
   a listener the app bound itself; `serve` behaves as before (#31).
 
+- `web::serve_until` with a `web::Shutdown` handle drains on `stop()`: no new
+  connections, requests already sent are answered with `Connection: close`,
+  idle kept-alive connections close, and it waits up to a grace period for
+  the rest (#31).
+
 - `rustclamp::time` (feature `time`, included by `log` and `db`):
   `format_rfc3339`/`parse_rfc3339` (offsets, fractions), `format_date`/
   `parse_date` and `add_days` on `SystemTime`, no time crate (#42).
