@@ -42,9 +42,15 @@ Measured on the demo (same tests pass, plain-Rust suite passes against it too):
 
 | | before | after |
 |---|---|---|
-| `src/app.rs` | ~80 lines, 3 marker types, 4 trait impls | 45 lines, 1 capability impl |
+| `src/app.rs` | ~80 lines (approx.), 3 marker types, 5 trait impls | 45 lines, 1 capability impl |
 | Rust code in `src/` | 255 | 223 (plain Rust: 197) |
 | Crates in dependency tree | 119 | 117 (plain Rust: 114) |
+
+Part of that reduction is the explicit declaration style ADR 0004 already
+allowed (dropping `Module`/`Provides`/`Requires` impls and marker types). This
+ADR accounts for removing the hand-built `CapabilityComposition`, the
+freeze-to-`debug_assert!` glue, `{:?}` error mapping, the separate
+execution/process declarations, and two signal crates.
 
 - Breaking: users of `TokioRuntime::wait_for_ctrl_c` must enable `signal`. No
   in-repo caller exists.
