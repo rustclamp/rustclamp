@@ -249,8 +249,16 @@ impl Router {
     }
 
     /// Runs the middleware, then the first matching route, else a static file
-    /// for `GET`, else `404`.
+    /// for `GET`, else `404`. Log lines written meanwhile carry the request's
+    /// [`reference`](Request::reference), and the response carries it in
+    /// `X-Request-Id`.
     pub fn handle(&self, request: &Request) -> Response {
+        let reference = request.reference();
+        crate::log::with_reference(reference, || self.handle_in_scope(request))
+            .with_header("x-request-id", &reference.to_string())
+    }
+
+    fn handle_in_scope(&self, request: &Request) -> Response {
         let response = if self.state.0.is_empty() {
             run(&self.middleware, request, &|request| self.dispatch(request))
         } else {
@@ -560,9 +568,18 @@ pub fn security_headers(request: &Request, next: Next) -> Response {
 /// app's view, `{{ status }}` and `{{ reason }}` are the code and its reason
 /// phrase, so one `4xx` view serves every client error. An error view that
 /// fails to render is logged and the built-in page answers instead.
+///
+/// While a request is handled, `{{ reference }}` is its
+/// [`reference`](Request::reference), and the built-in page shows it for
+/// `5xx`, so a visitor can quote it and the log lines can be found.
 pub fn error(status: u16) -> Response {
     let public = Path::new(PUBLIC);
-    let data = Value::map(&[("status", &status), ("reason", &reason(status))]);
+    let reference = crate::log::reference().map(|reference| reference.to_string());
+    let data = Value::map(&[
+        ("status", &status),
+        ("reason", &reason(status)),
+        ("reference", &reference.clone().unwrap_or_default()),
+    ]);
     for name in [
         format!("errors/{status}"),
         format!("errors/{}xx", status / 100),
@@ -579,7 +596,12 @@ pub fn error(status: u16) -> Response {
             }
         }
     }
-    page(status, "")
+    match reference {
+        Some(reference) if status >= 500 => {
+            page(status, &format!("Reference: <code>{reference}</code>"))
+        }
+        _ => page(status, ""),
+    }
 }
 
 fn html(status: u16, body: Vec<u8>) -> Response {
@@ -1072,11 +1094,14 @@ fn respond(connection: &mut Connection, routes: &Router) -> bool {
                         .map(|text| (*text).to_owned())
                         .or_else(|| panic.downcast_ref::<String>().cloned())
                         .unwrap_or_default();
-                    Log::error(format_args!(
-                        "{} {} panicked: {reason}",
-                        request.method, request.path
-                    ));
-                    error(500)
+                    let reference = request.reference();
+                    crate::log::with_reference(reference, || {
+                        Log::error(format_args!(
+                            "{} {} panicked: {reason}",
+                            request.method, request.path
+                        ));
+                        error(500).with_header("x-request-id", &reference.to_string())
+                    })
                 });
             (
                 response,
@@ -1177,10 +1202,9 @@ mod tests {
         open.read_to_string(&mut answers).unwrap();
         assert_eq!(answers.matches("HTTP/1.1 200 OK").count(), 3, "{answers}");
         assert_eq!(answers.matches("Connection: close").count(), 1, "{answers}");
-        assert!(
-            answers.ends_with("Connection: close\r\n\r\nhi"),
-            "{answers}"
-        );
+        let last = &answers[answers.rfind("HTTP/1.1").unwrap()..];
+        assert!(last.contains("Connection: close\r\n"), "{answers}");
+        assert!(last.ends_with("\r\n\r\nhi"), "{answers}");
         // HEAD was answered with 404 and no body, so the next response parsed.
         assert!(answers.contains("404 Not Found"), "{answers}");
         assert!(!answers.contains('<'), "HEAD sent a body: {answers}");
@@ -1203,6 +1227,40 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn requests_carry_a_reference_into_logs_headers_and_error_pages() {
+        let routes = Router::new()
+            .get("/seen", |request| {
+                // Everything logged while handling carries this reference.
+                assert_eq!(crate::log::reference(), Some(request.reference()));
+                Response::text(200, "ok")
+            })
+            .get("/broken", |_| error(500));
+        let request = Request::get("/seen");
+        let response = routes.handle(&request);
+        assert_eq!(
+            response.header("x-request-id"),
+            Some(request.reference().to_string().as_str())
+        );
+        assert_eq!(
+            crate::log::reference(),
+            None,
+            "the scope ends with the request"
+        );
+        assert_ne!(Request::get("/seen").reference(), request.reference());
+        assert_eq!(
+            Request::get("/seen"),
+            request,
+            "requests compare by what was sent"
+        );
+
+        let request = Request::get("/broken");
+        let page = String::from_utf8(routes.handle(&request).body).unwrap();
+        assert!(page.contains(&format!("Reference: <code>{}</code>", request.reference())));
+        let outside = String::from_utf8(error(500).body).unwrap();
+        assert!(!outside.contains("Reference:"));
     }
 
     #[test]
@@ -1394,8 +1452,13 @@ mod tests {
         let routes = Router::new()
             .middleware(security_headers)
             .get("/secret", |_| Response::text(403, "no"));
-        let hidden = routes.handle(&Request::get("/secret"));
-        let missing = routes.handle(&Request::get("/missing"));
+        let without_reference = |mut response: Response| {
+            assert!(response.header("x-request-id").is_some());
+            response.headers.retain(|(name, _)| name != "x-request-id");
+            response
+        };
+        let hidden = without_reference(routes.handle(&Request::get("/secret")));
+        let missing = without_reference(routes.handle(&Request::get("/missing")));
         assert_eq!(hidden.status, 404);
         assert_eq!(
             hidden, missing,

@@ -315,7 +315,7 @@ OPTIONAL = {
     "rustclamp-runtime": {"tokio"},
     "rustclamp-worker": {"tokio", "rustclamp-runtime"},
     "rustclamp-scheduler": {"tokio"},
-    "rustclamp": {"rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "rustclamp-macros", "rustls", "webpki-roots"},
+    "rustclamp": {"rustclamp-core", "rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "rustclamp-macros", "rustls", "webpki-roots"},
 }
 
 

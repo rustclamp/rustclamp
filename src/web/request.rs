@@ -4,6 +4,8 @@ use std::io::{BufRead, Read};
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use rustclamp_core::Reference;
+
 use super::{Response, Session, error};
 
 /// Longest accepted request line or header line, in bytes.
@@ -36,6 +38,8 @@ pub struct Request {
     pub(super) params: Vec<(String, String)>,
     /// Values from [`Router::state`](super::Router::state).
     pub(super) state: State,
+    /// Names this request in logs and in `X-Request-Id` (ADR 0021).
+    pub(super) reference: Minted,
     /// Whether the client lets the connection stay open for another request:
     /// HTTP/1.1 without `Connection: close`.
     pub(super) keep_alive: bool,
@@ -60,6 +64,19 @@ impl PartialEq for State {
 
 impl Eq for State {}
 
+/// The request's [`Reference`], minted when it arrived. Like [`State`], it is
+/// not part of what the client sent, so it does not affect equality.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Minted(pub(super) Reference);
+
+impl PartialEq for Minted {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Minted {}
+
 impl Request {
     /// Creates a request, for example to call routes from a test. A `?` in
     /// `target` starts the query string.
@@ -77,7 +94,15 @@ impl Request {
             params: Vec::new(),
             state: State::default(),
             keep_alive: false,
+            reference: Minted(Reference::new()),
         }
+    }
+
+    /// The reference minted for this request: sent back in `X-Request-Id`
+    /// and added to every log line written while it is handled (ADR 0021).
+    /// A client's own `X-Request-Id` is never used.
+    pub fn reference(&self) -> Reference {
+        self.reference.0
     }
 
     /// A `GET` request for `target`.

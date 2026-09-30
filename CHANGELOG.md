@@ -19,6 +19,9 @@
 
 ### Changed
 
+- `Uuid::v7` comes from `rustclamp_core::Reference` (ADR 0021), so v7 IDs and
+  request references share one generator. The `uuid` feature now pulls in
+  `rustclamp-core` (no dependencies of its own); Pico is unchanged.
 - Faster view rendering, same output: a render reads and parses each view once,
   so an `@include` inside `@foreach` no longer rereads its file on every
   iteration. `{{ }}` escapes in one pass without copying the value.
@@ -32,6 +35,12 @@
   requests no longer scans the whole store on every request.
 
 ### Added
+
+- Every web request has a `Reference` (UUIDv7, ADR 0021): `Request::reference()`,
+  sent back in `X-Request-Id`, appended as `ref=<reference>` to each log line
+  written while the request is handled, passed to error views as
+  `{{ reference }}` and shown on the built-in 5xx page. A client's own
+  `X-Request-Id` is never used.
 
 - Account flows (ADR 0016), with `auth` + `mail`: `Auth::register` (no
   enumeration, no auto-login), email verification (24 h signed link,
