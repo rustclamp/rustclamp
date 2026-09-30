@@ -52,12 +52,16 @@ use crate::config::Config;
 mod query;
 mod schema;
 mod states;
+pub mod timestamp;
 pub use query::Query;
 pub use schema::{Column, Schema, Table};
 pub use states::{Change, States, Transition};
 
 pub use rusqlite as sqlite;
 use rusqlite::Connection;
+/// `#[derive(Model)]` with `#[model(table = "posts")]`: reads each field
+/// from the column of the same name. See [`Model`](trait@Model).
+pub use rustclamp_macros::Model;
 
 /// A shared database connection. Clones share the same connection.
 #[derive(Clone)]
@@ -74,23 +78,52 @@ impl std::fmt::Debug for Db {
     }
 }
 
+/// Which database to open. An app builds it in `app/config/database.rs`.
+#[derive(Debug, Clone)]
+pub struct Settings {
+    /// The engine; only `sqlite` so far.
+    pub connection: String,
+    /// The SQLite file, or `:memory:`.
+    pub database: String,
+}
+
+impl Settings {
+    /// `DB_CONNECTION` (`sqlite`) and `DB_DATABASE`
+    /// (`storage/database.sqlite`).
+    pub fn from_config(config: &Config) -> Self {
+        // ponytail: the same defaults as the web template's
+        // `app/config/database.rs`, for apps without one
+        Self {
+            connection: config.get("DB_CONNECTION").unwrap_or("sqlite").into(),
+            database: config
+                .get("DB_DATABASE")
+                .unwrap_or("storage/database.sqlite")
+                .into(),
+        }
+    }
+}
+
 impl Db {
-    /// Opens the database named by `DB_CONNECTION` and `DB_DATABASE`,
-    /// creating the file and its folder when missing.
+    /// Opens the database named by `DB_CONNECTION` and `DB_DATABASE`; see
+    /// [`Db::connect`].
+    pub fn open(config: &Config) -> Self {
+        Self::connect(&Settings::from_config(config))
+    }
+
+    /// Opens the database `settings` names, creating the file and its folder
+    /// when missing.
     ///
     /// # Panics
     ///
-    /// When `DB_CONNECTION` is not `sqlite` or the database cannot be opened:
+    /// When the connection is not `sqlite` or the database cannot be opened:
     /// the app should stop at startup rather than run without its data.
-    pub fn open(config: &Config) -> Self {
-        let engine = config.get("DB_CONNECTION").unwrap_or("sqlite");
+    pub fn connect(settings: &Settings) -> Self {
+        let engine = settings.connection.as_str();
         assert!(
             engine == "sqlite",
             "config key DB_CONNECTION is {engine}; only sqlite is supported"
         );
-        let path = config
-            .get("DB_DATABASE")
-            .unwrap_or("storage/database.sqlite");
+        let path = settings.database.as_str();
         let connection = if path == ":memory:" {
             Connection::open_in_memory()
         } else {
@@ -285,32 +318,63 @@ impl Db {
 
 /// A table's rows as a Rust type, like a Laravel model: name the table and
 /// say how a row becomes `Self` once, then query with the builder.
+/// `#[derive(Model)]` does both, reading each field from the column of the
+/// same name.
 ///
 /// ```
 /// use rustclamp::config::Config;
-/// use rustclamp::db::{Db, Model, sqlite::{Result, Row, params}};
+/// use rustclamp::db::{Db, Model, sqlite::params};
 ///
+/// #[derive(Model)]
+/// #[model(table = "posts")]
 /// struct Post {
 ///     id: i64,
 ///     title: String,
-/// }
-///
-/// impl Model for Post {
-///     const TABLE: &'static str = "posts";
-///
-///     fn from_row(row: &Row<'_>) -> Result<Self> {
-///         Ok(Self { id: row.get("id")?, title: row.get("title")? })
-///     }
+///     published_at: Option<String>,
 /// }
 ///
 /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
-/// db.with(|sql| sql.execute_batch("CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT)"))
+/// db.with(|sql| sql.execute_batch("CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT, published_at TEXT)"))
 ///     .unwrap();
 /// let id = Post::query(&db).insert(&["title"], params!["Hello"]).unwrap();
 /// assert_eq!(Post::find(&db, id).unwrap().unwrap().title, "Hello");
 /// let titles: Vec<Post> = Post::query(&db).order_by_desc("id").get(Post::from_row).unwrap();
 /// assert_eq!(titles[0].id, id);
 /// assert_eq!(Post::all(&db).unwrap().len(), 1);
+/// assert_eq!(Post::all(&db).unwrap()[0].published_at, None);
+/// ```
+///
+/// By hand, when a field is not a column of the same name:
+///
+/// ```
+/// use rustclamp::db::{Model, sqlite::{Result, Row}};
+///
+/// struct Tag {
+///     label: String,
+/// }
+///
+/// impl Model for Tag {
+///     const TABLE: &'static str = "tags";
+///
+///     fn from_row(row: &Row<'_>) -> Result<Self> {
+///         Ok(Self { label: row.get("name")? })
+///     }
+/// }
+/// ```
+///
+/// The derive names its table, and needs named fields:
+///
+/// ```compile_fail
+/// #[derive(rustclamp::db::Model)]
+/// struct Post {
+///     id: i64,
+/// }
+/// ```
+///
+/// ```compile_fail
+/// #[derive(rustclamp::db::Model)]
+/// #[model(table = "points")]
+/// struct Point(i64, i64);
 /// ```
 pub trait Model: Sized {
     /// The table the rows live in.
@@ -347,6 +411,23 @@ pub trait Seeder {
 
 /// Whatever stopped a [`Seeder`].
 pub type SeedError = Box<dyn std::error::Error + Send + Sync>;
+
+/// A migration under its file name. [`build`](crate::build) lists migrations
+/// this way, so they need no `name()`.
+#[doc(hidden)]
+pub struct Named(pub &'static str, pub &'static dyn Migration);
+
+impl Migration for Named {
+    fn name(&self) -> &'static str {
+        self.0
+    }
+    fn up(&self) -> String {
+        self.1.up()
+    }
+    fn down(&self) -> String {
+        self.1.down()
+    }
+}
 
 /// Runs a database console command and returns the process exit code:
 /// `migrate`, `migrate:rollback`, `migrate:status` or `db:seed`. The web template's `main`
@@ -469,9 +550,21 @@ pub fn migration_name(file: &'static str) -> &'static str {
 /// migration that has run anywhere: add a new one.
 pub trait Migration {
     /// A unique name that sorts in run order, such as
-    /// `2026_09_29_000001_create_posts`. Usually the file's own name:
+    /// `2026_09_29_000001_create_posts`. Migrations listed by
+    /// [`build::database`](crate::build) are named after their file, so they
+    /// leave this out; one listed by hand implements it, usually as
     /// `migration_name(file!())`.
-    fn name(&self) -> &'static str;
+    ///
+    /// # Panics
+    ///
+    /// When neither applies. Guessing would be worse: a name that later
+    /// changes makes the migration run again.
+    fn name(&self) -> &'static str {
+        panic!(
+            "migration {} has no name: list it with rustclamp::build::database or implement name()",
+            std::any::type_name::<Self>()
+        )
+    }
     /// The SQL that applies the change, often [`Schema::create`].
     fn up(&self) -> String;
     /// The SQL that undoes [`up`](Self::up), often [`Schema::drop`].

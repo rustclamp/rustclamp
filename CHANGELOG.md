@@ -2,8 +2,100 @@
 
 ## Unreleased
 
+### Changed (breaking)
+
+- Views use templates instead of `<!--key-->` markers (ADR 0012). Old callers
+  still compile but render wrong: markers are left as invisible comments, and
+  values passed through `escape` are escaped twice. To migrate:
+  - Replace `<!--key-->` with `{{ key }}`, or `{!! key !!}` for HTML you made.
+  - Drop `escape(...)` from values passed to `render`, `Request::render` and
+    `package_view`.
+  - `security_headers` now blocks inline `<script>` and `on*=` handlers: move
+    them into `resources/js`, or into `public/` with `vite-ignore`.
+  - `<!--status-->`/`<!--reason-->` become `{{ status }}`/`{{ reason }}`;
+    `<!--csrf-->` becomes `{!! csrf !!}`, and `<!--old:email-->` becomes
+    `{{ old.email }}`. `<!--flash-->`/`<!--errors-->` become
+    `@if(flash)…{{ flash }}…@endif` and `@foreach(errors as error)`.
+
 ### Added
 
+- Login and roles (ADR 0013), the optional `auth` feature: `web::auth::Auth`
+  (`attempt`, `create_user`, `sync_role`, `at_least`), `authenticate`,
+  `required` and `role("admin")` middleware, `allows` with the before rule
+  (`blocked` refused, `super-admin` allowed), `Request::user`/`auth`,
+  `Session::invalidate` for logout. One `role` column per user. Logins are
+  throttled per email and address; unknown email and wrong password are
+  indistinguishable. `App` takes `roles` and runs `user:create`. The router
+  answers every `403` as `404`, logged with `http_status_code=403`, with the
+  same body and headers as a real 404. The login throttle
+  (`LOGIN_PER_MINUTE`, default 5) honours `TRUST_PROXY`.
+  `testing::Client::with_header`.
+  `testing::Client::cookie`.
+- Security: `security_headers` also sends a strict Content-Security-Policy
+  (`web::CONTENT_SECURITY_POLICY`; scripts only from the app's files, a
+  route's own policy wins), HSTS and a Permissions-Policy.
+  `Session::regenerate()` moves a session to a new ID and CSRF token (call it
+  on login). A `url` validation rule accepts only `http`/`https` links.
+- Less app code: handlers may return `web::Result` and use `?` (the error is
+  logged, the visitor gets `500`); `Sessions::from_config` reads
+  `SESSION_MINUTES`/`SESSION_SECURE` and refuses an insecure cookie in
+  production (`Config::is_production`); `web::markdown::to_html` behind the
+  new `markdown` feature (pulldown-cmark) escapes raw HTML and unsafe link
+  schemes; `web::App` runs a web app's startup; `Router::up` health check;
+  `Request::flash`; `db::timestamp::{date, iso8601}`. The web template uses
+  them and drops its health controller.
+- `web::App` owns an app's wiring: it holds the routes too, opens and
+  migrates the database, shares it and the disks with handlers and adds
+  `security_headers`. `main.rs` is `my_site::app().run()`; tests use
+  `app().test(env)` (in-memory, migrated, seeded). `web::testing::Client`
+  browses a router like a visitor: cookie jar, CSRF token from the last page,
+  `see`/`location`/`body_text` on `Response`. `Throttle::from_config(config,
+  key, default)` reads the limit and `TRUST_PROXY`; `markdown::front_matter`
+  splits `key: value` headers from Markdown.
+- `web::serve` answers on a fixed pool of `WEB_THREADS` threads (default 32)
+  instead of one request at a time; accepted connections queue four per
+  thread, so a flood cannot grow threads or memory without bound.
+- Web apps keep config in one file per area, like Laravel's `config/`:
+  `app/config/app.rs`, `database.rs` and `logging.rs` name every key and its
+  default. The framework takes them as `db::Settings` (`Db::connect`) and
+  `log::Settings` (`Logger::new`); `Log::init` installs the app's logger at
+  startup. `Db::open` and `Logger::from_config` still read `.env` directly.
+- `rustclamp::storage` (`storage` feature, in `web`), like Laravel's
+  `Storage`: named disks with `put`, `get`, `exists`, `delete` and `url`,
+  refusing paths that leave the disk. Web apps configure `local`
+  (`storage/app/private`) and `public` (`storage/app/public`, served at
+  `/storage`) in `app/config/filesystems.rs`, reach them with
+  `request.storage()`, and link `public/storage` at startup.
+- File uploads: `multipart/form-data` forms, up to `web::MAX_UPLOAD` (10 MiB;
+  other bodies keep the 1 MiB `MAX_BODY`). `Request::file`/`files` return
+  `UploadedFile`s; `Request::form` and validation read the form's text fields,
+  CSRF token included. `UploadedFile::store(disk, folder, allowed)` saves under
+  a new UUIDv7 name and keeps only the listed extensions, so an upload cannot
+  put `.html` or `.svg` on a public disk. Validation rules for uploads, as in
+  Laravel: `file`, `image` (JPEG, PNG, GIF or WebP, checked by content; no
+  SVG), `mimes:pdf,txt`, and `min`/`max` in kilobytes on file fields.
+- Less boilerplate in apps: `build::database("app/database")` replaces the
+  three `build::migrations`/`seeders`/`states` calls (still available) and
+  writes one `database.rs`; migrations it lists are named after their file,
+  so `fn name() { migration_name(file!()) }` can go (a hand-listed migration
+  without `name()` panics rather than guessing). `log::request_log` is the
+  request-logging middleware the web template used to carry in
+  `app/http/middleware/`.
+- `#[derive(Model)]` (ADR 0014) with `#[model(table = "posts")]` writes
+  `Model::from_row`, reading each field from the column of the same name.
+  It comes from the new `rustclamp-macros` proc-macro crate, pulled in by the
+  `db` feature and re-exported as `rustclamp::db::Model`.
+- Views are templates (ADR 0012): a std-only Blade subset rendered at request
+  time from the Vite-built HTML. `{{ name }}` escapes, `{!! name !!}` does
+  not; `@if`/`@else`, `@foreach`, `@extends`/`@section`/`@yield`,
+  `@include`, with named values for components (`post: featured`). Data is
+  `web::Value`, built from anything `web::ToValue`
+  (text, numbers, bools, lists, options, and your models). `render`,
+  `Request::render` and `package_view` take `&[(&str, &dyn ToValue)]`
+  instead of `<!--key-->` slots; `Request::render` passes `csrf`, `flash`,
+  `errors` and `old`; error views get `status` and `reason`. An unknown name
+  or broken view is logged and answers `500`. `public/build/views/` is no
+  longer served raw.
 - The CLI is 0.3.0 (release tag `clamp-v0.3.0`): database, crypto and `.env`
   commands, and `clamp init --web` apps with `db` and `crypto`.
 
@@ -19,8 +111,8 @@
 - Web: `Router::state` and `Request::state` share app values with handlers
   (`request.db()` with `db`); `Request::validate` with `required`, `min`,
   `max`, `email` and `integer` rules, and `Invalid::back` redirecting with
-  errors and old input; `Session::flash`; `Request::render` fills
-  `<!--csrf-->`, `<!--flash-->`, `<!--errors-->` and `<!--old:field-->`.
+  errors and old input; `Session::flash`; `Request::render` passes the
+  CSRF field, flash, errors and old input to the view.
 - `Sessions::database(db)`: sessions in a SQLite `sessions` table, so they
   survive restarts; expired rows are pruned.
 - `rustclamp::build::states`: every file in `app/database/states/` becomes

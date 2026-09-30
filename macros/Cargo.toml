@@ -1,0 +1,17 @@
+[package]
+name = "rustclamp-macros"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.1"
+description = "Derive macros for rustclamp, such as #[derive(Model)]. Use them through rustclamp."
+repository = "https://github.com/rustclamp/rustclamp"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = "3"

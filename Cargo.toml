@@ -12,18 +12,24 @@ autoexamples = false
 
 [features]
 # Optional std-only HTTP server for `clamp init --web` apps.
-web = ["config", "log"]
+web = ["config", "log", "storage", "uuid"]
 # Optional `.env` and environment configuration (`rustclamp::config`).
 config = []
 # Optional leveled logging to `storage/logs/app.log` (`rustclamp::log`).
 log = ["config"]
+# Optional std-only files on named disks (`rustclamp::storage`).
+storage = []
 # Optional build-script helpers (`rustclamp::build`), such as migration discovery.
 build = []
 # Optional SQLite database from `.env` (`rustclamp::db`); compiles SQLite in.
-db = ["config", "uuid", "dep:rusqlite"]
+db = ["config", "uuid", "dep:rusqlite", "dep:rustclamp-macros"]
 # Optional std-only UUID v4 and v7 (`rustclamp::uuid`).
 uuid = []
 # Optional password hashing, encryption and SHA-256/HMAC (`rustclamp::crypto`).
+# Optional login, users and roles (`rustclamp::web::auth`, ADR 0013).
+auth = ["web", "db", "crypto"]
+# Optional Markdown to HTML that is safe to print (`rustclamp::web::markdown`).
+markdown = ["web", "dep:pulldown-cmark"]
 crypto = ["config", "dep:argon2", "dep:chacha20poly1305", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom"]
 
 [[example]]
@@ -39,9 +45,11 @@ broken_intra_doc_links = "deny"
 
 [dependencies]
 rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
+rustclamp-macros = { version = "0.1.0", path = "macros", optional = true }
 argon2 = { version = "0.6.0", optional = true }
 chacha20poly1305 = { version = "0.11.0", optional = true }
 sha2 = { version = "0.11.0", optional = true }
 hmac = { version = "0.13.0", optional = true }
 base64ct = { version = "1.8.3", features = ["alloc"], optional = true }
 getrandom = { version = "0.4.3", optional = true }
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"], optional = true }

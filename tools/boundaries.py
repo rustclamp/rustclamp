@@ -30,7 +30,13 @@ ALLOWED = {
         "crypto-common", "ctutils", "digest", "getrandom", "hmac",
         "hybrid-array", "inout", "libc", "password-hash", "phc", "poly1305",
         "rand_core", "r-efi", "sha2", "typenum", "universal-hash",
+        # The optional `markdown` feature: pulldown-cmark, HTML output only.
+        "memchr", "pulldown-cmark", "pulldown-cmark-escape", "unicase",
+        # The optional `db` feature's `#[derive(Model)]` (ADR 0014): a
+        # proc-macro crate, so syn and quote run at compile time only.
+        "rustclamp-macros",
     },
+    "rustclamp-macros": {"proc-macro2", "quote", "syn", "unicode-ident"},
     "rustclamp-core": set(),
     "rustclamp-kernel": {"rustclamp-core"},
     "rustclamp-messaging": {
@@ -280,7 +286,7 @@ ALLOWED = {
 }
 OPTIONAL = {
     "rustclamp-runtime": {"tokio"},
-    "rustclamp": {"rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom"},
+    "rustclamp": {"rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "rustclamp-macros"},
 }
 
 

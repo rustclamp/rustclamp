@@ -5,22 +5,16 @@
 //! This file is the map: every folder and file of Rust code is declared here,
 //! so there are no `mod.rs` files.
 
-use rustclamp::config::Config;
-use rustclamp::db::Db;
-use rustclamp::web::{Router, security_headers};
+use rustclamp::web::App;
 
 /// Everything that handles HTTP.
 pub mod http {
     /// Turn requests into responses.
     pub mod controllers {
         pub mod controller;
-        pub mod health;
     }
-    /// Wrap requests: `Fn(&Request, Next) -> Response`.
-    pub mod middleware {
-        mod request_log;
-        pub use request_log::request_log;
-    }
+    // Middleware goes in `middleware/`: `Fn(&Request, Next) -> Response`, e.g.
+    // `pub mod middleware { mod admin; pub use admin::admin; }`
     // Form input and its validation goes in `requests/`, e.g.
     // `pub mod requests { mod contact; pub use contact::ContactRequest; }`
 }
@@ -33,15 +27,19 @@ pub mod http {
 /// `database/states/` (allowed status transitions, as `database::states::*`).
 /// Adding a file is enough; `build.rs` lists them.
 pub mod database {
-    include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
-    include!(concat!(env!("OUT_DIR"), "/seeders.rs"));
-    include!(concat!(env!("OUT_DIR"), "/states.rs"));
+    include!(concat!(env!("OUT_DIR"), "/database.rs"));
 }
 
-/// Typed settings from `.env`.
+/// Typed settings from `.env`, one file per area, like Laravel's `config/`.
 pub mod config {
     mod app;
+    mod database;
+    mod filesystems;
+    mod logging;
     pub use app::Settings;
+    pub use database::database;
+    pub use filesystems::filesystems;
+    pub use logging::logging;
 }
 
 /// Route definitions.
@@ -50,19 +48,23 @@ pub mod routes {
     pub mod web;
 }
 
-/// Every route. A GET that matches none serves the file from `public/`.
-/// Opens the database from `.env` and runs pending migrations first.
-pub fn routes(config: &Config) -> Router {
-    let settings = config::Settings::from(config);
-    let db = Db::open(config);
-    db.migrate(&database::migrations())
-        .unwrap_or_else(|error| panic!("migration failed: {error}"));
-    // Handlers reach the database with `request.db()`.
-    let router = Router::new()
-        .state(db)
-        .middleware(security_headers)
-        .middleware(http::middleware::request_log);
-    // Packages (`clamp init --package`) add their routes here, e.g.
-    // `let router = router.package(blog::Blog::from(config));`
-    routes::api::routes(routes::web::routes(router), &settings)
+/// The app: its config, database and routes. `main.rs` runs it; tests build
+/// it with `app().test("")`. The framework opens and migrates the database
+/// and shares it (`request.db()`) and the disks (`request.storage()`) with
+/// handlers, behind security headers.
+pub fn app() -> App {
+    App {
+        logging: config::logging,
+        database: config::database,
+        filesystems: config::filesystems,
+        migrations: database::migrations,
+        seeders: database::seeders,
+        routes: |router, config, _db| {
+            let settings = config::Settings::from(config);
+            let router = router.middleware(rustclamp::log::request_log);
+            // Packages (`clamp init --package`) add their routes here, e.g.
+            // `let router = router.package(blog::Blog::from(config));`
+            routes::api::routes(routes::web::routes(router), &settings)
+        },
+    }
 }

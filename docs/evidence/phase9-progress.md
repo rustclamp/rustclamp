@@ -163,6 +163,27 @@ No CI workflow runs the facade's `web` tests yet; these results are local.
 Package migrations, workers,
 scheduled jobs, commands and a publish command are deferred.
 
+## View templates
+
+ADR 0012 replaces `<!--key-->` markers with a std-only Blade subset
+(`web/view.rs`), so the `<!--title-->` override check under Web packages
+predates it. Covered locally by the facade's unit tests in `web/view.rs`,
+`web.rs` and `web/form.rs` (escaping, `@if`/`@foreach`, `@extends`/`@include`,
+`Request::render` form state, error views). The generated `--web` and
+`--package` templates were converted to `{{ }}` tags.
+
+Vite build, recorded locally on 2026-09-30 (`vite-plus` 1.0.0, Tailwind 4): a
+generated `--web` app with an added probe layout, partial and page using every
+construct (`@extends`, `@section` in both forms, `@yield`, `@include` with and
+without arguments, `@if(!x)`/`@else` including inside a `class` attribute,
+`@foreach`, `{{-- --}}`, `@@`, `@{{`, `{!! !!}`, and `{{ }}` in text,
+attributes and `<script>`). `npm run build` wrote the page and partial to
+`public/build/views/` byte-identical to their sources; the layout and error
+pages differ only where Vite rewrote the asset tags. Rendering the built page
+with `web::render` produced the expected HTML: values escaped in text and
+attributes, raw where marked, the comment dropped, the layout's assets
+pointing at `/build/assets/`. Not in CI: it needs `npm install`.
+
 ## Remaining release work
 
 The license is decided (`MIT OR Apache-2.0`, ADR 0011); package publication

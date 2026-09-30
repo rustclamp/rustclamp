@@ -8,7 +8,7 @@
 
 // Framework types are written as paths, so a package named `config` or `router`
 // can call its struct `Config` or `Router`.
-use rustclamp::web::{self, escape, package_view};
+use rustclamp::web::{self, package_view};
 
 /// The package name: its URL prefix and the folder the app overrides views in,
 /// `app/resources/views/vendor/__NAME__/`.
@@ -31,7 +31,7 @@ impl From<&rustclamp::config::Config> for __STRUCT__ {
 impl web::Package for __STRUCT__ {
     /// Handlers are `'static`: move owned settings into them.
     fn routes(self, router: web::Router) -> web::Router {
-        let title = escape(&self.title);
+        let title = self.title;
         router
             .get("/__NAME__", move |_| {
                 package_view(

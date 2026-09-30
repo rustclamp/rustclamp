@@ -21,7 +21,7 @@ reuse: a feature in its own crate that an app adds without copying code into
   auto-discovery that doesn't rely on build scripts or linker tricks, so the
   dependency plus that line is the registration.
 - Views and static files are compiled into the package with `include_str!`.
-  `package_view(package, name, embedded, slots)` serves the app's built override
+  `package_view(package, name, embedded, data)` serves the app's built override
   `public/build/views/vendor/{package}/{name}.html` when one exists. The app's
   Vite glob builds `app/resources/views/vendor/**` like any other view.
 - Settings come from the app's `Config`, which is passed to the package's

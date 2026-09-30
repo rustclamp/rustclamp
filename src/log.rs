@@ -9,8 +9,9 @@
 //! Log::warning(format_args!("slow request: {} ms", 850));
 //! ```
 //!
-//! Settings come from `.env` and the environment ([`Config::load`]), read on
-//! the first log call:
+//! An app sets the logger up at startup with [`Log::init`], from its
+//! `app/config/logging.rs`. Otherwise settings come from `.env` and the
+//! environment ([`Config::load`]), read on the first log call:
 //!
 //! - `LOG_LEVEL`: the lowest level written, `debug` by default. `silent`
 //!   turns logging off.
@@ -99,6 +100,19 @@ impl Level {
 pub struct Log;
 
 impl Log {
+    /// Makes `logger` the app-wide logger. Call it first thing in `main`.
+    ///
+    /// # Panics
+    ///
+    /// When a logger is already in place, because something logged earlier:
+    /// those entries went elsewhere, which should not pass unnoticed.
+    pub fn init(logger: Logger) {
+        assert!(
+            LOGGER.set(logger).is_ok(),
+            "Log::init called after the logger was set up; call it first in main"
+        );
+    }
+
     /// Logs at [`Level::Debug`].
     pub fn debug(message: impl Display) {
         logger().log(Level::Debug, message);
@@ -140,8 +154,21 @@ impl Log {
     }
 }
 
+/// Middleware logging every request and its status at `debug` level:
+/// `router.middleware(rustclamp::log::request_log)`.
+#[cfg(feature = "web")]
+pub fn request_log(request: &crate::web::Request, next: crate::web::Next) -> crate::web::Response {
+    let response = next(request);
+    Log::debug(format_args!(
+        "{} {} {}",
+        request.method, request.path, response.status
+    ));
+    response
+}
+
+static LOGGER: OnceLock<Logger> = OnceLock::new();
+
 fn logger() -> &'static Logger {
-    static LOGGER: OnceLock<Logger> = OnceLock::new();
     LOGGER.get_or_init(|| Logger::from_config(&Config::load()))
 }
 
@@ -167,24 +194,59 @@ enum Sink {
     },
 }
 
+/// How the app logs. An app builds it in `app/config/logging.rs`.
+#[derive(Debug, Clone)]
+pub struct Settings {
+    /// The lowest level written, such as `debug`, or `silent`.
+    pub level: String,
+    /// `single`, `daily`, `stderr` or `stack`.
+    pub channel: String,
+    /// The channels `stack` writes to, such as `daily,stderr`.
+    pub stack: String,
+    /// How many files the `daily` channel keeps.
+    pub daily_days: usize,
+    /// The environment name in each line, such as `local`.
+    pub env: String,
+}
+
+impl Settings {
+    /// `LOG_LEVEL` (`debug`), `LOG_CHANNEL` (`single`), `LOG_STACK`
+    /// (`single`), `LOG_DAILY_DAYS` (14) and `APP_ENV` (`local`).
+    pub fn from_config(config: &Config) -> Self {
+        // ponytail: the same defaults as the web template's
+        // `app/config/logging.rs`, for apps without one
+        Self {
+            level: config.get("LOG_LEVEL").unwrap_or("debug").into(),
+            channel: config.get("LOG_CHANNEL").unwrap_or("single").into(),
+            stack: config.get("LOG_STACK").unwrap_or("single").into(),
+            daily_days: config.get_or("LOG_DAILY_DAYS", 14),
+            env: config.get("APP_ENV").unwrap_or("local").into(),
+        }
+    }
+}
+
 impl Logger {
     /// A logger configured by `LOG_LEVEL`, `LOG_CHANNEL`, `LOG_STACK`,
-    /// `LOG_DAILY_DAYS` and `APP_ENV`. When a log file cannot be opened it
-    /// falls back to standard error and says so.
+    /// `LOG_DAILY_DAYS` and `APP_ENV`; see [`Logger::new`].
+    pub fn from_config(config: &Config) -> Self {
+        Self::new(&Settings::from_config(config))
+    }
+
+    /// A logger configured by `settings`. When a log file cannot be opened
+    /// it falls back to standard error and says so.
     ///
     /// # Panics
     ///
     /// On an unknown level or channel, naming the key.
-    pub fn from_config(config: &Config) -> Self {
-        let level = config.get("LOG_LEVEL").unwrap_or("debug");
+    pub fn new(settings: &Settings) -> Self {
+        let level = settings.level.as_str();
         let min = match level {
             _ if level.eq_ignore_ascii_case("silent") => None,
             _ => Some(Level::parse(level).unwrap_or_else(|| {
                 panic!("config key LOG_LEVEL is set but is not a log level: {level}")
             })),
         };
-        let env = config.get("APP_ENV").unwrap_or("local");
-        let days = config.get_or("LOG_DAILY_DAYS", 14);
+        let days = settings.daily_days;
         let sink = |channel: &str, key: &str| match channel.trim() {
             "stderr" => Sink::Stderr,
             "single" | "file" => single(Path::new(FILE)).unwrap_or_else(|problem| {
@@ -196,10 +258,9 @@ impl Logger {
                 panic!("config key {key} is set but is not single, daily, stderr or stack: {other}")
             }
         };
-        let sinks = match config.get("LOG_CHANNEL").unwrap_or("single") {
-            "stack" => config
-                .get("LOG_STACK")
-                .unwrap_or("single")
+        let sinks = match settings.channel.as_str() {
+            "stack" => settings
+                .stack
                 .split(',')
                 .map(|channel| sink(channel, "LOG_STACK"))
                 .collect(),
@@ -207,7 +268,7 @@ impl Logger {
         };
         Self {
             min,
-            env: env.into(),
+            env: settings.env.clone(),
             sinks,
         }
     }

@@ -26,10 +26,17 @@
 //! web::serve(routes);
 //! ```
 
+#[cfg(feature = "auth")]
+pub mod auth;
 mod form;
+#[cfg(feature = "markdown")]
+pub mod markdown;
 mod request;
 mod session;
+pub mod testing;
 mod throttle;
+mod upload;
+mod view;
 
 use std::fs;
 use std::io::{BufReader, Write};
@@ -45,6 +52,8 @@ pub use form::{Form, Invalid};
 pub use request::{MAX_BODY, Request};
 pub use session::{COOKIE, CSRF_FIELD, Session, Sessions, csrf};
 pub use throttle::{Throttle, throttle};
+pub use upload::{MAX_UPLOAD, UploadedFile};
+pub use view::{ToValue, Value};
 
 /// The web root, relative to the working directory. [`asset`] serves files from it.
 pub const PUBLIC: &str = "public";
@@ -57,6 +66,51 @@ const READ_TIMEOUT: Duration = Duration::from_secs(10);
 pub type Next<'a> = &'a dyn Fn(&Request) -> Response;
 
 type Handler = Box<dyn Fn(&Request) -> Response + Send + Sync>;
+
+/// What a handler may return: a [`Response`], or a [`Result`] whose error is
+/// logged with the request's method and path and answered with `500`, as an
+/// uncaught exception is in Laravel. So a handler can use `?`:
+///
+/// ```
+/// use rustclamp::web::{self, Request, Response, Router};
+///
+/// fn show(request: &Request) -> web::Result {
+///     let id: u32 = request.query("id").unwrap_or_default().parse()?;
+///     Ok(Response::text(200, &id.to_string()))
+/// }
+///
+/// let app = Router::new().get("/", show);
+/// assert_eq!(app.handle(&Request::get("/?id=7")).body, b"7");
+/// assert_eq!(app.handle(&Request::get("/?id=x")).status, 500);
+/// ```
+pub trait IntoResponse {
+    /// The response to send for `request`.
+    fn into_response(self, request: &Request) -> Response;
+}
+
+impl IntoResponse for Response {
+    fn into_response(self, _: &Request) -> Response {
+        self
+    }
+}
+
+impl<T: IntoResponse, E: std::fmt::Display> IntoResponse for std::result::Result<T, E> {
+    fn into_response(self, request: &Request) -> Response {
+        match self {
+            Ok(response) => response.into_response(request),
+            Err(problem) => {
+                Log::error(format_args!(
+                    "{} {}: {problem}",
+                    request.method, request.path
+                ));
+                error(500)
+            }
+        }
+    }
+}
+
+/// A handler's result: any error converts with `?` and answers `500`.
+pub type Result<T = Response> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Middleware = Arc<dyn Fn(&Request, Next) -> Response + Send + Sync>;
 
 /// The app's routes: exact method and path matches, checked in order.
@@ -75,22 +129,41 @@ impl Router {
 
     /// Answers `GET path` with `handler`.
     #[must_use]
-    pub fn get(
+    pub fn get<R: IntoResponse>(
         self,
         path: &str,
-        handler: impl Fn(&Request) -> Response + Send + Sync + 'static,
+        handler: impl Fn(&Request) -> R + Send + Sync + 'static,
     ) -> Self {
         self.route("GET", path, handler)
     }
 
     /// Answers `POST path` with `handler`.
     #[must_use]
-    pub fn post(
+    pub fn post<R: IntoResponse>(
         self,
         path: &str,
-        handler: impl Fn(&Request) -> Response + Send + Sync + 'static,
+        handler: impl Fn(&Request) -> R + Send + Sync + 'static,
     ) -> Self {
         self.route("POST", path, handler)
+    }
+
+    /// A health check at `GET path`, like Laravel's `/up`: `{"status":"ok"}`,
+    /// or `503` when the database shared with [`Router::state`] does not answer.
+    #[must_use]
+    pub fn up(self, path: &str) -> Self {
+        self.get(path, |request: &Request| {
+            #[cfg(feature = "db")]
+            if let Some(db) = request.state::<crate::db::Db>()
+                && db
+                    .with(|sql| sql.query_row("SELECT 1", [], |_| Ok(())))
+                    .is_err()
+            {
+                return error(503);
+            }
+            #[cfg(not(feature = "db"))]
+            let _ = request;
+            json(r#"{"status":"ok"}"#)
+        })
     }
 
     /// Answers `GET path` with the built view `name`, as [`view`] does.
@@ -102,13 +175,17 @@ impl Router {
     /// Answers `method path` with `handler`. A `{name}` segment matches any
     /// one segment and is read with [`Request::param`], as in `/blog/{slug}`.
     #[must_use]
-    pub fn route(
+    pub fn route<R: IntoResponse>(
         mut self,
         method: &'static str,
         path: &str,
-        handler: impl Fn(&Request) -> Response + Send + Sync + 'static,
+        handler: impl Fn(&Request) -> R + Send + Sync + 'static,
     ) -> Self {
-        self.routes.push((method, path.into(), Box::new(handler)));
+        self.routes.push((
+            method,
+            path.into(),
+            Box::new(move |request: &Request| handler(request).into_response(request)),
+        ));
         self
     }
 
@@ -172,14 +249,36 @@ impl Router {
     /// Runs the middleware, then the first matching route, else a static file
     /// for `GET`, else `404`.
     pub fn handle(&self, request: &Request) -> Response {
-        if self.state.0.is_empty() {
-            return run(&self.middleware, request, &|request| self.dispatch(request));
+        let response = if self.state.0.is_empty() {
+            run(&self.middleware, request, &|request| self.dispatch(request))
+        } else {
+            let mut request = request.clone();
+            request.state = self.state.clone();
+            run(&self.middleware, &request, &|request| {
+                self.dispatch(request)
+            })
+        };
+        // A 403 would confirm the page exists to someone not allowed to see
+        // it, so it is answered as the 404 page and logged with its real status.
+        if response.status == 403 {
+            Log::notice(format_args!(
+                "http_status_code=403 {} {}",
+                request.method, request.path
+            ));
+            // Keep the middleware's headers (security headers), so the
+            // disguised 404 matches a real one down to its headers. Cookies
+            // go: a URL that matches no route never runs session middleware,
+            // so a session cookie would give the page away. A refused request
+            // never moved the session, so nothing is lost.
+            let mut hidden = error(404);
+            hidden.headers = response
+                .headers
+                .into_iter()
+                .filter(|(name, _)| !name.eq_ignore_ascii_case("set-cookie"))
+                .collect();
+            return hidden;
         }
-        let mut request = request.clone();
-        request.state = self.state.clone();
-        run(&self.middleware, &request, &|request| {
-            self.dispatch(request)
-        })
+        response
     }
 
     fn dispatch(&self, request: &Request) -> Response {
@@ -230,12 +329,18 @@ pub trait Package {
     fn routes(self, router: Router) -> Router;
 }
 
-/// The view `name` of `package`, with `<!--key-->` markers filled as in
-/// [`render`]. The app's built override, `public/build/views/vendor/{package}/{name}.html`
+/// The view `name` of `package`, rendered with `data` as in [`render`]. The
+/// app's built override, `public/build/views/vendor/{package}/{name}.html`
 /// (source `app/resources/views/vendor/{package}/{name}.html`), wins over
-/// `embedded`, the package's own copy.
-pub fn package_view(package: &str, name: &str, embedded: &str, slots: &[(&str, &str)]) -> Response {
-    package_view_in(Path::new(PUBLIC), package, name, embedded, slots)
+/// `embedded`, the package's own copy. Views it extends or includes are the
+/// app's, so a package page can `@extends('layouts.app')`.
+pub fn package_view(
+    package: &str,
+    name: &str,
+    embedded: &str,
+    data: &[(&str, &dyn ToValue)],
+) -> Response {
+    package_view_in(Path::new(PUBLIC), package, name, embedded, data)
 }
 
 fn package_view_in(
@@ -243,17 +348,11 @@ fn package_view_in(
     package: &str,
     name: &str,
     embedded: &str,
-    slots: &[(&str, &str)],
+    data: &[(&str, &dyn ToValue)],
 ) -> Response {
-    let file = public
-        .join("build/views/vendor")
-        .join(package)
-        .join(format!("{name}.html"));
-    let mut page = fs::read_to_string(file).unwrap_or_else(|_| embedded.to_owned());
-    for (key, value) in slots {
-        page = page.replace(&format!("<!--{key}-->"), value);
-    }
-    html(200, page.into_bytes())
+    let full = format!("vendor/{package}/{name}");
+    let source = built_view(public, &full).unwrap_or_else(|| embedded.to_owned());
+    rendered(public, &full, &source, &Value::map(data))
 }
 
 /// The `{name}` values when `path` matches `pattern`, segment by segment.
@@ -340,36 +439,59 @@ pub fn redirect(location: &str) -> Response {
     Response::text(302, "").with_header("Location", location)
 }
 
-/// Serves a built view, `public/build/views/{name}.html`, or `503` if the
-/// frontend is not built yet.
+/// Renders the built view `name` without data, as [`render`] does.
 pub fn view(name: &str) -> Response {
-    let file = Path::new(PUBLIC)
-        .join("build/views")
-        .join(format!("{name}.html"));
-    match fs::read(file) {
-        Ok(body) => html(200, body),
+    render(name, &[])
+}
+
+/// Renders the built view `name`, `public/build/views/{name}.html` (source
+/// `app/resources/views/`), with `data`: Blade-style `{{ title }}`,
+/// `@foreach`, `@if`, `@extends` and `@include`, described in [`Value`]'s
+/// module. `{{ }}` escapes; `{!! !!}` does not. `503` if the frontend is not
+/// built yet; a view that fails to render is logged and answers `500`.
+///
+/// ```no_run
+/// use rustclamp::web::render;
+///
+/// let posts = vec!["First", "Second"];
+/// render("blog", &[("title", &"Blog"), ("posts", &posts)]);
+/// ```
+pub fn render(name: &str, data: &[(&str, &dyn ToValue)]) -> Response {
+    render_value(name, &Value::map(data))
+}
+
+fn render_value(name: &str, data: &Value) -> Response {
+    let public = Path::new(PUBLIC);
+    match built_view(public, name) {
+        Some(source) => rendered(public, name, &source, data),
         // The app's own error views are not built either, so use the built-in page.
-        Err(_) => page(
+        None => page(
             503,
             "The frontend is not built yet. If <code>clamp dev</code> is running, refresh in a moment; otherwise run <code>clamp dev</code>.",
         ),
     }
 }
 
-/// The built view `name` with each `<!--key-->` marker replaced by its value.
-/// Values are inserted as-is: pass text through [`escape`] first. A view that
-/// is not built yet (`503`) passes through untouched.
-pub fn render(name: &str, slots: &[(&str, &str)]) -> Response {
-    let mut response = view(name);
-    if response.status != 200 {
-        return response;
+/// The built view `name` (`layouts.app` or `layouts/app`) under `public`.
+fn built_view(public: &Path, name: &str) -> Option<String> {
+    if !view::is_view_name(name) {
+        return None;
     }
-    let mut page = String::from_utf8_lossy(&response.body).into_owned();
-    for (key, value) in slots {
-        page = page.replace(&format!("<!--{key}-->"), value);
+    let file = public
+        .join("build/views")
+        .join(format!("{}.html", name.replace('.', "/")));
+    fs::read_to_string(file).ok()
+}
+
+/// `200` with `source` rendered, or a logged `500`.
+fn rendered(public: &Path, name: &str, source: &str, data: &Value) -> Response {
+    match view::render(name, source, data, &|name| built_view(public, name)) {
+        Ok(body) => html(200, body.into_bytes()),
+        Err(problem) => {
+            Log::error(format_args!("{problem}"));
+            error(500)
+        }
     }
-    response.body = page.into_bytes();
-    response
 }
 
 /// Escapes text for HTML content and quoted attribute values.
@@ -381,32 +503,61 @@ pub fn escape(text: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// The Content-Security-Policy [`security_headers`] sends. Scripts only from
+/// the app's own files, so injected markup cannot run: no inline `<script>`
+/// and no `onclick=`. Styles may be inline (the built-in error page is) and
+/// fonts may come from Google Fonts, which the starter kits use.
+pub const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; \
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+    font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; \
+    object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+
 /// Middleware adding the browser security headers every page should carry:
-/// no MIME sniffing, no framing by other sites, no full URLs leaked as referrer.
+/// no MIME sniffing, no framing by other sites, no full URLs leaked as
+/// referrer, HTTPS only for a year once a browser has seen the site over
+/// HTTPS (browsers ignore HSTS on plain HTTP, so local development is
+/// unaffected), no camera, microphone or location access, and
+/// [`CONTENT_SECURITY_POLICY`]. A response that already sets
+/// `Content-Security-Policy` keeps its own.
 pub fn security_headers(request: &Request, next: Next) -> Response {
-    next(request)
+    let response = next(request);
+    let has_policy = response.header("content-security-policy").is_some();
+    let response = response
         .with_header("X-Content-Type-Options", "nosniff")
         .with_header("X-Frame-Options", "DENY")
         .with_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        .with_header("Strict-Transport-Security", "max-age=31536000")
+        .with_header(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=()",
+        );
+    if has_policy {
+        response
+    } else {
+        response.with_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    }
 }
 
 /// An error page for `status`: the app's built view `errors/{status}`, else
 /// `errors/{class}xx` (such as `errors/4xx`), else a built-in page. In the
-/// app's view, `<!--status-->` and `<!--reason-->` become the code and its
-/// reason phrase, so one `4xx` view serves every client error.
+/// app's view, `{{ status }}` and `{{ reason }}` are the code and its reason
+/// phrase, so one `4xx` view serves every client error. An error view that
+/// fails to render is logged and the built-in page answers instead.
 pub fn error(status: u16) -> Response {
+    let public = Path::new(PUBLIC);
+    let data = Value::map(&[("status", &status), ("reason", &reason(status))]);
     for name in [
         format!("errors/{status}"),
         format!("errors/{}xx", status / 100),
     ] {
-        let file = Path::new(PUBLIC)
-            .join("build/views")
-            .join(format!("{name}.html"));
-        if let Ok(body) = fs::read_to_string(file) {
-            let body = body
-                .replace("<!--status-->", &status.to_string())
-                .replace("<!--reason-->", reason(status));
-            return html(status, body.into_bytes());
+        if let Some(source) = built_view(public, &name) {
+            match view::render(&name, &source, &data, &|name| built_view(public, name)) {
+                Ok(body) => return html(status, body.into_bytes()),
+                Err(problem) => {
+                    Log::error(format_args!("{problem}"));
+                    break;
+                }
+            }
         }
     }
     page(status, "")
@@ -499,6 +650,10 @@ pub fn asset(path: &str) -> Response {
     {
         return error(404);
     }
+    // Views are templates: they are served rendered, by a route, never raw.
+    if relative.starts_with("build/views") {
+        return error(404);
+    }
     let file = Path::new(PUBLIC).join(relative);
     let Ok(body) = fs::read(&file) else {
         return error(404);
@@ -518,7 +673,170 @@ pub fn asset(path: &str) -> Response {
     Response::new(200, content_type, body)
 }
 
-/// Listens on `127.0.0.1` and answers every request with `routes`.
+/// A web app: its config functions, its migrations and seeders, and its
+/// routes. The app declares one in `app/lib.rs`; `main.rs` runs it and tests
+/// build it, so the wiring every app repeats lives here: opening and migrating
+/// the database, sharing it and the storage disks with handlers
+/// (`request.db()`, `request.storage()`) and adding [`security_headers`].
+///
+/// ```no_run
+/// # mod config {
+/// #     use rustclamp::config::Config;
+/// #     pub fn logging(c: &Config) -> rustclamp::log::Settings { rustclamp::log::Settings::from_config(c) }
+/// #     pub fn database(c: &Config) -> rustclamp::db::Settings { rustclamp::db::Settings::from_config(c) }
+/// #     pub fn filesystems(_: &Config) -> rustclamp::storage::Settings { unimplemented!() }
+/// # }
+/// # mod database {
+/// #     pub fn migrations() -> Vec<&'static dyn rustclamp::db::Migration> { Vec::new() }
+/// #     pub fn seeders() -> Vec<&'static dyn rustclamp::db::Seeder> { Vec::new() }
+/// # }
+/// use rustclamp::config::Config;
+/// use rustclamp::db::Db;
+/// use rustclamp::web::{App, Router};
+///
+/// fn routes(router: Router, _config: &Config, _db: &Db) -> Router {
+///     router.view("/", "welcome")
+/// }
+///
+/// pub fn app() -> App {
+///     App {
+///         logging: config::logging,
+///         database: config::database,
+///         filesystems: config::filesystems,
+///         migrations: database::migrations,
+///         seeders: database::seeders,
+///         routes,
+///         # #[cfg(feature = "auth")]
+///         # roles: &["super-admin", "admin", "user", "blocked"],
+///     }
+/// }
+///
+/// fn main() {
+///     app().run();
+/// }
+/// ```
+#[cfg(feature = "db")]
+#[derive(Debug, Clone, Copy)]
+pub struct App {
+    /// `app/config/logging.rs`.
+    pub logging: fn(&crate::config::Config) -> crate::log::Settings,
+    /// `app/config/database.rs`.
+    pub database: fn(&crate::config::Config) -> crate::db::Settings,
+    /// `app/config/filesystems.rs`.
+    pub filesystems: fn(&crate::config::Config) -> crate::storage::Settings,
+    /// Every migration, from `build.rs`.
+    pub migrations: fn() -> Vec<&'static dyn crate::db::Migration>,
+    /// Every seeder, from `build.rs`.
+    pub seeders: fn() -> Vec<&'static dyn crate::db::Seeder>,
+    /// Adds the app's routes to a router that already shares the database
+    /// and disks and sends security headers.
+    pub routes: fn(Router, &crate::config::Config, &crate::db::Db) -> Router,
+    /// The app's roles, highest first (ADR 0013), such as
+    /// `&["super-admin", "admin", "user", "blocked"]`.
+    #[cfg(feature = "auth")]
+    pub roles: &'static [&'static str],
+}
+
+#[cfg(feature = "db")]
+impl App {
+    /// Loads `.env`, installs the logger, then either runs a database command
+    /// given as the first argument (`migrate`, `migrate:rollback`, `db:seed`)
+    /// and exits with its status, or migrates, links `public/storage` to the
+    /// public disk (like `php artisan storage:link`; a failure is a warning)
+    /// and serves the routes.
+    ///
+    /// # Panics
+    ///
+    /// When a migration fails: the app must not serve an old schema.
+    pub fn run(self) {
+        use crate::db::Db;
+        use crate::log::Logger;
+        use crate::storage::Storage;
+
+        let config = crate::config::Config::load();
+        Log::init(Logger::new(&(self.logging)(&config)));
+        let db = Db::connect(&(self.database)(&config));
+        #[cfg(feature = "auth")]
+        if std::env::args().nth(1).as_deref() == Some("user:create") {
+            std::process::exit(
+                self.create_user(&db, &std::env::args().skip(2).collect::<Vec<_>>()),
+            );
+        }
+        if let Some(command) = std::env::args().nth(1) {
+            let (migrations, seeders) = ((self.migrations)(), (self.seeders)());
+            std::process::exit(crate::db::command(&db, &command, &migrations, &seeders));
+        }
+        db.migrate(&(self.migrations)())
+            .unwrap_or_else(|error| panic!("migration failed: {error}"));
+        if let Err(error) = Storage::new((self.filesystems)(&config)).link() {
+            Log::warning(format_args!("storage link failed: {error}"));
+        }
+        serve(self.router(&config, db));
+    }
+
+    /// The app's routes on `db`, shared with handlers together with the
+    /// storage disks, behind [`security_headers`].
+    pub fn router(&self, config: &crate::config::Config, db: crate::db::Db) -> Router {
+        let router = Router::new()
+            .state(db.clone())
+            .state(crate::storage::Storage::new((self.filesystems)(config)))
+            .middleware(security_headers);
+        #[cfg(feature = "auth")]
+        let router = router.state(auth::Auth::from_config(self.roles, config));
+        (self.routes)(router, config, &db)
+    }
+
+    /// `user:create <email> <role> [name]`: migrates, creates the user and
+    /// prints a generated password once, so no seeder ships a default one.
+    #[cfg(feature = "auth")]
+    fn create_user(&self, db: &crate::db::Db, args: &[String]) -> i32 {
+        let [email, role, rest @ ..] = args else {
+            eprintln!("usage: user:create <email> <role> [name]");
+            return 2;
+        };
+        if let Err(error) = db.migrate(&(self.migrations)()) {
+            eprintln!("migration failed: {error}");
+            return 1;
+        }
+        let name = rest.first().map_or(email.as_str(), String::as_str);
+        let password = session::random_token()[..24].to_owned();
+        match auth::Auth::new(self.roles).create_user(db, name, email, &password, role) {
+            Ok(_) => {
+                println!("Created {email} ({role}). Password, shown once: {password}");
+                0
+            }
+            Err(error) => {
+                eprintln!("could not create {email}: {error}");
+                1
+            }
+        }
+    }
+
+    /// For tests: the app on a fresh in-memory database, migrated and seeded,
+    /// with `env` (`.env` lines such as `"API_PER_MINUTE=2\n"`) as its config.
+    /// Returns the database too, so a test can check what was stored.
+    /// Drive it with [`testing::Client`].
+    ///
+    /// # Panics
+    ///
+    /// When a migration or seeder fails.
+    pub fn test(&self, env: &str) -> (Router, crate::db::Db) {
+        let config = crate::config::Config::parse(&format!("DB_DATABASE=:memory:\n{env}"));
+        let db = crate::db::Db::connect(&(self.database)(&config));
+        db.migrate(&(self.migrations)())
+            .unwrap_or_else(|error| panic!("migration failed: {error}"));
+        db.seed(&(self.seeders)())
+            .unwrap_or_else(|error| panic!("seeding failed: {error}"));
+        (self.router(&config, db.clone()), db)
+    }
+}
+
+/// Threads answering requests unless `WEB_THREADS` says otherwise.
+const THREADS: usize = 32;
+
+/// Listens on `127.0.0.1` and answers requests with `routes` on a pool of
+/// `WEB_THREADS` threads (default 32), so one slow request does not hold up
+/// the rest.
 ///
 /// Uses `PORT` when set; otherwise the first free port from 8080 to 8099, then
 /// any free port. Exits the process if `PORT` is set but unavailable.
@@ -535,10 +853,47 @@ pub fn serve(routes: Router) {
         std::process::exit(1);
     };
     let address = listener.local_addr().expect("listener has an address");
+    let threads = std::env::var("WEB_THREADS").map_or(THREADS, |threads| {
+        threads.parse().expect("WEB_THREADS must be a number")
+    });
     println!("Serving on http://{address}");
-    // ponytail: one request at a time; spawn a thread per stream when apps need concurrency
+    serve_on(listener, routes, threads);
+}
+
+/// Answers connections from `listener` on `threads` worker threads. Accepted
+/// connections wait in a queue of four per thread; when it is full, the
+/// operating system's backlog holds the rest, so a flood cannot spawn threads
+/// or grow memory without bound.
+// ponytail: a fixed pool of blocking threads; each slow client holds one for up
+// to READ_TIMEOUT, so size WEB_THREADS above the slow clients you expect, or
+// put nginx in front (it buffers requests), before reaching for async.
+// Memory: each thread holds one parsed request, so the worst case is
+// WEB_THREADS x the largest body (10 MiB uploads: 32 x 10 MiB = 320 MiB).
+fn serve_on(listener: TcpListener, routes: Router, threads: usize) {
+    let threads = threads.max(1);
+    let routes = Arc::new(routes);
+    let (queue, waiting) = std::sync::mpsc::sync_channel::<TcpStream>(threads * 4);
+    let waiting = Arc::new(std::sync::Mutex::new(waiting));
+    for _ in 0..threads {
+        let (routes, waiting) = (Arc::clone(&routes), Arc::clone(&waiting));
+        std::thread::spawn(move || {
+            loop {
+                // The lock is held only while taking the next connection.
+                let next = waiting
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .recv();
+                let Ok(stream) = next else { return };
+                // A panic outside the handler (writing the response) must not
+                // shrink the pool.
+                let _ = catch_unwind(AssertUnwindSafe(|| respond(stream, &routes)));
+            }
+        });
+    }
     for stream in listener.incoming().flatten() {
-        respond(stream, &routes);
+        if queue.send(stream).is_err() {
+            return;
+        }
     }
 }
 
@@ -582,6 +937,46 @@ fn respond(mut stream: TcpStream, routes: &Router) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slow_requests_do_not_hold_up_the_rest() {
+        use std::io::Read;
+        use std::time::Instant;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let routes = Router::new().get("/slow", |_| {
+            std::thread::sleep(Duration::from_millis(300));
+            Response::text(200, "done")
+        });
+        std::thread::spawn(move || serve_on(listener, routes, 4));
+        let get = move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            stream
+                .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
+                .unwrap();
+            let mut answer = String::new();
+            stream.read_to_string(&mut answer).unwrap();
+            answer
+        };
+        let started = Instant::now();
+        let clients: Vec<_> = (0..4).map(|_| std::thread::spawn(get)).collect();
+        for client in clients {
+            assert!(client.join().unwrap().ends_with("done"));
+        }
+        // One at a time would take 1.2 s.
+        assert!(
+            started.elapsed() < Duration::from_millis(900),
+            "{:?}",
+            started.elapsed()
+        );
+
+        // A client that connects and sends nothing holds one thread, not the server.
+        let _idle = TcpStream::connect(address).unwrap();
+        let started = Instant::now();
+        assert!(get().ends_with("done"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn asset_refuses_paths_outside_dist() {
@@ -691,6 +1086,31 @@ mod tests {
         let response = routes.handle(&Request::get("/"));
         assert_eq!(response.header("x-frame-options"), Some("DENY"));
         assert_eq!(response.header("x-content-type-options"), Some("nosniff"));
+        assert_eq!(
+            response.header("strict-transport-security"),
+            Some("max-age=31536000")
+        );
+        let policy = response.header("content-security-policy").unwrap();
+        assert!(
+            policy.contains("script-src 'self';") && !policy.contains("script-src 'self' 'unsafe")
+        );
+        assert!(policy.contains("frame-ancestors 'none'"));
+
+        let own = Router::new().middleware(security_headers).get("/", |_| {
+            json("{}").with_header("Content-Security-Policy", "default-src 'none'")
+        });
+        let response = own.handle(&Request::get("/"));
+        let policies: Vec<_> = response
+            .headers
+            .iter()
+            .filter(|(name, _)| name == "Content-Security-Policy")
+            .collect();
+        assert_eq!(
+            policies.len(),
+            1,
+            "a route's own policy is kept, not doubled"
+        );
+        assert_eq!(policies[0].1, "default-src 'none'");
     }
 
     #[test]
@@ -709,27 +1129,60 @@ mod tests {
     }
 
     #[test]
-    fn package_view_prefers_the_app_override() {
+    fn package_view_prefers_the_app_override_and_extends_app_layouts() {
         let public = std::env::temp_dir().join(format!("clamp-pkg-{}", std::process::id()));
         let body = |response: Response| String::from_utf8(response.body).unwrap();
-        let slots = [("title", "Hi")];
+        let data: [(&str, &dyn ToValue); 1] = [("title", &"<Hi>")];
         assert_eq!(
             body(package_view_in(
                 &public,
                 "blog",
                 "index",
-                "<h1><!--title--></h1>",
-                &slots
+                "<h1>{{ title }}</h1>",
+                &data
             )),
-            "<h1>Hi</h1>"
+            "<h1>&lt;Hi&gt;</h1>"
         );
         let dir = public.join("build/views/vendor/blog");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("index.html"), "<h2><!--title--></h2>").unwrap();
-        let response = package_view_in(&public, "blog", "index", "<h1><!--title--></h1>", &slots);
+        fs::write(
+            dir.join("index.html"),
+            "@extends('layouts.app')@section('main')<h2>{{ title }}</h2>@endsection",
+        )
+        .unwrap();
+        fs::create_dir_all(public.join("build/views/layouts")).unwrap();
+        fs::write(
+            public.join("build/views/layouts/app.html"),
+            "<main>@yield('main')</main>",
+        )
+        .unwrap();
+        let response = package_view_in(&public, "blog", "index", "<h1>{{ title }}</h1>", &data);
         fs::remove_dir_all(&public).unwrap();
         assert_eq!(response.status, 200);
-        assert_eq!(body(response), "<h2>Hi</h2>");
+        assert_eq!(body(response), "<main><h2>&lt;Hi&gt;</h2></main>");
+    }
+
+    #[test]
+    fn forbidden_is_answered_as_not_found() {
+        let routes = Router::new()
+            .middleware(security_headers)
+            .get("/secret", |_| Response::text(403, "no"));
+        let hidden = routes.handle(&Request::get("/secret"));
+        let missing = routes.handle(&Request::get("/missing"));
+        assert_eq!(hidden.status, 404);
+        assert_eq!(
+            hidden, missing,
+            "indistinguishable from a real 404, headers included"
+        );
+    }
+
+    #[test]
+    fn up_answers_ok() {
+        let response = Router::new().up("/up").handle(&Request::get("/up"));
+        assert_eq!(
+            (response.status, response.body),
+            (200, br#"{"status":"ok"}"#.to_vec())
+        );
     }
 
     #[test]

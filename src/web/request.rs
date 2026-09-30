@@ -10,7 +10,8 @@ use super::{Response, Session, error};
 const MAX_LINE: u64 = 8 * 1024;
 /// Most headers accepted on one request.
 const MAX_HEADERS: usize = 100;
-/// Largest accepted request body, in bytes. Larger bodies get `413`.
+/// Largest accepted request body, in bytes, except multipart forms (see
+/// [`MAX_UPLOAD`](super::MAX_UPLOAD)). Larger bodies get `413`.
 pub const MAX_BODY: usize = 1024 * 1024;
 
 /// An incoming HTTP request.
@@ -119,8 +120,11 @@ impl Request {
         field(&self.query, key)
     }
 
-    /// The decoded field `key` of a URL-encoded form body.
+    /// The decoded field `key` of a URL-encoded or multipart form body.
     pub fn form(&self, key: &str) -> Option<String> {
+        if let Some(value) = super::upload::form_field(self, key) {
+            return value;
+        }
         field(&String::from_utf8_lossy(&self.body), key)
     }
 
@@ -185,7 +189,15 @@ pub(super) fn parse(reader: &mut impl BufRead, peer: Option<IpAddr>) -> Result<R
     }
     if let Some(length) = request.header("content-length") {
         let length: usize = length.parse().map_err(|_| error(400))?;
-        if length > MAX_BODY {
+        let multipart = request
+            .header("content-type")
+            .is_some_and(super::upload::is_multipart);
+        let max = if multipart {
+            super::MAX_UPLOAD
+        } else {
+            MAX_BODY
+        };
+        if length > max {
             return Err(error(413));
         }
         let mut body = vec![0; length];
@@ -299,6 +311,18 @@ mod tests {
             MAX_BODY + 1
         );
         assert_eq!(parse_raw(&big).unwrap_err(), 413);
+        // Multipart forms may be larger, up to MAX_UPLOAD; this body is
+        // missing, so it fails later with 400.
+        let upload = |length| {
+            format!(
+                "POST / HTTP/1.1\r\nContent-Type: multipart/form-data; boundary=b\r\nContent-Length: {length}\r\n\r\n"
+            )
+        };
+        assert_eq!(parse_raw(&upload(MAX_BODY + 1)).unwrap_err(), 400);
+        assert_eq!(
+            parse_raw(&upload(super::super::MAX_UPLOAD + 1)).unwrap_err(),
+            413
+        );
         let long = format!("GET /{} HTTP/1.1\r\n\r\n", "a".repeat(MAX_LINE as usize));
         assert_eq!(parse_raw(&long).unwrap_err(), 431);
         let many = format!(

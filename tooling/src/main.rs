@@ -416,16 +416,24 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
         include_str!("../templates/web/app/config/app.rs"),
     ),
     (
+        "app/config/database.rs",
+        include_str!("../templates/web/app/config/database.rs"),
+    ),
+    (
+        "app/config/filesystems.rs",
+        include_str!("../templates/web/app/config/filesystems.rs"),
+    ),
+    (
+        "app/config/logging.rs",
+        include_str!("../templates/web/app/config/logging.rs"),
+    ),
+    (
         "app/http/controllers/controller.rs",
         include_str!("../templates/web/app/http/controllers/controller.rs"),
     ),
     (
-        "app/http/controllers/health.rs",
-        include_str!("../templates/web/app/http/controllers/health.rs"),
-    ),
-    (
-        "app/http/middleware/request_log.rs",
-        include_str!("../templates/web/app/http/middleware/request_log.rs"),
+        "app/http/middleware/.gitkeep",
+        include_str!("../templates/web/app/http/middleware/.gitkeep"),
     ),
     (
         "app/http/requests/.gitkeep",
@@ -515,7 +523,7 @@ fn create_web(root: &std::path::Path, name: &str) -> Result<(), String> {
     let gitignore = root.join(".gitignore");
     let mut ignored = fs::read_to_string(&gitignore).unwrap_or_default();
     // Every .env is secret except the example and the encrypted ones.
-    ignored.push_str("/node_modules\n/public/build\n/storage\n.env\n.env.*\n!.env.example\n!.env.encrypted\n!.env.*.encrypted\n");
+    ignored.push_str("/node_modules\n/public/build\n/public/storage\n/storage\n.env\n.env.*\n!.env.example\n!.env.encrypted\n!.env.*.encrypted\n");
     fs::write(&gitignore, ignored).map_err(|error| format!("cannot update .gitignore: {error}"))?;
     Ok(())
 }

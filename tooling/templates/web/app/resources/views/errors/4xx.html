@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title><!--status--> <!--reason--></title>
+  <title>{{ status }} {{ reason }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <script type="module" src="/js/app.ts"></script>
 </head>
-<!-- Every 4xx error (404, 419, 429...) renders this page; add errors/404.html to give one code its own. web::error(status) fills the status and reason markers. -->
+<!-- Every 4xx error (404, 419, 429...) renders this page; add errors/404.html to give one code its own. web::error(status) passes status and reason. -->
 <body class="grid min-h-screen place-items-center bg-white bg-[radial-gradient(50%_45%_at_50%_0%,color-mix(in_oklab,var(--color-orange-500)_14%,transparent),transparent_70%)] px-4 font-sans text-neutral-950 antialiased dark:bg-neutral-950 dark:text-neutral-100">
   <main class="max-w-xl text-center">
-    <p class="bg-linear-to-r from-amber-600 via-orange-600 to-pink-600 bg-clip-text py-2 text-9xl leading-none tracking-tighter text-transparent sm:text-[12rem] dark:from-amber-200 dark:via-orange-300 dark:to-pink-300"><!--status--></p>
-    <h1 class="mt-2 text-4xl leading-tight tracking-tight text-balance sm:text-5xl"><!--reason--></h1>
+    <p class="bg-linear-to-r from-amber-600 via-orange-600 to-pink-600 bg-clip-text py-2 text-9xl leading-none tracking-tighter text-transparent sm:text-[12rem] dark:from-amber-200 dark:via-orange-300 dark:to-pink-300">{{ status }}</p>
+    <h1 class="mt-2 text-4xl leading-tight tracking-tight text-balance sm:text-5xl">{{ reason }}</h1>
     <p class="mt-4 text-lg text-pretty text-neutral-600 dark:text-neutral-400">The page doesn't exist, or the request couldn't be handled. Check the address and try again.</p>
     <a href="/" class="mt-8 inline-flex h-12 items-center rounded-full bg-orange-600 px-6 text-white hover:bg-orange-700 dark:bg-orange-500 dark:hover:bg-orange-400">Go home</a>
   </main>

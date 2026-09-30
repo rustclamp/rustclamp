@@ -36,5 +36,5 @@ order they are added, so app routes declared before `.package(...)` win.
 
 Copy `resources/views/index.html` to the app's
 `app/resources/views/vendor/__NAME__/index.html`. The app's Vite build picks it
-up, and `package_view` serves it instead of the package's copy. `<!--title-->`
-markers still get filled.
+up, and `package_view` serves it instead of the package's copy, with the same data
+(`{{ title }}`). A view can `@extends('layouts.app')` to wear the app's layout.
