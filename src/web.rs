@@ -812,8 +812,12 @@ impl App {
         }
         let name = rest.first().map_or(email.as_str(), String::as_str);
         let password = session::random_token()[..24].to_owned();
-        match auth::Auth::new(self.roles).create_user(db, name, email, &password, role) {
-            Ok(_) => {
+        let auth = auth::Auth::new(self.roles);
+        match auth
+            .create_user(db, name, email, &password, role)
+            .and_then(|id| auth.mark_verified(db, id))
+        {
+            Ok(()) => {
                 println!("Created {email} ({role}). Password, shown once: {password}");
                 0
             }
@@ -833,7 +837,11 @@ impl App {
     ///
     /// When a migration or seeder fails.
     pub fn test(&self, env: &str) -> (Router, crate::db::Db) {
-        let config = crate::config::Config::parse(&format!("DB_DATABASE=:memory:\n{env}"));
+        // A fixed test URL and key, for signed links; `env` can override them.
+        let config = crate::config::Config::parse(&format!(
+            "DB_DATABASE=:memory:\nAPP_URL=http://localhost\n\
+             APP_KEY=base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n{env}"
+        ));
         let db = crate::db::Db::connect(&(self.database)(&config));
         db.migrate(&(self.migrations)())
             .unwrap_or_else(|error| panic!("migration failed: {error}"));

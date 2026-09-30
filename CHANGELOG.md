@@ -19,6 +19,16 @@
 
 ### Added
 
+- Account flows (ADR 0016), with `auth` + `mail`: `Auth::register` (no
+  enumeration, no auto-login), email verification (24 h signed link,
+  `auth::verified` guard, `resend_verification`), `forgot`/`open_reset`/
+  `reset` (60 min link, single use, token moved into the session), and
+  `confirm` with the `password_confirmed` guard (3 h). Links come from
+  `APP_URL` and are signed with `APP_KEY`; both are required with `auth` +
+  `mail`. A password change ends every session (fingerprint check in
+  `authenticate`). Auth mail: 3/hour per client, 1 per 10 minutes per
+  address. `User::verified`, `Auth::mark_verified`; `user:create` accounts
+  are verified. Apps need `email_verified_at` on `users`.
 - Mail (ADR 0015), the optional `mail` feature: SMTP with STARTTLS over
   rustls (ring provider; never a plaintext fallback, AUTH only over TLS),
   UTF-8 bodies and RFC 2047 headers, a `log` mailer. `Mailer::send` queues
@@ -103,6 +113,12 @@
   `errors` and `old`; error views get `status` and `reason`. An unknown name
   or broken view is logged and answers `500`. `public/build/views/` is no
   longer served raw.
+- The CLI is 0.5.0 (release tag `clamp-v0.5.0`): the framework with account
+  flows (register, verify email, reset and confirm password; ADR 0016) as
+  well as mail (ADR 0015).
+- The CLI is 0.4.0 (release tag `clamp-v0.4.0`): `clamp init --web` apps
+  get `app/config/{app,database,filesystems,logging}.rs`, storage disks and
+  uploads, `web::App` wiring, `build::database` and `#[derive(Model)]`.
 - The CLI is 0.3.0 (release tag `clamp-v0.3.0`): database, crypto and `.env`
   commands, and `clamp init --web` apps with `db` and `crypto`.
 

@@ -16,6 +16,9 @@ use std::error::Error;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+#[cfg(feature = "mail")]
+mod account;
+
 use super::request::State;
 use super::{Next, Request, Response, Throttle, ToValue, Value, error, redirect};
 use crate::crypto::Hash;
@@ -24,8 +27,28 @@ use crate::db::sqlite::{Row, params};
 
 /// The session key holding the logged-in user's id.
 const SESSION_KEY: &str = "_user";
+/// The session key holding a fingerprint of the password hash at login: when
+/// the password changes, every session made with the old one ends.
+const FINGERPRINT_KEY: &str = "_auth_fp";
+/// The session key holding when the password was last confirmed.
+const CONFIRMED_KEY: &str = "_auth_confirmed";
+/// The session key holding the page that asked for confirmation.
+const INTENDED_KEY: &str = "_auth_intended";
+/// How long a confirmed password counts.
+const CONFIRM_FOR: u64 = 3 * 60 * 60;
 /// Where guests are sent from protected pages.
 const LOGIN: &str = "/login";
+
+/// A short fingerprint of a password hash, safe to keep in a session.
+fn fingerprint(hash: &str) -> String {
+    crate::crypto::sha256(hash.as_bytes())[..32].to_owned()
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |time| time.as_secs())
+}
 
 /// A user as the app sees it: never the password hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +63,8 @@ pub struct User {
     pub email: String,
     /// One slug from the app's roles.
     pub role: String,
+    /// Whether the email address has been confirmed (`email_verified_at`).
+    pub verified: bool,
 }
 
 impl User {
@@ -50,6 +75,7 @@ impl User {
             name: row.get("name")?,
             email: row.get("email")?,
             role: row.get("role")?,
+            verified: row.get::<_, Option<String>>("email_verified_at")?.is_some(),
         })
     }
 }
@@ -62,6 +88,7 @@ impl ToValue for User {
             ("name", &self.name),
             ("email", &self.email),
             ("role", &self.role),
+            ("verified", &self.verified),
         ])
     }
 }
@@ -82,6 +109,15 @@ pub enum Refused {
 pub struct Auth {
     roles: &'static [&'static str],
     throttle: Throttle,
+    /// Signed links for verification and reset mail (ADR 0016).
+    #[cfg(feature = "mail")]
+    links: Option<account::Links>,
+    /// Auth mail per client: 3 an hour.
+    #[cfg(feature = "mail")]
+    mail_client: Throttle,
+    /// Auth mail per address: 1 per 10 minutes.
+    #[cfg(feature = "mail")]
+    mail_address: Throttle,
 }
 
 impl Auth {
@@ -100,6 +136,12 @@ impl Auth {
         Self {
             roles,
             throttle: Throttle::per_minute(5),
+            #[cfg(feature = "mail")]
+            links: None,
+            #[cfg(feature = "mail")]
+            mail_client: Throttle::new(3, Duration::from_secs(60 * 60)),
+            #[cfg(feature = "mail")]
+            mail_address: Throttle::new(1, Duration::from_secs(10 * 60)),
         }
     }
 
@@ -107,9 +149,26 @@ impl Auth {
     /// `LOGIN_PER_MINUTE` attempts per email and client (default 5), and
     /// `TRUST_PROXY`, so behind nginx each client is its forwarded address,
     /// not the proxy's. [`App`](super::App) builds `Auth` this way.
+    ///
+    /// With the `mail` feature it also reads `APP_URL` and `APP_KEY` for the
+    /// signed links in verification and reset mail.
+    ///
+    /// # Panics
+    ///
+    /// With the `mail` feature, when `APP_URL` or `APP_KEY` is missing: links
+    /// must never be built from the request's `Host`.
     pub fn from_config(roles: &'static [&'static str], config: &crate::config::Config) -> Self {
+        let trust = config.get_or("TRUST_PROXY", false);
+        #[cfg(not(feature = "mail"))]
+        let _ = trust;
         Self {
             throttle: Throttle::from_config(config, "LOGIN_PER_MINUTE", 5),
+            #[cfg(feature = "mail")]
+            links: Some(account::Links::from_config(config)),
+            #[cfg(feature = "mail")]
+            mail_client: Throttle::new(3, Duration::from_secs(60 * 60)).trust_forwarded(trust),
+            #[cfg(feature = "mail")]
+            mail_address: Throttle::new(1, Duration::from_secs(10 * 60)),
             ..Self::new(roles)
         }
     }
@@ -150,7 +209,7 @@ impl Auth {
             .as_ref()
             .map_or_else(|| dummy_hash(), |(_, hash)| hash.as_str());
         let verified = Hash::check(password, hash);
-        let Some((user, _)) = found.filter(|_| verified) else {
+        let Some((user, stored)) = found.filter(|_| verified) else {
             return Ok(Err(Refused::Invalid));
         };
         if user.role == "blocked" {
@@ -161,6 +220,7 @@ impl Auth {
             .expect("login needs Sessions::middleware on this route");
         session.regenerate();
         session.put(SESSION_KEY, &user.id.to_string());
+        session.put(FINGERPRINT_KEY, &fingerprint(&stored));
         Ok(Ok(user))
     }
 
@@ -208,6 +268,51 @@ impl Auth {
             .where_eq("id", &id)
             .update(&["role"], &[&role])?;
         Ok(())
+    }
+
+    /// Marks user `id`'s email as confirmed, as `user:create` does.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn mark_verified(&self, db: &Db, id: i64) -> Result<(), Box<dyn Error + Send + Sync>> {
+        db.with(|sql| {
+            sql.execute(
+                "UPDATE users SET email_verified_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1 AND email_verified_at IS NULL",
+                [id],
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Checks the logged-in user's password for [`password_confirmed`]:
+    /// on success, remembers it for 3 hours and returns the page that asked
+    /// (or `/`).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn confirm(
+        &self,
+        request: &Request,
+        password: &str,
+    ) -> Result<Option<String>, Box<dyn Error + Send + Sync>> {
+        let (Some(user), Some(session)) = (request.user(), request.session()) else {
+            return Ok(None);
+        };
+        let hash: Option<String> = request
+            .db()
+            .table("users")
+            .where_eq("id", &user.id)
+            .first(|row| row.get("password"))?;
+        if !hash.is_some_and(|hash| Hash::check(password, &hash)) {
+            return Ok(None);
+        }
+        session.put(CONFIRMED_KEY, &unix_now().to_string());
+        Ok(Some(
+            session.take(INTENDED_KEY).unwrap_or_else(|| "/".into()),
+        ))
     }
 
     /// Whether `user` holds `role` or one above it, through [`allows`]:
@@ -269,9 +374,12 @@ pub fn authenticate(request: &Request, next: Next) -> Response {
         .db()
         .table("users")
         .where_eq("id", &id)
-        .first(User::from_row);
+        .first(|row| Ok((User::from_row(row)?, row.get::<_, String>("password")?)));
+    // A changed password (a reset elsewhere) ends this session.
+    let current =
+        |hash: &str| session.get(FINGERPRINT_KEY).as_deref() == Some(fingerprint(hash).as_str());
     match user {
-        Ok(Some(user)) if user.role != "blocked" => {
+        Ok(Some((user, hash))) if user.role != "blocked" && current(&hash) => {
             let mut request = request.clone();
             let mut values = (*request.state.0).clone();
             values.push(Arc::new(CurrentUser(user)));
@@ -287,6 +395,35 @@ pub fn authenticate(request: &Request, next: Next) -> Response {
             error(500)
         }
     }
+}
+
+/// Guard: users whose email is not confirmed yet are sent to
+/// `/email/verify`, guests to `/login`.
+pub fn verified(request: &Request, next: Next) -> Response {
+    match request.user() {
+        Some(user) if user.verified => next(request),
+        Some(_) => redirect("/email/verify"),
+        None => redirect(LOGIN),
+    }
+}
+
+/// Guard: asks for the password again (at `/confirm-password`) unless it was
+/// confirmed in the last 3 hours, then returns to this page.
+pub fn password_confirmed(request: &Request, next: Next) -> Response {
+    let Some(session) = request.session() else {
+        return redirect(LOGIN);
+    };
+    let fresh = session
+        .get(CONFIRMED_KEY)
+        .and_then(|at| at.parse::<u64>().ok())
+        .is_some_and(|at| unix_now().saturating_sub(at) < CONFIRM_FOR);
+    if fresh {
+        return next(request);
+    }
+    if request.method == "GET" {
+        session.put(INTENDED_KEY, &request.path);
+    }
+    redirect("/confirm-password")
 }
 
 /// Guard: guests are redirected to `/login`; add it after [`authenticate`].
@@ -350,7 +487,7 @@ mod tests {
             sql.execute_batch(
                 "CREATE TABLE users (id INTEGER PRIMARY KEY, public_id TEXT NOT NULL,
                  name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password TEXT NOT NULL,
-                 role TEXT NOT NULL DEFAULT 'user')",
+                 role TEXT NOT NULL DEFAULT 'user', email_verified_at TEXT)",
             )
         })
         .unwrap();
@@ -539,6 +676,7 @@ mod tests {
             name: String::new(),
             email: String::new(),
             role: role.into(),
+            verified: true,
         };
         assert!(allows(&user("super-admin"), |_| false));
         assert!(!allows(&user("blocked"), |_| true));
@@ -559,7 +697,7 @@ mod tests {
             panic!("a map")
         };
         let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
-        assert_eq!(keys, ["public_id", "name", "email", "role"]);
+        assert_eq!(keys, ["public_id", "name", "email", "role", "verified"]);
     }
 
     fn routes_auth() -> Auth {
