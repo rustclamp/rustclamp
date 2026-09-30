@@ -201,6 +201,7 @@ async fn handle_message(
         Outcome::DeadLetter { reason, error } => DeliveryOutcome::DeadLetter {
             classification: match reason {
                 DeadReason::Expired => "expired",
+                DeadReason::Malformed => "invalid_envelope",
                 DeadReason::RetryExhausted => "retry_exhausted",
                 DeadReason::UnknownOutcome => "unknown_outcome",
                 DeadReason::Permanent | DeadReason::InvalidPayload | DeadReason::NoHandler => {
