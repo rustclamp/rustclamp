@@ -26,7 +26,7 @@ app/                             everything the app is made of; replace it to de
   database/states/               allowed status transitions (`db::States`)
   routes/web.rs, routes/api.rs   pages, JSON (throttled)
   http/controllers/              controller.rs is the base: `use super::controller::*;`
-  http/middleware/               request_log.rs: logs every request at debug level
+  http/middleware/               your middleware (requests are logged by rustclamp::log::request_log)
   http/requests/                 form input and its validation
   models/                        data the app works with
   resources/views/               pages (Vite entries); errors/4xx.html and 5xx.html are the error pages

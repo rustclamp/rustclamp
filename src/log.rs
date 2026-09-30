@@ -154,6 +154,18 @@ impl Log {
     }
 }
 
+/// Middleware logging every request and its status at `debug` level:
+/// `router.middleware(rustclamp::log::request_log)`.
+#[cfg(feature = "web")]
+pub fn request_log(request: &crate::web::Request, next: crate::web::Next) -> crate::web::Response {
+    let response = next(request);
+    Log::debug(format_args!(
+        "{} {} {}",
+        request.method, request.path, response.status
+    ));
+    response
+}
+
 static LOGGER: OnceLock<Logger> = OnceLock::new();
 
 fn logger() -> &'static Logger {

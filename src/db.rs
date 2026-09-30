@@ -378,6 +378,23 @@ pub trait Seeder {
 /// Whatever stopped a [`Seeder`].
 pub type SeedError = Box<dyn std::error::Error + Send + Sync>;
 
+/// A migration under its file name. [`build`](crate::build) lists migrations
+/// this way, so they need no `name()`.
+#[doc(hidden)]
+pub struct Named(pub &'static str, pub &'static dyn Migration);
+
+impl Migration for Named {
+    fn name(&self) -> &'static str {
+        self.0
+    }
+    fn up(&self) -> String {
+        self.1.up()
+    }
+    fn down(&self) -> String {
+        self.1.down()
+    }
+}
+
 /// Runs a database console command and returns the process exit code:
 /// `migrate`, `migrate:rollback`, `migrate:status` or `db:seed`. The web template's `main`
 /// calls it when the app gets an argument: `cargo run -- db:seed`.
@@ -499,9 +516,21 @@ pub fn migration_name(file: &'static str) -> &'static str {
 /// migration that has run anywhere: add a new one.
 pub trait Migration {
     /// A unique name that sorts in run order, such as
-    /// `2026_09_29_000001_create_posts`. Usually the file's own name:
+    /// `2026_09_29_000001_create_posts`. Migrations listed by
+    /// [`build::database`](crate::build) are named after their file, so they
+    /// leave this out; one listed by hand implements it, usually as
     /// `migration_name(file!())`.
-    fn name(&self) -> &'static str;
+    ///
+    /// # Panics
+    ///
+    /// When neither applies. Guessing would be worse: a name that later
+    /// changes makes the migration run again.
+    fn name(&self) -> &'static str {
+        panic!(
+            "migration {} has no name: list it with rustclamp::build::database or implement name()",
+            std::any::type_name::<Self>()
+        )
+    }
     /// The SQL that applies the change, often [`Schema::create`].
     fn up(&self) -> String;
     /// The SQL that undoes [`up`](Self::up), often [`Schema::drop`].

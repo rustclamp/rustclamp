@@ -4,20 +4,45 @@
 //! In `build.rs`, `fn main` calls:
 //!
 //! ```no_run
-//! rustclamp::build::migrations("app/database/migrations");
+//! rustclamp::build::database("app/database");
 //! ```
 //!
 //! ```ignore
 //! // app/lib.rs
 //! pub mod database {
-//!     include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
+//!     include!(concat!(env!("OUT_DIR"), "/database.rs"));
 //! }
-//! // database::migrations() now lists every file in the folder;
-//! // rustclamp::build::seeders works the same for seeders.rs.
+//! // database::migrations(), database::seeders() and database::states::*
+//! // now cover every file in migrations/, seeders/ and states/.
 //! ```
 
 use std::fs;
 use std::path::Path;
+
+/// Writes `$OUT_DIR/database.rs` from `folder`'s `migrations/`, `seeders/`
+/// and `states/`: what [`migrations`], [`seeders`] and [`states`] write, in
+/// one file. Migrations are named after their files, so they need no
+/// `name()`.
+///
+/// # Panics
+///
+/// As [`migrations`].
+pub fn database(folder: &str) {
+    let folder = Path::new(folder);
+    let mut source = String::new();
+    for (sub, function, kind) in [
+        ("migrations", "migrations", "Migration"),
+        ("seeders", "seeders", "Seeder"),
+    ] {
+        println!("cargo:rerun-if-changed={}", folder.join(sub).display());
+        source.push_str(&self::source(&folder.join(sub), function, kind));
+    }
+    println!("cargo:rerun-if-changed={}", folder.join("states").display());
+    source.push_str(&states_source(&folder.join("states")));
+    let out = std::env::var("OUT_DIR").expect("run from build.rs, where OUT_DIR is set");
+    fs::write(Path::new(&out).join("database.rs"), source)
+        .unwrap_or_else(|error| panic!("cannot write database.rs to OUT_DIR: {error}"));
+}
 
 /// Writes `$OUT_DIR/migrations.rs`: a module for every `.rs` file in
 /// `folder`, sorted by file name, and `migrations()` returning them in that
@@ -114,10 +139,13 @@ fn source(folder: &Path, function: &str, kind: &str) -> String {
     let mut list = String::new();
     for (path, stem) in files(folder, kind) {
         modules.push_str(&format!("#[path = {path:?}]\nmod {function}_{stem};\n"));
-        list.push_str(&format!(
-            "        &{function}_{stem}::{},\n",
-            struct_name(&stem)
-        ));
+        let item = format!("{function}_{stem}::{}", struct_name(&stem));
+        // A migration is recorded under its file name.
+        list.push_str(&if kind == "Migration" {
+            format!("        &::rustclamp::db::Named({stem:?}, &{item}),\n")
+        } else {
+            format!("        &{item},\n")
+        });
     }
     format!(
         "{modules}\n/// Every {kind} in its folder, in file name order.\n\
@@ -160,10 +188,10 @@ mod tests {
         }
         let source = source(&folder, "migrations", "Migration");
         let posts = source
-            .find("&migrations_0001_create_posts::CreatePosts")
+            .find("&::rustclamp::db::Named(\"0001_create_posts\", &migrations_0001_create_posts::CreatePosts)")
             .unwrap();
         let tags = source
-            .find("&migrations_0002_create_tags::CreateTags")
+            .find("Named(\"0002_create_tags\", &migrations_0002_create_tags::CreateTags)")
             .unwrap();
         assert!(posts < tags);
         assert!(!source.contains("notes"));

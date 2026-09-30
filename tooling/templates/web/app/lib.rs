@@ -13,11 +13,8 @@ pub mod http {
     pub mod controllers {
         pub mod controller;
     }
-    /// Wrap requests: `Fn(&Request, Next) -> Response`.
-    pub mod middleware {
-        mod request_log;
-        pub use request_log::request_log;
-    }
+    // Middleware goes in `middleware/`: `Fn(&Request, Next) -> Response`, e.g.
+    // `pub mod middleware { mod admin; pub use admin::admin; }`
     // Form input and its validation goes in `requests/`, e.g.
     // `pub mod requests { mod contact; pub use contact::ContactRequest; }`
 }
@@ -30,9 +27,7 @@ pub mod http {
 /// `database/states/` (allowed status transitions, as `database::states::*`).
 /// Adding a file is enough; `build.rs` lists them.
 pub mod database {
-    include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
-    include!(concat!(env!("OUT_DIR"), "/seeders.rs"));
-    include!(concat!(env!("OUT_DIR"), "/states.rs"));
+    include!(concat!(env!("OUT_DIR"), "/database.rs"));
 }
 
 /// Typed settings from `.env`, one file per area, like Laravel's `config/`.
@@ -66,7 +61,7 @@ pub fn app() -> App {
         seeders: database::seeders,
         routes: |router, config, _db| {
             let settings = config::Settings::from(config);
-            let router = router.middleware(http::middleware::request_log);
+            let router = router.middleware(rustclamp::log::request_log);
             // Packages (`clamp init --package`) add their routes here, e.g.
             // `let router = router.package(blog::Blog::from(config));`
             routes::api::routes(routes::web::routes(router), &settings)

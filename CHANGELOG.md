@@ -74,6 +74,13 @@
   put `.html` or `.svg` on a public disk. Validation rules for uploads, as in
   Laravel: `file`, `image` (JPEG, PNG, GIF or WebP, checked by content; no
   SVG), `mimes:pdf,txt`, and `min`/`max` in kilobytes on file fields.
+- Less boilerplate in apps: `build::database("app/database")` replaces the
+  three `build::migrations`/`seeders`/`states` calls (still available) and
+  writes one `database.rs`; migrations it lists are named after their file,
+  so `fn name() { migration_name(file!()) }` can go (a hand-listed migration
+  without `name()` panics rather than guessing). `log::request_log` is the
+  request-logging middleware the web template used to carry in
+  `app/http/middleware/`.
 - Views are templates (ADR 0012): a std-only Blade subset rendered at request
   time from the Vite-built HTML. `{{ name }}` escapes, `{!! name !!}` does
   not; `@if`/`@else`, `@foreach`, `@extends`/`@section`/`@yield`,

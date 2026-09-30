@@ -432,8 +432,8 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
         include_str!("../templates/web/app/http/controllers/controller.rs"),
     ),
     (
-        "app/http/middleware/request_log.rs",
-        include_str!("../templates/web/app/http/middleware/request_log.rs"),
+        "app/http/middleware/.gitkeep",
+        include_str!("../templates/web/app/http/middleware/.gitkeep"),
     ),
     (
         "app/http/requests/.gitkeep",
