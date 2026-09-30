@@ -12,6 +12,8 @@
 
 #[cfg(feature = "build")]
 pub mod build;
+#[cfg(feature = "cache")]
+pub mod cache;
 #[cfg(feature = "config")]
 pub mod config;
 #[cfg(feature = "crypto")]
@@ -23,6 +25,8 @@ pub mod error;
 pub mod log;
 #[cfg(feature = "mail")]
 pub mod mail;
+#[cfg(feature = "metrics")]
+pub mod metrics;
 #[cfg(feature = "storage")]
 pub mod storage;
 #[cfg(feature = "time")]

@@ -54,7 +54,7 @@ mod schema;
 mod states;
 pub mod timestamp;
 pub use query::Query;
-pub use schema::{Column, Schema, Table};
+pub use schema::{Column, OnDelete, Schema, Table};
 pub use states::{Change, States, Transition};
 
 pub use rusqlite as sqlite;
@@ -75,6 +75,21 @@ pub struct Db {
 impl std::fmt::Debug for Db {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Db").finish_non_exhaustive()
+    }
+}
+
+/// Where [`Db::blocking`]'s thread leaves its result for the future.
+struct Slot<T> {
+    result: Option<std::thread::Result<T>>,
+    waker: Option<std::task::Waker>,
+}
+
+impl<T> Default for Slot<T> {
+    fn default() -> Self {
+        Self {
+            result: None,
+            waker: None,
+        }
     }
 }
 
@@ -251,6 +266,60 @@ impl Db {
         work(&connection)
     }
 
+    /// [`Db::with`] for async callers: runs `work` with the connection on its
+    /// own thread and returns a future for its result, so the caller's
+    /// executor thread never waits on the connection lock or on SQLite. The
+    /// thread starts when this is called, like Tokio's `spawn_blocking`; the
+    /// future works on any executor. A panic in `work` panics the awaiting task.
+    ///
+    /// ```
+    /// use rustclamp::config::Config;
+    /// use rustclamp::db::Db;
+    ///
+    /// # fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+    /// #     struct Wake(std::thread::Thread);
+    /// #     impl std::task::Wake for Wake { fn wake(self: std::sync::Arc<Self>) { self.0.unpark() } }
+    /// #     let waker = std::sync::Arc::new(Wake(std::thread::current())).into();
+    /// #     let mut future = std::pin::pin!(future);
+    /// #     loop {
+    /// #         if let std::task::Poll::Ready(value) = future.as_mut().poll(&mut std::task::Context::from_waker(&waker)) { return value }
+    /// #         std::thread::park();
+    /// #     }
+    /// # }
+    /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    /// let one: i64 = block_on(db.blocking(|sql| sql.query_row("SELECT 1", [], |row| row.get(0)))).unwrap();
+    /// assert_eq!(one, 1);
+    /// ```
+    pub fn blocking<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Connection) -> T + Send + 'static,
+    ) -> impl std::future::Future<Output = T> + Send + 'static {
+        // ponytail: a thread per call, no pool: the pool waits for
+        // measurements (ADR 0009); a bounded worker set replaces this if
+        // thread spawn shows up.
+        let slot = Arc::new(Mutex::new(Slot::default()));
+        let (db, done) = (self.clone(), slot.clone());
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| db.with(work)));
+            let mut slot = done.lock().unwrap_or_else(PoisonError::into_inner);
+            slot.result = Some(result);
+            if let Some(waker) = slot.waker.take() {
+                waker.wake();
+            }
+        });
+        std::future::poll_fn(move |cx| {
+            let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            match slot.result.take() {
+                Some(Ok(value)) => std::task::Poll::Ready(value),
+                Some(Err(panic)) => std::panic::resume_unwind(panic),
+                None => {
+                    slot.waker = Some(cx.waker().clone());
+                    std::task::Poll::Pending
+                }
+            }
+        })
+    }
+
     /// Runs `work` in a transaction, like Laravel's `DB::transaction`: kept
     /// when it returns `Ok`, undone when it returns `Err` or panics. It
     /// nests: inside another transaction, such as a seeder's, it is a
@@ -357,6 +426,79 @@ impl Db {
                         "INSERT INTO migrations (name, batch) VALUES (?1, ?2)",
                         rusqlite::params![name, batch],
                     )
+                })?;
+            }
+            Ok(())
+        })
+    }
+
+    /// [`Db::migrate`] for a database that tracks its schema in SQLite's
+    /// `PRAGMA user_version` instead of the `migrations` table: the number is
+    /// how many of `migrations` have run, so the list may only grow at the end
+    /// and there is no batch or rollback. Each pending migration runs in a
+    /// transaction together with its version bump; a failure stops the rest.
+    ///
+    /// `baseline` adopts a database created before this: when its
+    /// `user_version` is 0 but it already has tables, the first `baseline`
+    /// migrations are taken as already applied. A new empty database runs
+    /// everything.
+    ///
+    /// # Errors
+    ///
+    /// When SQL fails, or the database is at a version beyond `migrations`
+    /// (it was migrated by a newer build).
+    ///
+    /// ```
+    /// use rustclamp::config::Config;
+    /// use rustclamp::db::{Db, Migration};
+    ///
+    /// struct Sql(&'static str, &'static str);
+    /// impl Migration for Sql {
+    ///     fn name(&self) -> &'static str { self.0 }
+    ///     fn up(&self) -> String { self.1.into() }
+    ///     fn down(&self) -> String { String::new() }
+    /// }
+    ///
+    /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    /// // An existing database that already has the first table.
+    /// db.with(|sql| sql.execute_batch("CREATE TABLE posts (id INTEGER PRIMARY KEY)")).unwrap();
+    /// let first = Sql("0001", "CREATE TABLE posts (id INTEGER PRIMARY KEY);");
+    /// let second = Sql("0002", "CREATE TABLE tags (id INTEGER PRIMARY KEY);");
+    /// db.migrate_user_version(1, &[&first, &second]).unwrap();
+    /// assert_eq!(db.with(|sql| sql.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))).unwrap(), 2);
+    /// ```
+    pub fn migrate_user_version(
+        &self,
+        baseline: usize,
+        migrations: &[&dyn Migration],
+    ) -> sqlite::Result<()> {
+        self.with(|connection| {
+            let version = |connection: &Connection| -> sqlite::Result<i64> {
+                connection.pragma_query_value(None, "user_version", |row| row.get(0))
+            };
+            let mut current = version(connection)?;
+            if current == 0 && baseline > 0 {
+                let has_tables: bool = connection.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if has_tables {
+                    // `baseline` is a count of migrations, never near i64::MAX.
+                    current = baseline as i64;
+                    connection.pragma_update(None, "user_version", current)?;
+                }
+            }
+            if current < 0 || current as usize > migrations.len() {
+                return Err(sqlite::Error::InvalidParameterName(format!(
+                    "database user_version {current} is beyond the {} known migrations",
+                    migrations.len()
+                )));
+            }
+            for (index, migration) in migrations.iter().enumerate().skip(current as usize) {
+                savepoint(connection, |connection| {
+                    connection.execute_batch(&migration.up())?;
+                    connection.pragma_update(None, "user_version", index as i64 + 1)
                 })?;
             }
             Ok(())
@@ -750,6 +892,86 @@ mod tests {
 
     fn memory() -> Db {
         Db::open(&Config::parse("DB_DATABASE=:memory:"))
+    }
+
+    /// Polls `future` on this thread, parking until its waker fires.
+    fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+        struct Wake(std::thread::Thread);
+        impl std::task::Wake for Wake {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let waker = Arc::new(Wake(std::thread::current())).into();
+        let mut future = std::pin::pin!(future);
+        loop {
+            if let std::task::Poll::Ready(value) = future
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(&waker))
+            {
+                return value;
+            }
+            std::thread::park();
+        }
+    }
+
+    #[test]
+    fn blocking_runs_off_the_calling_thread_and_shares_the_connection() {
+        let db = memory();
+        let caller = std::thread::current().id();
+        let (ran_on, one) = block_on(db.blocking(|sql| {
+            sql.execute_batch("CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1)")
+                .unwrap();
+            (std::thread::current().id(), 1)
+        }));
+        assert_ne!(ran_on, caller);
+        assert_eq!(one, 1);
+        assert_eq!(count(&db, "SELECT count(*) FROM t"), 1, "same connection");
+        // Many at once all complete.
+        let all: Vec<_> = (0..8)
+            .map(|n| db.blocking(move |sql| sql.execute("INSERT INTO t VALUES (?1)", [n])))
+            .collect();
+        for one in all {
+            assert_eq!(block_on(one).unwrap(), 1);
+        }
+        assert_eq!(count(&db, "SELECT count(*) FROM t"), 9);
+    }
+
+    #[test]
+    fn blocking_panics_reach_the_awaiter_and_leave_the_db_usable() {
+        let db = memory();
+        let caught = std::panic::catch_unwind(|| block_on(db.blocking(|_| panic!("boom"))));
+        assert!(caught.is_err());
+        assert_eq!(count(&db, "SELECT 1"), 1);
+    }
+
+    #[test]
+    fn user_version_runs_pending_and_adopts_existing() {
+        let a = Sql("0001", "CREATE TABLE a (n INTEGER)", "");
+        let b = Sql("0002", "CREATE TABLE b (n INTEGER)", "");
+        let bad = Sql("0003", "CREATE TABLE c (n INTEGER); NOT SQL", "");
+        let version = |db: &Db| count(db, "PRAGMA user_version");
+
+        let fresh = memory();
+        fresh.migrate_user_version(1, &[&a, &b]).unwrap();
+        assert_eq!(version(&fresh), 2, "a new database runs everything");
+        fresh.migrate_user_version(1, &[&a, &b]).unwrap();
+        assert_eq!(version(&fresh), 2, "and only once");
+
+        let old = memory();
+        old.with(|sql| sql.execute_batch("CREATE TABLE a (n INTEGER)"))
+            .unwrap();
+        old.migrate_user_version(1, &[&a, &b]).unwrap();
+        assert_eq!(version(&old), 2, "baseline skips what the file has");
+
+        old.migrate_user_version(1, &[&a, &b, &bad]).unwrap_err();
+        assert_eq!(version(&old), 2, "a failing migration is undone");
+        assert_eq!(
+            count(&old, "SELECT count(*) FROM sqlite_master WHERE name = 'c'"),
+            0
+        );
+
+        old.migrate_user_version(1, &[&a]).unwrap_err();
     }
 
     #[test]
