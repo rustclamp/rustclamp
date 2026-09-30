@@ -9,11 +9,11 @@ publish = false
 rustclamp-core = { version = "0.1.0", path = "../../../core" }
 rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
 rustclamp-runtime = { version = "0.1.0", path = "../../../runtime" }
-rustclamp-tooling = { version = "0.1.0", path = "../../tooling", optional = true }
+rustclamp-tooling = { version = "0.3", path = "../../tooling", optional = true }
 
 [features]
 default = []
-tokio-runtime = ["rustclamp-runtime/tokio"]
+tokio-runtime = ["rustclamp-runtime/signal"]
 tooling-inspection = ["dep:rustclamp-tooling"]
 
 [[example]]
