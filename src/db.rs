@@ -78,6 +78,41 @@ impl std::fmt::Debug for Db {
     }
 }
 
+/// Why [`Db::try_connect`] could not open the database.
+#[derive(Debug)]
+pub enum DbError {
+    /// `DB_CONNECTION` names an engine other than `sqlite`.
+    Engine(String),
+    /// SQLite could not open or set up the file.
+    Open {
+        /// The `DB_DATABASE` path.
+        path: String,
+        /// What SQLite said.
+        source: sqlite::Error,
+    },
+}
+
+impl std::fmt::Display for DbError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Engine(engine) => write!(
+                f,
+                "config key DB_CONNECTION is {engine}; only sqlite is supported"
+            ),
+            Self::Open { path, source } => write!(f, "cannot open database {path}: {source}"),
+        }
+    }
+}
+
+impl std::error::Error for DbError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Engine(_) => None,
+            Self::Open { source, .. } => Some(source),
+        }
+    }
+}
+
 /// Which database to open. An app builds it in `app/config/database.rs`.
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -116,20 +151,33 @@ impl Db {
     /// # Panics
     ///
     /// When the connection is not `sqlite` or the database cannot be opened:
-    /// the app should stop at startup rather than run without its data.
+    /// the app should stop at startup rather than run without its data. CLIs
+    /// and services that exit with their own code use [`Db::try_connect`].
     pub fn connect(settings: &Settings) -> Self {
+        if settings.database != ":memory:"
+            && let Some(folder) = std::path::Path::new(&settings.database).parent()
+        {
+            let _ = std::fs::create_dir_all(folder);
+        }
+        Self::try_connect(settings).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Opens the database `settings` names, creating the file but not its
+    /// folder. A file that is not a database is left untouched.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Engine`] when the connection is not `sqlite`,
+    /// [`DbError::Open`] when the database cannot be opened.
+    pub fn try_connect(settings: &Settings) -> Result<Self, DbError> {
         let engine = settings.connection.as_str();
-        assert!(
-            engine == "sqlite",
-            "config key DB_CONNECTION is {engine}; only sqlite is supported"
-        );
+        if engine != "sqlite" {
+            return Err(DbError::Engine(engine.to_owned()));
+        }
         let path = settings.database.as_str();
         let connection = if path == ":memory:" {
             Connection::open_in_memory()
         } else {
-            if let Some(folder) = std::path::Path::new(path).parent() {
-                let _ = std::fs::create_dir_all(folder);
-            }
             Connection::open(path).and_then(|connection| {
                 let patience = std::time::Duration::from_secs(5);
                 connection.busy_timeout(patience)?;
@@ -156,10 +204,13 @@ impl Db {
             connection.pragma_update(None, "foreign_keys", true)?;
             Ok(connection)
         })
-        .unwrap_or_else(|error| panic!("cannot open database {path}: {error}"));
-        Self {
+        .map_err(|source| DbError::Open {
+            path: path.to_owned(),
+            source,
+        })?;
+        Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
-        }
+        })
     }
 
     /// Runs `work` with the connection, holding it for the duration.
@@ -896,6 +947,37 @@ mod tests {
             }
         });
         assert_eq!(Db::open(&config).table("hits").count().unwrap(), 160);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn try_connect_reports_instead_of_panicking() {
+        let folder = std::env::temp_dir().join(format!("rustclamp-db-try-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let settings = |database: &std::path::Path, connection: &str| Settings {
+            connection: connection.into(),
+            database: database.display().to_string(),
+        };
+        let missing = folder.join("missing/database.sqlite");
+        assert!(matches!(
+            Db::try_connect(&settings(&missing, "sqlite")),
+            Err(DbError::Open { .. })
+        ));
+        assert!(!folder.exists(), "no folder is created");
+        assert!(matches!(
+            Db::try_connect(&settings(&missing, "mysql")),
+            Err(DbError::Engine(engine)) if engine == "mysql"
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        let junk = folder.join("junk.sqlite");
+        let bytes = b"not a database, but somebody's file".repeat(40);
+        std::fs::write(&junk, &bytes).unwrap();
+        let error = Db::try_connect(&settings(&junk, "sqlite")).unwrap_err();
+        assert!(
+            error.to_string().starts_with("cannot open database"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&junk).unwrap(), bytes, "left untouched");
         let _ = std::fs::remove_dir_all(folder);
     }
 

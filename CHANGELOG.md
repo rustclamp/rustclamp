@@ -56,17 +56,17 @@
   `completed_at` too; `db::timestamp::format` writes a `SystemTime` the way
   `CURRENT_TIMESTAMP` does (#40).
 
+- `Db::try_connect` returns a `DbError` instead of panicking and does not
+  create the database's folder, so CLIs and services exit with their own
+  code and leave a bad file untouched; `connect` behaves as before (#35).
 
 - `crypto::random_bytes`, `crypto::constant_time_eq`, `crypto::sha1` (for
   protocols such as the WebSocket handshake, not for security) and
   `crypto::base64_encode`/`base64_decode` (#43).
 
-
 - `Throttle::capacity` sets how many clients are tracked at once (10,000 by
   default). At the cap a live window is dropped only when none has expired;
   size it above your peak clients per window (#32).
-
-
 
 - `Db::transaction_immediate`: `BEGIN IMMEDIATE`, so a read-then-write
   cannot fail halfway with "database is locked" (#36).
