@@ -12,6 +12,7 @@ use rustclamp_kernel::{
     Provision, TargetComposition, TargetCompositionError,
 };
 use std::cell::Cell;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -19,7 +20,7 @@ fn assembled_tree_executes_both_commands_with_declared_clock_dependency() {
     let factory_calls = Cell::new(0);
     let make_clock = || {
         factory_calls.set(factory_calls.get() + 1);
-        TestClock(Cell::new(0))
+        TestClock(AtomicU64::new(0))
     };
     let target = CliCommandTarget::<PublicCommands>::new();
     let tree = TargetComposition::<_, PublicCommands>::new(vec![
@@ -43,7 +44,7 @@ fn assembled_tree_executes_both_commands_with_declared_clock_dependency() {
         Ok("hello at 42".to_owned())
     );
     assert_eq!(tree.execute("goodbye", None), Ok("goodbye".to_owned()));
-    assert_eq!(clock.0.get(), 1);
+    assert_eq!(clock.0.load(Ordering::SeqCst), 1);
     assert_eq!(
         tree.execute("missing", None),
         Err(CommandRunError::UnknownCommand("missing".to_owned()))
@@ -206,12 +207,11 @@ fn third_party_target_uses_the_public_extension_contract() {
     assert_eq!(runtime, 5);
 }
 
-struct TestClock(Cell<u64>);
+struct TestClock(AtomicU64);
 
 impl Clock for TestClock {
     fn now(&self) -> SystemTime {
-        let reads = self.0.get() + 1;
-        self.0.set(reads);
+        self.0.fetch_add(1, Ordering::SeqCst);
         UNIX_EPOCH + Duration::from_secs(42)
     }
 }

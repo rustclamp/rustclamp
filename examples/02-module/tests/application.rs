@@ -68,7 +68,7 @@ fn request_state_is_per_invocation_and_not_a_capability() {
     assert_eq!(second.transaction.writes, ["two"]);
 }
 
-struct LocalClockModule(std::rc::Rc<std::cell::Cell<u64>>);
+struct LocalClockModule(std::sync::Arc<std::sync::atomic::AtomicU64>);
 
 impl rustclamp_core::Module for LocalClockModule {
     const ID: ModuleId = ModuleId::new("example.module.local-clock");
@@ -76,7 +76,7 @@ impl rustclamp_core::Module for LocalClockModule {
 
 impl rustclamp_core::Clock for LocalClockModule {
     fn now(&self) -> SystemTime {
-        UNIX_EPOCH + Duration::from_secs(self.0.get())
+        UNIX_EPOCH + Duration::from_secs(self.0.load(std::sync::atomic::Ordering::Relaxed))
     }
 }
 
@@ -88,7 +88,7 @@ impl rustclamp_core::Provides<ClockCapability> for LocalClockModule {
 
 #[test]
 fn local_non_send_clock_can_be_borrowed_without_shared_locking() {
-    let clock = LocalClockModule(std::rc::Rc::new(std::cell::Cell::new(42)));
+    let clock = LocalClockModule(std::sync::Arc::new(std::sync::atomic::AtomicU64::new(42)));
     let provision = Provision::<ClockCapability>::from_module(&clock);
     let clock =
         Resolver::resolve::<ClockCapability>(GreeterModule::ID, &[provision], None).unwrap();

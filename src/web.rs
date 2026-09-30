@@ -1015,7 +1015,7 @@ impl std::error::Error for ServeError {
 /// or grow memory without bound.
 ///
 /// Connections stay open between requests (HTTP/1.1 keep-alive) for up to
-/// [`IDLE_TIMEOUT`] and [`MAX_REQUESTS`]. A thread never sits on an idle
+/// 5 idle seconds and 1,000 requests. A thread never sits on an idle
 /// connection while others wait: it puts it back in the queue, and after each
 /// response a connection goes to the back when others are waiting, so every
 /// connection takes turns.
