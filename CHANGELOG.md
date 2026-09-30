@@ -19,6 +19,16 @@
 
 ### Added
 
+- Account flows (ADR 0016), with `auth` + `mail`: `Auth::register` (no
+  enumeration, no auto-login), email verification (24 h signed link,
+  `auth::verified` guard, `resend_verification`), `forgot`/`open_reset`/
+  `reset` (60 min link, single use, token moved into the session), and
+  `confirm` with the `password_confirmed` guard (3 h). Links come from
+  `APP_URL` and are signed with `APP_KEY`; both are required with `auth` +
+  `mail`. A password change ends every session (fingerprint check in
+  `authenticate`). Auth mail: 3/hour per client, 1 per 10 minutes per
+  address. `User::verified`, `Auth::mark_verified`; `user:create` accounts
+  are verified. Apps need `email_verified_at` on `users`.
 - Mail (ADR 0015), the optional `mail` feature: SMTP with STARTTLS over
   rustls (ring provider; never a plaintext fallback, AUTH only over TLS),
   UTF-8 bodies and RFC 2047 headers, a `log` mailer. `Mailer::send` queues

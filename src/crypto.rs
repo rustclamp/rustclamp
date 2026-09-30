@@ -68,6 +68,12 @@ impl Hash {
 pub struct Key([u8; 32]);
 
 impl Key {
+    /// The raw key, for signing inside the framework.
+    #[cfg(all(feature = "auth", feature = "mail"))]
+    pub(crate) fn bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
     /// A new random key.
     ///
     /// # Panics
