@@ -51,6 +51,10 @@
 
 ### Added
 
+- `Router::reveal_forbidden` answers `403` as `403`, for APIs whose clients
+  already know the resource; by default a `403` is still the `404` page
+  (#27).
+
 - `rustclamp::time` (feature `time`, included by `log` and `db`):
   `format_rfc3339`/`parse_rfc3339` (offsets, fractions), `format_date`/
   `parse_date` and `add_days` on `SystemTime`, no time crate (#42).

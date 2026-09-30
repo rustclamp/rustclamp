@@ -121,6 +121,7 @@ pub struct Router {
     routes: Vec<(&'static str, String, Handler)>,
     middleware: Vec<Middleware>,
     state: request::State,
+    reveal_forbidden: bool,
 }
 
 impl Router {
@@ -240,6 +241,17 @@ impl Router {
         self
     }
 
+    /// Answers `403` as `403`. By default a `403` is answered as the `404`
+    /// page, so a page's existence is not confirmed to someone not allowed to
+    /// see it; an API whose clients already know the resource (bidding on
+    /// your own auction) needs the real status. Set it on the outer router:
+    /// a [`group`](Self::group)'s routes answer as the router they join.
+    #[must_use]
+    pub fn reveal_forbidden(mut self) -> Self {
+        self.reveal_forbidden = true;
+        self
+    }
+
     /// Adds `package`'s routes as a [`group`](Self::group), so middleware the
     /// package declares wraps only its own routes. Routes match in the order
     /// added: routes declared before `.package(...)` win over the package's.
@@ -270,7 +282,7 @@ impl Router {
         };
         // A 403 would confirm the page exists to someone not allowed to see
         // it, so it is answered as the 404 page and logged with its real status.
-        if response.status == 403 {
+        if response.status == 403 && !self.reveal_forbidden {
             Log::notice(format_args!(
                 "http_status_code=403 {} {}",
                 request.method, request.path
@@ -1464,6 +1476,16 @@ mod tests {
             hidden, missing,
             "indistinguishable from a real 404, headers included"
         );
+    }
+
+    #[test]
+    fn forbidden_can_be_revealed() {
+        let routes = Router::new()
+            .reveal_forbidden()
+            .get("/own", |_| Response::text(403, "own_listing"));
+        let response = routes.handle(&Request::get("/own"));
+        assert_eq!(response.status, 403);
+        assert_eq!(response.body, b"own_listing");
     }
 
     #[test]
