@@ -51,6 +51,12 @@
 
 ### Added
 
+- `auth` bearer API tokens (ADR 0023, proposed, #33): `Auth::issue_token` /
+  `revoke_token`, the `bearer` middleware and `token_role` guard, and
+  `Request::principal()`. Tokens are stored as SHA-256; the app owns the
+  `api_tokens` table. Username-only accounts are designed in the ADR, not
+  built.
+
 - JSON APIs on the std server (#28, #29, #30): the router answers `405` with
   `Allow` for a path that exists under other methods (a `HEAD` on a `GET`
   route is now `405`, not `404`); `Router::json_errors` renders `404`, `405`,
