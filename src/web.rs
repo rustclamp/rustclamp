@@ -39,12 +39,14 @@ mod upload;
 mod view;
 
 use std::fs;
-use std::io::{BufReader, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Component, Path};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::SyncSender;
+use std::time::{Duration, Instant};
 
 use crate::log::Log;
 
@@ -901,6 +903,12 @@ pub fn serve(routes: Router) {
 /// connections wait in a queue of four per thread; when it is full, the
 /// operating system's backlog holds the rest, so a flood cannot spawn threads
 /// or grow memory without bound.
+///
+/// Connections stay open between requests (HTTP/1.1 keep-alive) for up to
+/// [`IDLE_TIMEOUT`] and [`MAX_REQUESTS`]. A thread never sits on an idle
+/// connection while others wait: it puts it back in the queue, and after each
+/// response a connection goes to the back when others are waiting, so every
+/// connection takes turns.
 // ponytail: a fixed pool of blocking threads; each slow client holds one for up
 // to READ_TIMEOUT, so size WEB_THREADS above the slow clients you expect, or
 // put nginx in front (it buffers requests), before reaching for async.
@@ -909,66 +917,199 @@ pub fn serve(routes: Router) {
 fn serve_on(listener: TcpListener, routes: Router, threads: usize) {
     let threads = threads.max(1);
     let routes = Arc::new(routes);
-    let (queue, waiting) = std::sync::mpsc::sync_channel::<TcpStream>(threads * 4);
-    let waiting = Arc::new(std::sync::Mutex::new(waiting));
+    let (send, receive) = std::sync::mpsc::sync_channel::<Connection>(threads * 4);
+    let queue = Arc::new(Queue {
+        send,
+        waiting: AtomicUsize::new(0),
+    });
+    let receive = Arc::new(std::sync::Mutex::new(receive));
     for _ in 0..threads {
-        let (routes, waiting) = (Arc::clone(&routes), Arc::clone(&waiting));
+        let (routes, queue, receive) = (
+            Arc::clone(&routes),
+            Arc::clone(&queue),
+            Arc::clone(&receive),
+        );
         std::thread::spawn(move || {
             loop {
                 // The lock is held only while taking the next connection.
-                let next = waiting
+                let next = receive
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .recv();
-                let Ok(stream) = next else { return };
+                let Ok(connection) = next else { return };
+                queue.waiting.fetch_sub(1, Ordering::Relaxed);
                 // A panic outside the handler (writing the response) must not
                 // shrink the pool.
-                let _ = catch_unwind(AssertUnwindSafe(|| respond(stream, &routes)));
+                let _ = catch_unwind(AssertUnwindSafe(|| {
+                    serve_connection(connection, &routes, &queue);
+                }));
             }
         });
     }
     for stream in listener.incoming().flatten() {
-        if queue.send(stream).is_err() {
+        // Head and body go out as two writes; without this the body waits
+        // for the client's delayed ACK on a kept-alive connection.
+        let _ = stream.set_nodelay(true);
+        queue.waiting.fetch_add(1, Ordering::Relaxed);
+        let connection = Connection {
+            reader: BufReader::new(stream),
+            idle_since: Instant::now(),
+            served: 0,
+        };
+        if queue.send.send(connection).is_err() {
             return;
         }
     }
 }
 
-fn respond(mut stream: TcpStream, routes: &Router) {
+/// How long a connection may wait for its next request before it is closed.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Requests answered on one connection before it is closed.
+const MAX_REQUESTS: usize = 1000;
+/// How often a thread waiting on an idle connection checks for queued ones.
+const IDLE_POLL: Duration = Duration::from_millis(100);
+
+/// An accepted connection, with anything the client sent ahead.
+struct Connection {
+    reader: BufReader<TcpStream>,
+    idle_since: Instant,
+    served: usize,
+}
+
+/// Connections waiting for a thread, and how many.
+struct Queue {
+    send: SyncSender<Connection>,
+    waiting: AtomicUsize,
+}
+
+impl Queue {
+    /// Puts `connection` at the back of the queue, or closes it when the
+    /// queue is full.
+    fn requeue(&self, connection: Connection) {
+        self.waiting.fetch_add(1, Ordering::Relaxed);
+        if self.send.try_send(connection).is_err() {
+            self.waiting.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    fn others_waiting(&self) -> bool {
+        self.waiting.load(Ordering::Relaxed) > 0
+    }
+}
+
+/// What a connection did while its thread waited for the next request.
+enum Wait {
+    Ready,
+    Closed,
+    Yield,
+}
+
+/// Answers requests on `connection` until it closes, idles out, or gives its
+/// thread to a queued connection.
+fn serve_connection(mut connection: Connection, routes: &Router, queue: &Queue) {
+    loop {
+        match next_request(&mut connection, queue) {
+            Wait::Ready => {}
+            Wait::Closed => return,
+            Wait::Yield => return queue.requeue(connection),
+        }
+        connection.served += 1;
+        if !respond(&mut connection, routes) {
+            return;
+        }
+        connection.idle_since = Instant::now();
+        if queue.others_waiting() {
+            return queue.requeue(connection);
+        }
+    }
+}
+
+/// Waits until the client starts its next request, it hangs up or idles out,
+/// or another connection is waiting for a thread.
+fn next_request(connection: &mut Connection, queue: &Queue) -> Wait {
+    let _ = connection
+        .reader
+        .get_ref()
+        .set_read_timeout(Some(IDLE_POLL));
+    loop {
+        match connection.reader.fill_buf() {
+            Ok([]) => return Wait::Closed,
+            Ok(_) => return Wait::Ready,
+            Err(problem)
+                if matches!(
+                    problem.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if connection.idle_since.elapsed() >= IDLE_TIMEOUT {
+                    return Wait::Closed;
+                }
+                if queue.others_waiting() {
+                    return Wait::Yield;
+                }
+            }
+            Err(problem) if problem.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return Wait::Closed,
+        }
+    }
+}
+
+/// Reads one request from `connection` and writes its response. Returns
+/// whether the connection stays open for another request.
+fn respond(connection: &mut Connection, routes: &Router) -> bool {
+    let stream = connection.reader.get_ref();
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let peer = stream.peer_addr().ok().map(|address| address.ip());
-    let parsed = request::parse(&mut BufReader::new(&stream), peer);
-    let response = match parsed {
+    let parsed = request::parse(&mut connection.reader, peer);
+    let last = connection.served >= MAX_REQUESTS;
+    let (response, keep, head) = match parsed {
         // A panicking handler answers 500 instead of stopping the server.
         Ok(request) => {
-            catch_unwind(AssertUnwindSafe(|| routes.handle(&request))).unwrap_or_else(|panic| {
-                let reason = panic
-                    .downcast_ref::<&str>()
-                    .map(|text| (*text).to_owned())
-                    .or_else(|| panic.downcast_ref::<String>().cloned())
-                    .unwrap_or_default();
-                Log::error(format_args!(
-                    "{} {} panicked: {reason}",
-                    request.method, request.path
-                ));
-                error(500)
-            })
+            let response = catch_unwind(AssertUnwindSafe(|| routes.handle(&request)))
+                .unwrap_or_else(|panic| {
+                    let reason = panic
+                        .downcast_ref::<&str>()
+                        .map(|text| (*text).to_owned())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_default();
+                    Log::error(format_args!(
+                        "{} {} panicked: {reason}",
+                        request.method, request.path
+                    ));
+                    error(500)
+                });
+            (
+                response,
+                request.keep_alive && !last,
+                request.method == "HEAD",
+            )
         }
-        Err(response) => response,
+        // The rest of a request that failed to parse cannot be found.
+        Err(response) => (response, false, false),
     };
-    let mut head = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+    let mut stream = connection.reader.get_ref();
+    let mut text = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}",
         response.status,
         reason(response.status),
         response.content_type,
-        response.body.len()
+        response.body.len(),
+        if keep { "" } else { "Connection: close\r\n" }
     );
     for (name, value) in &response.headers {
-        let _ = std::fmt::Write::write_fmt(&mut head, format_args!("{name}: {value}\r\n"));
+        let _ = std::fmt::Write::write_fmt(&mut text, format_args!("{name}: {value}\r\n"));
     }
-    head.push_str("\r\n");
-    let _ = stream.write_all(head.as_bytes());
-    let _ = stream.write_all(&response.body);
+    text.push_str("\r\n");
+    // A HEAD response says how long the body is but leaves it out, or the
+    // client would read it as the start of the next response.
+    let written = stream.write_all(text.as_bytes()).and_then(|()| {
+        if head {
+            Ok(())
+        } else {
+            stream.write_all(&response.body)
+        }
+    });
+    keep && written.is_ok()
 }
 
 #[cfg(test)]
@@ -990,7 +1131,7 @@ mod tests {
         let get = move || {
             let mut stream = TcpStream::connect(address).unwrap();
             stream
-                .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
+                .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
                 .unwrap();
             let mut answer = String::new();
             stream.read_to_string(&mut answer).unwrap();
@@ -1013,6 +1154,55 @@ mod tests {
         let started = Instant::now();
         assert!(get().ends_with("done"));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn connections_stay_open_and_idle_ones_make_way() {
+        use std::io::Read;
+        use std::time::Instant;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let routes = Router::new().get("/hi", |_| Response::text(200, "hi"));
+        // One thread: an idle kept-alive connection would block everyone else.
+        std::thread::spawn(move || serve_on(listener, routes, 1));
+
+        // Two requests, then a HEAD without a body, then close, on one connection.
+        let mut open = TcpStream::connect(address).unwrap();
+        open.write_all(b"GET /hi HTTP/1.1\r\n\r\nGET /hi HTTP/1.1\r\n\r\n")
+            .unwrap();
+        open.write_all(b"HEAD /hi HTTP/1.1\r\n\r\nGET /hi HTTP/1.1\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut answers = String::new();
+        open.read_to_string(&mut answers).unwrap();
+        assert_eq!(answers.matches("HTTP/1.1 200 OK").count(), 3, "{answers}");
+        assert_eq!(answers.matches("Connection: close").count(), 1, "{answers}");
+        assert!(
+            answers.ends_with("Connection: close\r\n\r\nhi"),
+            "{answers}"
+        );
+        // HEAD was answered with 404 and no body, so the next response parsed.
+        assert!(answers.contains("404 Not Found"), "{answers}");
+        assert!(!answers.contains('<'), "HEAD sent a body: {answers}");
+
+        // An idle kept-alive connection gives the only thread to a new one.
+        let mut idle = TcpStream::connect(address).unwrap();
+        idle.write_all(b"GET /hi HTTP/1.1\r\n\r\n").unwrap();
+        let mut first = [0; 16];
+        idle.read_exact(&mut first).unwrap();
+        let started = Instant::now();
+        let mut other = TcpStream::connect(address).unwrap();
+        other
+            .write_all(b"GET /hi HTTP/1.1\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut answer = String::new();
+        other.read_to_string(&mut answer).unwrap();
+        assert!(answer.ends_with("hi"), "{answer}");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

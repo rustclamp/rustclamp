@@ -22,6 +22,11 @@
 - Faster view rendering, same output: a render reads and parses each view once,
   so an `@include` inside `@foreach` no longer rereads its file on every
   iteration. `{{ }}` escapes in one pass without copying the value.
+- `web::serve` keeps connections open between requests (HTTP/1.1
+  keep-alive): up to 1000 requests or 5 s idle per connection. A thread
+  never waits on an idle connection while others are queued, and busy
+  connections take turns. HTTP/1.0 and `Connection: close` still close.
+  `HEAD` responses no longer carry a body.
 
 ### Added
 
