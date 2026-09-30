@@ -69,6 +69,14 @@ pub type Next<'a> = &'a dyn Fn(&Request) -> Response;
 
 type Handler = Box<dyn Fn(&Request) -> Response + Send + Sync>;
 
+/// One route: method, path pattern, handler and its own body limit, if any.
+struct Route {
+    method: &'static str,
+    pattern: String,
+    handler: Handler,
+    body_limit: Option<usize>,
+}
+
 /// What a handler may return: a [`Response`], or a [`Result`] whose error is
 /// logged with the request's method and path and answered with `500`, as an
 /// uncaught exception is in Laravel. So a handler can use `?`:
@@ -118,10 +126,12 @@ type Middleware = Arc<dyn Fn(&Request, Next) -> Response + Send + Sync>;
 /// The app's routes: exact method and path matches, checked in order.
 #[derive(Default)]
 pub struct Router {
-    routes: Vec<(&'static str, String, Handler)>,
+    routes: Vec<Route>,
     middleware: Vec<Middleware>,
     state: request::State,
     reveal_forbidden: bool,
+    json_errors: bool,
+    body_limit: Option<usize>,
 }
 
 impl Router {
@@ -177,6 +187,13 @@ impl Router {
 
     /// Answers `method path` with `handler`. A `{name}` segment matches any
     /// one segment and is read with [`Request::param`], as in `/blog/{slug}`.
+    /// `{name:u64}` matches only a segment that parses as that type (`u32`,
+    /// `u64`, `i32` or `i64`), so `/users/{id:u64}` leaves `/users/me` to the
+    /// next route or a `404`; read it with [`Request::param_as`].
+    ///
+    /// # Panics
+    ///
+    /// When a `{name:type}` names another type.
     #[must_use]
     pub fn route<R: IntoResponse>(
         mut self,
@@ -184,11 +201,24 @@ impl Router {
         path: &str,
         handler: impl Fn(&Request) -> R + Send + Sync + 'static,
     ) -> Self {
-        self.routes.push((
+        for segment in path.split('/') {
+            if let Some((_, kind)) = segment
+                .strip_prefix('{')
+                .and_then(|name| name.strip_suffix('}'))
+                .and_then(|name| name.split_once(':'))
+            {
+                assert!(
+                    matches!(kind, "u32" | "u64" | "i32" | "i64"),
+                    "unknown route parameter type `{kind}` in {path}"
+                );
+            }
+        }
+        self.routes.push(Route {
             method,
-            path.into(),
-            Box::new(move |request: &Request| handler(request).into_response(request)),
-        ));
+            pattern: path.into(),
+            handler: Box::new(move |request: &Request| handler(request).into_response(request)),
+            body_limit: None,
+        });
         self
     }
 
@@ -230,15 +260,68 @@ impl Router {
     pub fn group(mut self, build: impl FnOnce(Router) -> Router) -> Self {
         let group = build(Router::new());
         let chain: Arc<[Middleware]> = group.middleware.into();
-        for (method, path, handler) in group.routes {
+        let json = group.json_errors;
+        for route in group.routes {
             let chain = Arc::clone(&chain);
-            self.routes.push((
-                method,
-                path,
-                Box::new(move |request: &Request| run(&chain, request, &handler)),
-            ));
+            let handler = route.handler;
+            self.routes.push(Route {
+                handler: Box::new(move |request: &Request| {
+                    let response = run(&chain, request, &handler);
+                    if json {
+                        problem_page(response)
+                    } else {
+                        response
+                    }
+                }),
+                body_limit: route.body_limit.or(group.body_limit),
+                ..route
+            });
         }
         self
+    }
+
+    /// Answers errors as JSON, like [`problem`], instead of error pages: the
+    /// router's own `404`, `405`, `413` and `500`, and any error page a
+    /// handler returns. Unmatched `GET`s no longer fall back to files in
+    /// [`PUBLIC`]. Inside a [`group`](Self::group) it covers that group's
+    /// routes only; the router's own answers follow the outer router.
+    #[must_use]
+    pub fn json_errors(mut self) -> Self {
+        self.json_errors = true;
+        self
+    }
+
+    /// Sets the largest request body, in bytes, for this router, or for the
+    /// routes of the [`group`](Self::group) it is set in (a group wins over
+    /// the router). Without it the limit is [`MAX_BODY`], or [`MAX_UPLOAD`]
+    /// for multipart forms. A larger body is not read: middleware runs, then
+    /// the matched route answers `413`, so auth comes first. Middleware and
+    /// handlers can ask with [`Request::body_too_large`].
+    #[must_use]
+    pub fn body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = Some(bytes);
+        self
+    }
+
+    /// The most bytes of body `request` may send, decided from its route
+    /// before the body is read.
+    fn limit_for(&self, request: &Request) -> usize {
+        let route = self.routes.iter().find(|route| {
+            route.method == request.method && params(&route.pattern, &request.path).is_some()
+        });
+        route
+            .and_then(|route| route.body_limit)
+            .or(self.body_limit)
+            .unwrap_or_else(|| request::default_limit(request))
+    }
+
+    /// `response`, as JSON if this router answers errors that way.
+    fn finish(&self, response: Response) -> Response {
+        if self.json_errors {
+            problem_page(response)
+        } else {
+            response
+        }
     }
 
     /// Answers `403` as `403`. By default a `403` is answered as the `404`
@@ -280,6 +363,7 @@ impl Router {
                 self.dispatch(request)
             })
         };
+        let response = self.finish(response);
         // A 403 would confirm the page exists to someone not allowed to see
         // it, so it is answered as the 404 page and logged with its real status.
         if response.status == 403 && !self.reveal_forbidden {
@@ -292,7 +376,7 @@ impl Router {
             // go: a URL that matches no route never runs session middleware,
             // so a session cookie would give the page away. A refused request
             // never moved the session, so nothing is lost.
-            let mut hidden = error(404);
+            let mut hidden = self.finish(error(404));
             hidden.headers = response
                 .headers
                 .into_iter()
@@ -304,19 +388,45 @@ impl Router {
     }
 
     fn dispatch(&self, request: &Request) -> Response {
-        let matched = self.routes.iter().find_map(|(method, pattern, handler)| {
-            let params = (*method == request.method).then(|| params(pattern, &request.path))??;
-            Some((handler, params))
+        let matched = self.routes.iter().find_map(|route| {
+            let params = (route.method == request.method)
+                .then(|| params(&route.pattern, &request.path))??;
+            Some((&route.handler, params))
         });
         match matched {
+            // The body was not read: the middleware has run, now refuse it.
+            Some(_) if request.body_too_large() => error(413),
             Some((handler, params)) if params.is_empty() => handler(request),
             Some((handler, params)) => {
                 let mut request = request.clone();
                 request.params = params;
                 handler(&request)
             }
-            None if request.method == "GET" => asset(&request.path),
-            None => error(404),
+            None => self.unmatched(request),
+        }
+    }
+
+    /// No route has this method and path: a static file for `GET`, `405` with
+    /// `Allow` when the path exists under other methods, else `404`.
+    fn unmatched(&self, request: &Request) -> Response {
+        let mut allow: Vec<&str> = self
+            .routes
+            .iter()
+            .filter(|route| params(&route.pattern, &request.path).is_some())
+            .map(|route| route.method)
+            .collect();
+        allow.sort_unstable();
+        allow.dedup();
+        if request.method == "GET" && !self.json_errors {
+            let file = asset(&request.path);
+            if file.status != 404 || allow.is_empty() {
+                return file;
+            }
+        }
+        if allow.is_empty() {
+            error(404)
+        } else {
+            error(405).with_header("Allow", &allow.join(", "))
         }
     }
 }
@@ -387,7 +497,20 @@ fn params(pattern: &str, path: &str) -> Option<Vec<(String, String)>> {
             .strip_prefix('{')
             .and_then(|name| name.strip_suffix('}'))
         {
-            Some(name) if !segment.is_empty() => params.push((name.to_owned(), segment.to_owned())),
+            Some(name) if !segment.is_empty() => {
+                let (name, kind) = name.split_once(':').unwrap_or((name, ""));
+                let fits = match kind {
+                    "u32" => segment.parse::<u32>().is_ok(),
+                    "u64" => segment.parse::<u64>().is_ok(),
+                    "i32" => segment.parse::<i32>().is_ok(),
+                    "i64" => segment.parse::<i64>().is_ok(),
+                    _ => true,
+                };
+                if !fits {
+                    return None;
+                }
+                params.push((name.to_owned(), segment.to_owned()));
+            }
             Some(_) => return None,
             None if expected == segment => {}
             None => return None,
@@ -453,7 +576,52 @@ impl Response {
 
 /// A `200` JSON response with a pre-serialized body.
 pub fn json(body: &str) -> Response {
-    Response::new(200, "application/json", body)
+    json_status(200, body)
+}
+
+/// A JSON response with `status` and a pre-serialized body, such as `201`
+/// for a created resource.
+pub fn json_status(status: u16, body: &str) -> Response {
+    Response::new(status, "application/json", body)
+}
+
+/// An RFC 9457 `application/problem+json` error for `status`, in the shape
+/// of `rustclamp-http`'s `HttpError`: `type`, `title` (the [`reason`]),
+/// `status` and `detail`.
+pub fn problem(status: u16, detail: &str) -> Response {
+    let body = format!(
+        r#"{{"type":"about:blank","title":"{}","status":{status},"detail":"{}"}}"#,
+        reason(status),
+        json_escape(detail)
+    );
+    Response::new(status, "application/problem+json", body)
+}
+
+/// `response` as [`problem`] JSON when it is a built-in error page, keeping
+/// its headers; anything else is left alone.
+fn problem_page(response: Response) -> Response {
+    if response.status < 400 || !response.content_type.starts_with("text/html") {
+        return response;
+    }
+    let mut json = problem(response.status, reason(response.status));
+    json.headers = response.headers;
+    json
+}
+
+fn json_escape(text: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c < ' ' => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// A `302` redirect to `location`.
@@ -664,7 +832,8 @@ a:focus-visible {{ outline: 2px solid var(--accent); outline-offset: 2px; }}
     )
 }
 
-fn reason(status: u16) -> &'static str {
+/// The reason phrase of `status`, such as `Not Found` for `404`.
+pub fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
         201 => "Created",
@@ -1266,7 +1435,9 @@ fn respond(connection: &mut Connection, routes: &Router, shutdown: &Shutdown) ->
     let stream = connection.reader.get_ref();
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let peer = stream.peer_addr().ok().map(|address| address.ip());
-    let parsed = request::parse(&mut connection.reader, peer);
+    let parsed = request::parse(&mut connection.reader, peer, &|request| {
+        routes.limit_for(request)
+    });
     let last = connection.served >= MAX_REQUESTS;
     let (response, keep, head) = match parsed {
         // A panicking handler answers 500 instead of stopping the server.
@@ -1284,7 +1455,9 @@ fn respond(connection: &mut Connection, routes: &Router, shutdown: &Shutdown) ->
                             "{} {} panicked: {reason}",
                             request.method, request.path
                         ));
-                        error(500).with_header("x-request-id", &reference.to_string())
+                        routes
+                            .finish(error(500))
+                            .with_header("x-request-id", &reference.to_string())
                     })
                 });
             (
@@ -1295,7 +1468,7 @@ fn respond(connection: &mut Connection, routes: &Router, shutdown: &Shutdown) ->
             )
         }
         // The rest of a request that failed to parse cannot be found.
-        Err(response) => (response, false, false),
+        Err(response) => (routes.finish(response), false, false),
     };
     let mut stream = connection.reader.get_ref();
     let mut text = format!(
@@ -1390,8 +1563,8 @@ mod tests {
         let last = &answers[answers.rfind("HTTP/1.1").unwrap()..];
         assert!(last.contains("Connection: close\r\n"), "{answers}");
         assert!(last.ends_with("\r\n\r\nhi"), "{answers}");
-        // HEAD was answered with 404 and no body, so the next response parsed.
-        assert!(answers.contains("404 Not Found"), "{answers}");
+        // HEAD was answered with 405 and no body, so the next response parsed.
+        assert!(answers.contains("405 Method Not Allowed"), "{answers}");
         assert!(!answers.contains('<'), "HEAD sent a body: {answers}");
 
         // An idle kept-alive connection gives the only thread to a new one.
@@ -1512,7 +1685,7 @@ mod tests {
         assert_eq!(routes.handle(&Request::get("/hello")).status, 200);
         assert_eq!(routes.handle(&Request::post("/hello")).status, 201);
         assert_eq!(routes.handle(&Request::get("/missing.css")).status, 404);
-        assert_eq!(routes.handle(&Request::new("DELETE", "/hello")).status, 404);
+        assert_eq!(routes.handle(&Request::new("DELETE", "/hello")).status, 405);
     }
 
     #[test]
@@ -1736,6 +1909,199 @@ mod tests {
             (response.status, response.body),
             (200, br#"{"status":"ok"}"#.to_vec())
         );
+    }
+
+    #[test]
+    fn json_status_and_public_reason() {
+        let created = json_status(201, "{}");
+        assert_eq!(
+            (created.status, created.content_type),
+            (201, "application/json")
+        );
+        assert_eq!(reason(404), "Not Found");
+    }
+
+    #[test]
+    fn a_path_under_other_methods_is_405_with_allow() {
+        let routes = Router::new()
+            .get("/items", |_| Response::text(200, "list"))
+            .post("/items", |_| Response::text(201, "made"))
+            .get("/items/{id}", |_| Response::text(200, "one"));
+        let response = routes.handle(&Request::new("DELETE", "/items"));
+        assert_eq!(response.status, 405);
+        assert_eq!(response.header("allow"), Some("GET, POST"));
+        let response = routes.handle(&Request::post("/items/3"));
+        assert_eq!(
+            (response.status, response.header("allow")),
+            (405, Some("GET"))
+        );
+        assert_eq!(routes.handle(&Request::post("/nope")).status, 404);
+        assert_eq!(routes.handle(&Request::get("/nope")).status, 404);
+    }
+
+    #[test]
+    fn json_errors_render_problem_json() {
+        let routes = Router::new()
+            .json_errors()
+            .get("/boom", |_| -> Result { Err("secret detail".into()) })
+            .get("/plain", |_| Response::text(404, "mine"))
+            .post("/only", |_| Response::text(200, "ok"));
+        let check = |response: Response, status: u16, title: &str| {
+            assert_eq!(response.status, status);
+            assert_eq!(response.content_type, "application/problem+json");
+            assert_eq!(
+                response.body_text(),
+                format!(
+                    r#"{{"type":"about:blank","title":"{title}","status":{status},"detail":"{title}"}}"#
+                )
+            );
+        };
+        check(routes.handle(&Request::get("/missing")), 404, "Not Found");
+        let response = routes.handle(&Request::get("/only"));
+        assert_eq!(response.header("allow"), Some("POST"));
+        check(response, 405, "Method Not Allowed");
+        check(
+            routes.handle(&Request::get("/boom")),
+            500,
+            "Internal Server Error",
+        );
+        // A handler's own non-page answer is left alone.
+        assert_eq!(routes.handle(&Request::get("/plain")).body, b"mine");
+        // A 403 is still disguised as a 404, in JSON.
+        let hidden = Router::new()
+            .json_errors()
+            .get("/x", |_| Response::text(403, ""))
+            .handle(&Request::get("/x"));
+        assert_eq!(hidden.status, 404);
+        assert_eq!(hidden.content_type, "application/problem+json");
+    }
+
+    #[test]
+    fn json_errors_can_cover_one_group() {
+        let routes = Router::new()
+            .group(|api| {
+                api.json_errors()
+                    .get("/api/boom", |_| -> Result { Err("x".into()) })
+            })
+            .get("/boom", |_| -> Result { Err("x".into()) });
+        assert_eq!(
+            routes.handle(&Request::get("/api/boom")).content_type,
+            "application/problem+json"
+        );
+        assert_eq!(
+            routes.handle(&Request::get("/boom")).content_type,
+            "text/html; charset=utf-8"
+        );
+    }
+
+    #[test]
+    fn problem_escapes_its_detail() {
+        assert_eq!(
+            problem(400, "a \"b\"\n").body_text(),
+            r#"{"type":"about:blank","title":"Bad Request","status":400,"detail":"a \"b\"\u000a"}"#
+        );
+    }
+
+    #[test]
+    fn body_limits_come_from_the_group_or_router() {
+        let ok = |_: &Request| Response::text(200, "ok");
+        let routes = Router::new()
+            .body_limit(100)
+            .post("/router", ok)
+            .group(|small| small.body_limit(10).post("/group", ok))
+            .group(|inherits| inherits.post("/inherits", ok));
+        let limit = |path: &str| routes.limit_for(&Request::post(path));
+        assert_eq!(
+            (limit("/router"), limit("/group"), limit("/inherits")),
+            (100, 10, 100)
+        );
+        assert_eq!(limit("/unknown"), 100);
+        assert_eq!(Router::new().limit_for(&Request::post("/")), MAX_BODY);
+    }
+
+    #[test]
+    fn an_oversized_body_is_refused_after_auth_and_never_read() {
+        use std::io::Read;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let routes = Router::new()
+            .json_errors()
+            .body_limit(16)
+            .middleware(|request, next| {
+                if request.header("authorization").is_some() {
+                    next(request)
+                } else {
+                    problem(401, "sign in")
+                }
+            })
+            .post("/upload", |_| Response::text(200, "stored"));
+        std::thread::spawn(move || serve_on(listener, routes, 2));
+        // No body is ever sent: a server that tried to read it would wait
+        // for the read timeout instead of answering.
+        let send = |head: &str| {
+            let mut stream = TcpStream::connect(address).unwrap();
+            let started = Instant::now();
+            let request = format!("POST /upload HTTP/1.1\r\n{head}Content-Length: 9999\r\n\r\n");
+            stream.write_all(request.as_bytes()).unwrap();
+            let mut answer = String::new();
+            stream.read_to_string(&mut answer).unwrap();
+            assert!(started.elapsed() < Duration::from_secs(5), "{answer}");
+            answer
+        };
+        assert!(send("").starts_with("HTTP/1.1 401"));
+        let refused = send("Authorization: Bearer x\r\n");
+        assert!(
+            refused.starts_with("HTTP/1.1 413 Content Too Large"),
+            "{refused}"
+        );
+        assert!(refused.contains("application/problem+json"), "{refused}");
+    }
+
+    #[test]
+    fn typed_params_only_match_what_parses() {
+        let routes = Router::new()
+            .get("/users/me", |_| Response::text(200, "me"))
+            .get("/users/{id:u64}", |request| {
+                let next = request.param_as::<u64>("id").unwrap() + 1;
+                Response::text(200, &next.to_string())
+            })
+            .get("/tags/{name}", |request| {
+                Response::text(200, &format!("{:?}", request.param_as::<u8>("name")))
+            });
+        let body = |path: &str| routes.handle(&Request::get(path)).body_text().into_owned();
+        assert_eq!(body("/users/41"), "42");
+        assert_eq!(body("/users/me"), "me");
+        assert_eq!(routes.handle(&Request::get("/users/-1")).status, 404);
+        assert_eq!(routes.handle(&Request::get("/users/x")).status, 404);
+        assert_eq!(body("/tags/7"), "Some(7)");
+        assert_eq!(body("/tags/seven"), "None");
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown route parameter type")]
+    fn an_unknown_param_type_is_refused_when_declared() {
+        let _ = Router::new().get("/a/{id:uuid}", |_| Response::text(200, ""));
+    }
+
+    #[test]
+    fn extensions_carry_typed_values_from_middleware_to_handlers() {
+        struct Principal(&'static str);
+        let routes = Router::new()
+            .middleware(|request, next| {
+                let request = request.clone().with_extension(Principal("ann"));
+                next(
+                    &request
+                        .with_extension(Principal("bob"))
+                        .with_extension(7_u8),
+                )
+            })
+            .get("/me", |request| {
+                let who = request.extension::<Principal>().map_or("nobody", |p| p.0);
+                Response::text(200, &format!("{who} {:?}", request.extension::<u8>()))
+            });
+        assert_eq!(routes.handle(&Request::get("/me")).body, b"bob Some(7)");
+        assert_eq!(Request::get("/").extension::<u8>(), None);
     }
 
     #[test]
