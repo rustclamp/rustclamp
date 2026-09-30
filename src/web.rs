@@ -912,28 +912,104 @@ const THREADS: usize = 32;
 /// the rest.
 ///
 /// Uses `PORT` when set; otherwise the first free port from 8080 to 8099, then
-/// any free port. Exits the process if `PORT` is set but unavailable.
+/// any free port. See [`try_serve`] to handle a bad setting or a busy port
+/// yourself.
+///
+/// # Panics
+///
+/// When `PORT` or `WEB_THREADS` is not a number. Exits the process with code 1
+/// when `PORT` is set but unavailable.
 pub fn serve(routes: Router) {
-    let ports: Vec<u16> = match std::env::var("PORT") {
-        Ok(port) => vec![port.parse().expect("PORT must be a number")],
-        Err(_) => (8080..8100).chain([0]).collect(),
-    };
-    let Some(listener) = ports
-        .iter()
-        .find_map(|port| TcpListener::bind(("127.0.0.1", *port)).ok())
-    else {
-        eprintln!("Port {} is in use; set PORT to another one.", ports[0]);
-        std::process::exit(1);
-    };
-    let address = listener.local_addr().expect("listener has an address");
-    let threads = std::env::var("WEB_THREADS").map_or(THREADS, |threads| {
-        threads.parse().expect("WEB_THREADS must be a number")
-    });
-    println!("Serving on http://{address}");
-    serve_on(listener, routes, threads);
+    match try_serve(routes) {
+        Ok(()) => {}
+        Err(ServeError::Config(error)) => panic!("{error}"),
+        Err(error @ ServeError::Bind { .. }) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
 }
 
-/// Answers connections from `listener` on `threads` worker threads. Accepted
+/// [`serve`], but a bad setting or a busy port comes back as an error, so a
+/// service can exit with its own code. Returns only on an error.
+///
+/// # Errors
+///
+/// [`ServeError::Config`] when `PORT` or `WEB_THREADS` is set but is not a
+/// number, [`ServeError::Bind`] when no port could be bound.
+pub fn try_serve(routes: Router) -> std::result::Result<(), ServeError> {
+    // The process environment only, as before: `.env` never picked the port.
+    let (listener, threads) = bind(&crate::config::Config::from_env())?;
+    let address = listener.local_addr().expect("listener has an address");
+    println!("Serving on http://{address}");
+    serve_on(listener, routes, threads);
+    Ok(())
+}
+
+/// The listener and thread count `PORT` and `WEB_THREADS` in `config` ask for.
+fn bind(config: &crate::config::Config) -> std::result::Result<(TcpListener, usize), ServeError> {
+    let ports: Vec<u16> = match config.get_parsed("PORT").map_err(ServeError::Config)? {
+        Some(port) => vec![port],
+        None => (8080..8100).chain([0]).collect(),
+    };
+    let threads = config
+        .get_parsed("WEB_THREADS")
+        .map_err(ServeError::Config)?
+        .unwrap_or(THREADS);
+    let mut last = None;
+    let listener = ports
+        .iter()
+        .find_map(|port| {
+            TcpListener::bind(("127.0.0.1", *port))
+                .map_err(|error| last = Some(error))
+                .ok()
+        })
+        .ok_or_else(|| ServeError::Bind {
+            port: ports[0],
+            source: last.unwrap_or_else(|| std::io::ErrorKind::AddrInUse.into()),
+        })?;
+    Ok((listener, threads))
+}
+
+/// Why [`try_serve`] could not start.
+#[derive(Debug)]
+pub enum ServeError {
+    /// `PORT` or `WEB_THREADS` is set but is not a number.
+    Config(crate::config::ConfigError),
+    /// No port could be bound: `port` is `PORT`, or 8080 when unset.
+    Bind {
+        /// The port asked for first.
+        port: u16,
+        /// Why the last bind failed.
+        source: std::io::Error,
+    },
+}
+
+impl std::fmt::Display for ServeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Config(error) => write!(f, "{error}"),
+            Self::Bind { port, source } => {
+                write!(
+                    f,
+                    "Port {port} is in use; set PORT to another one ({source})."
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ServeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Bind { source, .. } => Some(source),
+        }
+    }
+}
+
+/// Answers connections from `listener`, bound by the app itself, on
+/// `threads` worker threads, until the listener fails. Accepted
 /// connections wait in a queue of four per thread; when it is full, the
 /// operating system's backlog holds the rest, so a flood cannot spawn threads
 /// or grow memory without bound.
@@ -948,7 +1024,7 @@ pub fn serve(routes: Router) {
 // put nginx in front (it buffers requests), before reaching for async.
 // Memory: each thread holds one parsed request, so the worst case is
 // WEB_THREADS x the largest body (10 MiB uploads: 32 x 10 MiB = 320 MiB).
-fn serve_on(listener: TcpListener, routes: Router, threads: usize) {
+pub fn serve_on(listener: TcpListener, routes: Router, threads: usize) {
     let threads = threads.max(1);
     let routes = Arc::new(routes);
     let (send, receive) = std::sync::mpsc::sync_channel::<Connection>(threads * 4);
@@ -1486,6 +1562,25 @@ mod tests {
         let response = routes.handle(&Request::get("/own"));
         assert_eq!(response.status, 403);
         assert_eq!(response.body, b"own_listing");
+    }
+
+    #[test]
+    fn bad_settings_and_busy_ports_are_errors() {
+        use crate::config::Config;
+        assert!(matches!(
+            bind(&Config::parse("PORT=eighty")),
+            Err(ServeError::Config(_))
+        ));
+        assert!(matches!(
+            bind(&Config::parse("PORT=0\nWEB_THREADS=many")),
+            Err(ServeError::Config(_))
+        ));
+        let taken = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = taken.local_addr().unwrap().port();
+        let busy = bind(&Config::parse(&format!("PORT={port}"))).unwrap_err();
+        assert!(matches!(busy, ServeError::Bind { port: p, .. } if p == port));
+        let (_listener, threads) = bind(&Config::parse("PORT=0\nWEB_THREADS=3")).unwrap();
+        assert_eq!(threads, 3);
     }
 
     #[test]
