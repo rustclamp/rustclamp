@@ -64,6 +64,10 @@
   idle kept-alive connections close, and it waits up to a grace period for
   the rest (#31).
 
+- `Db::try_connect_with(settings, Journal::Keep)` opens a file database
+  without switching it to WAL, so a rollback-journal file's header is never
+  rewritten; `try_connect` still uses WAL (#35).
+
 - `rustclamp::time` (feature `time`, included by `log` and `db`):
   `format_rfc3339`/`parse_rfc3339` (offsets, fractions), `format_date`/
   `parse_date` and `add_days` on `SystemTime`, no time crate (#42).

@@ -113,6 +113,17 @@ impl std::error::Error for DbError {
     }
 }
 
+/// The journal mode [`Db::try_connect_with`] leaves a file database in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Journal {
+    /// Write-ahead log: readers keep working while a write is in progress.
+    #[default]
+    Wal,
+    /// Whatever the file already uses; a new file gets SQLite's rollback
+    /// journal. Nothing is written to the file to switch modes.
+    Keep,
+}
+
 /// Which database to open. An app builds it in `app/config/database.rs`.
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -173,6 +184,17 @@ impl Db {
     /// [`DbError::Engine`] when the connection is not `sqlite`,
     /// [`DbError::Open`] when the database cannot be opened.
     pub fn try_connect(settings: &Settings) -> Result<Self, DbError> {
+        Self::try_connect_with(settings, Journal::Wal)
+    }
+
+    /// [`Db::try_connect`], choosing the journal mode: [`Journal::Keep`]
+    /// leaves the file's own mode alone, so a file that uses the rollback
+    /// journal is opened without rewriting its header.
+    ///
+    /// # Errors
+    ///
+    /// As [`Db::try_connect`].
+    pub fn try_connect_with(settings: &Settings, journal: Journal) -> Result<Self, DbError> {
         let engine = settings.connection.as_str();
         if engine != "sqlite" {
             return Err(DbError::Engine(engine.to_owned()));
@@ -189,15 +211,17 @@ impl Db {
                 // answers BUSY at once there (deadlock avoidance) without
                 // calling the busy handler, so racing first opens retry (#34).
                 let deadline = std::time::Instant::now() + patience;
-                loop {
-                    match connection.pragma_update(None, "journal_mode", "WAL") {
-                        Err(rusqlite::Error::SqliteFailure(error, _))
-                            if error.code == rusqlite::ErrorCode::DatabaseBusy
-                                && std::time::Instant::now() < deadline =>
-                        {
-                            std::thread::sleep(std::time::Duration::from_millis(10));
+                if journal == Journal::Wal {
+                    loop {
+                        match connection.pragma_update(None, "journal_mode", "WAL") {
+                            Err(rusqlite::Error::SqliteFailure(error, _))
+                                if error.code == rusqlite::ErrorCode::DatabaseBusy
+                                    && std::time::Instant::now() < deadline =>
+                            {
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            result => break result?,
                         }
-                        result => break result?,
                     }
                 }
                 Ok(connection)
@@ -981,6 +1005,35 @@ mod tests {
             "{error}"
         );
         assert_eq!(std::fs::read(&junk).unwrap(), bytes, "left untouched");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn keep_leaves_the_journal_mode_and_header_alone() {
+        let folder = std::env::temp_dir().join(format!("rustclamp-db-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("rollback.sqlite");
+        {
+            let plain = Connection::open(&path).unwrap();
+            plain.execute_batch("CREATE TABLE t (n INTEGER)").unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        let settings = Settings {
+            connection: "sqlite".into(),
+            database: path.display().to_string(),
+        };
+        let mode = |db: &Db| {
+            db.with(|sql| {
+                sql.pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+            })
+            .unwrap()
+        };
+        let kept = Db::try_connect_with(&settings, Journal::Keep).unwrap();
+        assert_eq!(mode(&kept), "delete");
+        drop(kept);
+        assert_eq!(std::fs::read(&path).unwrap(), before, "header rewritten");
+        assert_eq!(mode(&Db::try_connect(&settings).unwrap()), "wal");
         let _ = std::fs::remove_dir_all(folder);
     }
 
