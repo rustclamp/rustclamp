@@ -32,6 +32,14 @@ ALLOWED = {
         "rand_core", "r-efi", "sha2", "typenum", "universal-hash",
         # The optional `markdown` feature: pulldown-cmark, HTML output only.
         "memchr", "pulldown-cmark", "pulldown-cmark-escape", "unicase",
+        # The optional `mail` feature: rustls with the ring provider and
+        # webpki-roots (ADR 0015). ring compiles C and assembly with cc; the
+        # windows* and wasi entries build only for those targets.
+        "ring", "rustls", "rustls-pki-types", "rustls-webpki", "subtle",
+        "untrusted", "webpki-roots", "zeroize", "wasi", "windows-sys",
+        "windows-targets", "windows_aarch64_gnullvm", "windows_aarch64_msvc",
+        "windows_i686_gnu", "windows_i686_gnullvm", "windows_i686_msvc",
+        "windows_x86_64_gnu", "windows_x86_64_gnullvm", "windows_x86_64_msvc",
         # The optional `db` feature's `#[derive(Model)]` (ADR 0014): a
         # proc-macro crate, so syn and quote run at compile time only.
         "rustclamp-macros",
@@ -286,7 +294,7 @@ ALLOWED = {
 }
 OPTIONAL = {
     "rustclamp-runtime": {"tokio"},
-    "rustclamp": {"rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "rustclamp-macros"},
+    "rustclamp": {"rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "rustclamp-macros", "rustls", "webpki-roots"},
 }
 
 

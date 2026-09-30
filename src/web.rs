@@ -708,6 +708,8 @@ pub fn asset(path: &str) -> Response {
 ///         routes,
 ///         # #[cfg(feature = "auth")]
 ///         # roles: &["super-admin", "admin", "user", "blocked"],
+///         # #[cfg(feature = "mail")]
+///         # mail: rustclamp::mail::Settings::from_config,
 ///     }
 /// }
 ///
@@ -735,6 +737,9 @@ pub struct App {
     /// `&["super-admin", "admin", "user", "blocked"]`.
     #[cfg(feature = "auth")]
     pub roles: &'static [&'static str],
+    /// `app/config/mail.rs` (ADR 0015).
+    #[cfg(feature = "mail")]
+    pub mail: fn(&crate::config::Config) -> crate::mail::Settings,
 }
 
 #[cfg(feature = "db")]
@@ -771,6 +776,9 @@ impl App {
         if let Err(error) = Storage::new((self.filesystems)(&config)).link() {
             Log::warning(format_args!("storage link failed: {error}"));
         }
+        // Handlers only queue mail; this thread delivers it, within the cap.
+        #[cfg(feature = "mail")]
+        std::sync::Arc::new(crate::mail::Mailer::new((self.mail)(&config))).start(db.clone());
         serve(self.router(&config, db));
     }
 
@@ -783,6 +791,10 @@ impl App {
             .middleware(security_headers);
         #[cfg(feature = "auth")]
         let router = router.state(auth::Auth::from_config(self.roles, config));
+        #[cfg(feature = "mail")]
+        let router = router.state(std::sync::Arc::new(crate::mail::Mailer::new((self.mail)(
+            config,
+        ))));
         (self.routes)(router, config, &db)
     }
 

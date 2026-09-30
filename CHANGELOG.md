@@ -19,6 +19,13 @@
 
 ### Added
 
+- Mail (ADR 0015), the optional `mail` feature: SMTP with STARTTLS over
+  rustls (ring provider; never a plaintext fallback, AUTH only over TLS),
+  UTF-8 bodies and RFC 2047 headers, a `log` mailer. `Mailer::send` queues
+  in a `mail_outbox` table; a thread from `web::App::run` delivers it under
+  an atomic per-UTC-day cap (`MAIL_DAILY_CAP`, default 100) with retries.
+  `Recipient` is built only from config or an `auth::User`. `App` takes
+  `mail`; `Request::mailer`.
 - Login and roles (ADR 0013), the optional `auth` feature: `web::auth::Auth`
   (`attempt`, `create_user`, `sync_role`, `at_least`), `authenticate`,
   `required` and `role("admin")` middleware, `allows` with the before rule

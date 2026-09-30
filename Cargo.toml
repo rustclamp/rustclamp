@@ -26,6 +26,8 @@ db = ["config", "uuid", "dep:rusqlite", "dep:rustclamp-macros"]
 # Optional std-only UUID v4 and v7 (`rustclamp::uuid`).
 uuid = []
 # Optional password hashing, encryption and SHA-256/HMAC (`rustclamp::crypto`).
+# Optional outgoing mail over SMTP with STARTTLS (`rustclamp::mail`, ADR 0015).
+mail = ["config", "db", "log", "dep:rustls", "dep:webpki-roots"]
 # Optional login, users and roles (`rustclamp::web::auth`, ADR 0013).
 auth = ["web", "db", "crypto"]
 # Optional Markdown to HTML that is safe to print (`rustclamp::web::markdown`).
@@ -52,4 +54,6 @@ sha2 = { version = "0.11.0", optional = true }
 hmac = { version = "0.13.0", optional = true }
 base64ct = { version = "1.8.3", features = ["alloc"], optional = true }
 getrandom = { version = "0.4.3", optional = true }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+webpki-roots = { version = "1.0.9", optional = true }
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"], optional = true }

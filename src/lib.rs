@@ -20,6 +20,8 @@ pub mod crypto;
 pub mod db;
 #[cfg(feature = "log")]
 pub mod log;
+#[cfg(feature = "mail")]
+pub mod mail;
 #[cfg(feature = "storage")]
 pub mod storage;
 #[cfg(feature = "uuid")]
