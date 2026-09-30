@@ -36,8 +36,10 @@ into it.
   `rustclamp::db::command` runs `migrate`, `migrate:rollback` and `db:seed`
   from `cargo run -- <command>`; the server still migrates at startup.
 - `db.table("posts")` is a query builder like Laravel's `DB::table`:
-  `where_eq`, `where_op`, `where_null`, `order_by`, `limit`, then `get`,
-  `first`, `count`, `insert`, `update` or `delete`. Values are always bound;
+  `where_eq`, `where_op`, `where_null`, `where_in`, `where_exists`, `join`,
+  `left_join`, `order_by`, `order_by_raw`, `limit`, then `get`,
+  `first`, `count`, `insert`, `update`, `update_values` or `delete`. Values are always bound; the SQL
+  fragments of `where_exists` and `order_by_raw` are `&'static str`;
   table and column names must be plain identifiers or it panics, so a name
   taken from a request cannot carry SQL.
 - One connection behind a mutex, shared by every request thread. A pool waits
@@ -54,4 +56,4 @@ into it.
 PostgreSQL and MySQL (synchronous drivers, same `DB_CONNECTION` switch; they
 also cover RDS), Redis for cache, sessions and queues, file storage (local
 disk, then S3-compatible for R2 and S3), a shared query trait once a second
-engine exists, joins and eager loading in the query builder, models on top of it, and MongoDB. Each waits until an app needs it.
+engine exists, eager loading in the query builder, models on top of it, and MongoDB. Each waits until an app needs it.
