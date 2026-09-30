@@ -3,7 +3,9 @@
 use rustclamp_core::ModuleId;
 use rustclamp_kernel::TargetComposition;
 use rustclamp_messaging::{InMemoryMessageBus, MessageBus, MessageEnvelope};
-use rustclamp_worker::{HandlerDeclaration, HandlerFailure, HandlerTarget, WorkerHandlers};
+use rustclamp_worker::{
+    Delivery, HandlerDeclaration, HandlerFailure, HandlerTarget, WorkerHandlers,
+};
 use serde::Deserialize;
 use serde_json::json;
 use std::error::Error;
@@ -122,11 +124,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let bus = Arc::new(InMemoryMessageBus::new(8)?);
     let gateway = MemoryMailGateway::default();
     let worker_gateway = gateway.clone();
-    let handler = HandlerDeclaration::new(SEND_EMAIL, 1, move |message| {
+    let handler = HandlerDeclaration::typed(SEND_EMAIL, 1, move |payload: EmailPayload, _| {
         let gateway = worker_gateway.clone();
         async move {
-            let payload: EmailPayload = serde_json::from_value(message.payload)
-                .map_err(|error| HandlerFailure::Permanent(Box::new(error)))?;
             send_email(payload.into(), &gateway)
                 .map_err(|error| HandlerFailure::Permanent(Box::new(error)))
         }
@@ -150,7 +150,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let message = bus.receive().await?.ok_or("email queue was empty")?;
-    registry.dispatch(message).await?;
+    registry
+        .dispatch(Delivery {
+            message,
+            attempt: 1,
+        })
+        .await?;
     println!(
         "delivered {} email(s)",
         gateway.0.lock().map_err(|_| "mailbox poisoned")?.len()

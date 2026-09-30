@@ -56,8 +56,20 @@ ALLOWED = {
         "itoa", "memchr", "proc-macro2", "quote", "serde", "serde_core",
         "serde_derive", "serde_json", "syn", "unicode-ident", "zmij",
         "rustclamp-core", "rustclamp-messaging",
+        # Feature `service` (ADR 0020): runtime cancellation + Tokio; the runtime
+        # entries are its closure under workspace feature unification.
+        "rustclamp-runtime", "tokio", "tokio-macros", "pin-project-lite",
+        "bytes", "errno", "libc", "mio", "signal-hook-registry", "socket2",
+        "wasi", "windows-link", "windows-sys",
     },
-    "rustclamp-scheduler": {"rustclamp-core"},
+    "rustclamp-scheduler": {
+        "rustclamp-core",
+        # Feature `tokio` (ADR 0020): Scheduler::run_until.
+        "tokio", "tokio-macros", "pin-project-lite", "proc-macro2", "quote",
+        "syn", "unicode-ident",
+        "bytes", "errno", "libc", "mio", "signal-hook-registry", "socket2",
+        "wasi", "windows-link", "windows-sys",
+    },
     "rustclamp-runtime": {
     'bytes',
     'errno',
@@ -301,6 +313,8 @@ ALLOWED = {
 }
 OPTIONAL = {
     "rustclamp-runtime": {"tokio"},
+    "rustclamp-worker": {"tokio", "rustclamp-runtime"},
+    "rustclamp-scheduler": {"tokio"},
     "rustclamp": {"rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "rustclamp-macros", "rustls", "webpki-roots"},
 }
 
