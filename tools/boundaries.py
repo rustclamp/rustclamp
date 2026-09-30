@@ -58,6 +58,15 @@ ALLOWED = {
         "rustclamp-core", "rustclamp-messaging",
         # Feature `service` (ADR 0020): runtime cancellation + Tokio; the runtime
         # entries are its closure under workspace feature unification.
+        # Feature `sqlite` (ADR 0026): rusqlite with bundled SQLite, the same
+        # closure the facade's `db` feature allows.
+        "rusqlite", "allocator-api2", "bitflags", "bumpalo", "cc", "cfg-if",
+        "equivalent", "fallible-iterator", "fallible-streaming-iterator",
+        "find-msvc-tools", "foldhash", "hashbrown", "hashlink", "js-sys",
+        "libsqlite3-sys", "once_cell", "pkg-config", "rsqlite-vfs",
+        "rustversion", "shlex", "smallvec", "sqlite-wasm-rs", "thiserror",
+        "thiserror-impl", "vcpkg", "wasm-bindgen", "wasm-bindgen-macro",
+        "wasm-bindgen-macro-support", "wasm-bindgen-shared",
         "rustclamp-runtime", "tokio", "tokio-macros", "pin-project-lite",
         "bytes", "errno", "libc", "mio", "signal-hook-registry", "socket2",
         "wasi", "windows-link", "windows-sys",
@@ -313,7 +322,7 @@ ALLOWED = {
 }
 OPTIONAL = {
     "rustclamp-runtime": {"tokio"},
-    "rustclamp-worker": {"tokio", "rustclamp-runtime"},
+    "rustclamp-worker": {"tokio", "rustclamp-runtime", "rusqlite"},
     "rustclamp-scheduler": {"tokio"},
     "rustclamp": {"rustclamp-core", "rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "rustclamp-macros", "rustls", "webpki-roots"},
 }
