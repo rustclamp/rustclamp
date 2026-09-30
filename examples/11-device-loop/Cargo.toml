@@ -14,7 +14,7 @@ tooling-inspection = ["dep:rustclamp-tooling"]
 rustclamp-core = { version = "0.1.0", path = "../../../core" }
 rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
 rustclamp-runtime = { version = "0.1.0", path = "../../../runtime" }
-rustclamp-tooling = { version = "0.3", path = "../../tooling", optional = true }
+rustclamp-tooling = { version = "0.5", path = "../../tooling", optional = true }
 
 [[example]]
 name = "inspection-json"
