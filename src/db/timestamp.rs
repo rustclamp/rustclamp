@@ -13,7 +13,7 @@ pub fn format(time: std::time::SystemTime) -> String {
     let seconds = time
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
-    crate::utc::timestamp(seconds)
+    crate::time::timestamp(seconds)
 }
 
 /// The day, `YYYY-MM-DD`; a value too short to hold one is returned as-is.

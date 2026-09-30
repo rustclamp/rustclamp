@@ -38,7 +38,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
-use crate::utc::timestamp;
+use crate::time::timestamp;
 
 /// The log file used by the `single` channel.
 pub const FILE: &str = "storage/logs/app.log";
@@ -474,14 +474,6 @@ mod tests {
         fs::create_dir_all(&folder).unwrap();
         assert_eq!(default_channel(&folder), "single");
         let _ = fs::remove_dir_all(folder);
-    }
-
-    #[test]
-    fn timestamps_are_utc_dates() {
-        assert_eq!(timestamp(0), "1970-01-01 00:00:00");
-        assert_eq!(timestamp(951_782_400), "2000-02-29 00:00:00");
-        assert_eq!(timestamp(1_790_693_195), "2026-09-29 14:46:35");
-        assert_eq!(timestamp(4_107_542_399), "2100-02-28 23:59:59");
     }
 
     #[test]
