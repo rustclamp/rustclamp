@@ -113,6 +113,9 @@
   `errors` and `old`; error views get `status` and `reason`. An unknown name
   or broken view is logged and answers `500`. `public/build/views/` is no
   longer served raw.
+- The CLI is 0.5.0 (release tag `clamp-v0.5.0`): the framework with account
+  flows (register, verify email, reset and confirm password; ADR 0016) as
+  well as mail (ADR 0015).
 - The CLI is 0.4.0 (release tag `clamp-v0.4.0`): `clamp init --web` apps
   get `app/config/{app,database,filesystems,logging}.rs`, storage disks and
   uploads, `web::App` wiring, `build::database` and `#[derive(Model)]`.
