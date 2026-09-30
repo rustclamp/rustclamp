@@ -108,6 +108,13 @@ impl Recipient {
         &self.address
     }
 
+    /// An account's own address, for the framework's verification and reset
+    /// mail only (ADR 0016): apps cannot reach it.
+    #[cfg(feature = "auth")]
+    pub(crate) fn account(address: &str, name: &str) -> Option<Self> {
+        Self::checked(address, name)
+    }
+
     fn checked(address: &str, name: &str) -> Option<Self> {
         let address = address.trim();
         let valid = address
