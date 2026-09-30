@@ -141,6 +141,13 @@ ALLOWED = {
     'zmij',
     },
     "rustclamp-postgres": {
+    # cipher, inout and const-oid are feature-unification artifacts, not
+    # postgres edges: `--all-features` metadata resolves one graph, so the
+    # chacha20/digest postgres already uses carry the `crypto` feature's
+    # cipher and oid features (ADR 0010).
+    'cipher',
+    'const-oid',
+    'inout',
     'allocator-api2',
     'atoi',
     'autocfg',
