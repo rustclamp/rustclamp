@@ -14,6 +14,10 @@ resolver = "3"
 members = ["rustclamp", "core", "kernel", "runtime", "http", "postgres", "messaging", "worker", "scheduler"]
 exclude = ["experiments", "playground"]
 
+# rustclamp depends on core through git (#86); the coordinated checkout uses the member.
+[patch."https://github.com/rustclamp/core"]
+rustclamp-core = { path = "core" }
+
 [profile.release]
 opt-level = 3
 debug = false
@@ -22,9 +26,18 @@ lto = false
 codegen-units = 16
 panic = "unwind"
 '''
-PREVIOUS_MANIFEST = MANIFEST.replace(
-    'members = ["rustclamp", "core", "kernel", "runtime", "http", "postgres", "messaging", "worker", "scheduler"]',
-    'members = ["rustclamp", "core", "kernel", "runtime", "http", "postgres", "messaging", "worker"]',
+# Earlier generated manifests this script may replace in place.
+_WITHOUT_PATCH = MANIFEST.replace(
+    '\n# rustclamp depends on core through git (#86); the coordinated checkout uses the member.\n'
+    '[patch."https://github.com/rustclamp/core"]\nrustclamp-core = { path = "core" }\n',
+    '',
+)
+PREVIOUS_MANIFESTS = (
+    _WITHOUT_PATCH,
+    _WITHOUT_PATCH.replace(
+        'members = ["rustclamp", "core", "kernel", "runtime", "http", "postgres", "messaging", "worker", "scheduler"]',
+        'members = ["rustclamp", "core", "kernel", "runtime", "http", "postgres", "messaging", "worker"]',
+    ),
 )
 
 
@@ -42,7 +55,7 @@ def main():
     }
     for path, content in outputs.items():
         if path.exists() and path.read_text() != content and not (
-            path == root / "Cargo.toml" and path.read_text() == PREVIOUS_MANIFEST
+            path == root / "Cargo.toml" and path.read_text() in PREVIOUS_MANIFESTS
         ):
             parser.error(f"refusing to replace differing file: {path}")
     for path, content in outputs.items():
