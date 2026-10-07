@@ -29,7 +29,8 @@ core crates cannot reach them.
 
 1. **`rustclamp_core::Reference`**, std-only, no dependencies. It wraps a UUIDv7:
    - `Reference::new()`: a v7 ID, strictly increasing within the process
-     (RFC 9562 §6.2, method 2, as `rustclamp::uuid` does today);
+     (RFC 9562 §6.2, method 1: a 12-bit counter right after the time; a
+     full counter moves into the next millisecond);
    - `Display` and `FromStr` in the hyphenated lowercase form;
    - `created_at() -> SystemTime`: the time the reference was minted;
    - `Reference::range(from, to) -> (Reference, Reference)`: the lowest and
