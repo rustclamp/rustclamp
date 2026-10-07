@@ -73,6 +73,7 @@ All modules are opt-in Cargo features. Unsafe code is forbidden.
 | `web` | `rustclamp::web` | std-only HTTP server: routing, sessions, CSRF, validation, uploads, Blade-style views, `problem+json` errors, graceful `serve_until`, `web::testing::Client` ([ADR 0007](docs/adr/0007-phase9-web-scaffold-options.md), [0012](docs/adr/0012-view-templates.md)) |
 | `auth` | `rustclamp::web::auth` | Login, roles, email verification and password reset ([ADR 0013](docs/adr/0013-auth-and-roles.md), [0016](docs/adr/0016-account-flows.md)) |
 | `mail` | `rustclamp::mail` | SMTP with STARTTLS over rustls, queued through a `mail_outbox` table ([ADR 0015](docs/adr/0015-mail.md)) |
+| `queue` | `rustclamp::queue` | Background jobs by name: `request.queue().dispatch(..)`, retries with backoff, `failed_jobs`, a `jobs` table or Redis, `queue:work` ([ADR 0019](docs/adr/0019-queue.md)) |
 | `markdown` | `rustclamp::web::markdown` | Markdown to HTML that escapes raw HTML and unsafe links |
 | `cache` | `rustclamp::cache` | Bounded in-process cache with LRU eviction and optional TTL |
 | `metrics` | `rustclamp::metrics` | Counters and gauges with a Prometheus text renderer; `Router::metrics` serves them |

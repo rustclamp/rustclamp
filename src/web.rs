@@ -978,6 +978,8 @@ fn content_type(file: &Path) -> &'static str {
 ///         # roles: &["super-admin", "admin", "user", "blocked"],
 ///         # #[cfg(feature = "mail")]
 ///         # mail: rustclamp::mail::Settings::from_config,
+///         # #[cfg(feature = "queue")]
+///         # jobs: Vec::new,
 ///     }
 /// }
 ///
@@ -1008,6 +1010,10 @@ pub struct App {
     /// `app/config/mail.rs` (ADR 0015).
     #[cfg(feature = "mail")]
     pub mail: fn(&crate::config::Config) -> crate::mail::Settings,
+    /// The job handlers by name (ADR 0019), such as
+    /// `|| vec![("thumbnail", jobs::thumbnail)]`.
+    #[cfg(feature = "queue")]
+    pub jobs: fn() -> Vec<(&'static str, crate::queue::Handler)>,
 }
 
 #[cfg(feature = "db")]
@@ -1015,12 +1021,15 @@ impl App {
     /// Loads `.env`, installs the logger, then either runs a database command
     /// given as the first argument (`migrate`, `migrate:rollback`, `db:seed`)
     /// and exits with its status, or migrates, links `public/storage` to the
-    /// public disk (like `php artisan storage:link`; a failure is a warning)
-    /// and serves the routes.
+    /// public disk (like `php artisan storage:link`; a failure is a warning),
+    /// starts `QUEUE_WORKERS` queue workers with the `queue` feature and
+    /// serves the routes. With the first argument `queue:work`, it runs only
+    /// the queue workers (at least one).
     ///
     /// # Panics
     ///
-    /// When a migration fails: the app must not serve an old schema.
+    /// When a migration fails: the app must not serve an old schema. When
+    /// the queue settings cannot work ([`Queue::new`](crate::queue::Queue::new)).
     pub fn run(self) {
         use crate::db::Db;
         use crate::log::Logger;
@@ -1035,6 +1044,15 @@ impl App {
                 self.create_user(&db, &std::env::args().skip(2).collect::<Vec<_>>()),
             );
         }
+        #[cfg(feature = "queue")]
+        if std::env::args().nth(1).as_deref() == Some("queue:work") {
+            let workers = crate::queue::workers(&config).max(1);
+            println!("Working the queue on {workers} threads");
+            for worker in self.queue(&config, db).start(workers, &Shutdown::new()) {
+                let _ = worker.join();
+            }
+            std::process::exit(0);
+        }
         if let Some(command) = std::env::args().nth(1) {
             let (migrations, seeders) = ((self.migrations)(), (self.seeders)());
             std::process::exit(crate::db::command(&db, &command, &migrations, &seeders));
@@ -1047,6 +1065,11 @@ impl App {
         // Handlers only queue mail; this thread delivers it, within the cap.
         #[cfg(feature = "mail")]
         std::sync::Arc::new(crate::mail::Mailer::new((self.mail)(&config))).start(db.clone());
+        // ponytail: nothing stops the workers; a killed job runs again after
+        // QUEUE_RETRY_AFTER. Stop this Shutdown from a signal hook if one lands.
+        #[cfg(feature = "queue")]
+        self.queue(&config, db.clone())
+            .start(crate::queue::workers(&config), &Shutdown::new());
         serve(self.router(&config, db));
     }
 
@@ -1063,7 +1086,23 @@ impl App {
         let router = router.state(std::sync::Arc::new(crate::mail::Mailer::new((self.mail)(
             config,
         ))));
+        #[cfg(feature = "queue")]
+        let router = router.state(self.queue(config, db.clone()));
         (self.routes)(router, config, &db)
+    }
+
+    /// The app's queue on `db`, with its job handlers. Tests run jobs with
+    /// [`Queue::work_once`](crate::queue::Queue::work_once) on a queue built
+    /// over the database [`App::test`] returns.
+    ///
+    /// # Panics
+    ///
+    /// When the queue settings cannot work, such as Redis without
+    /// `REDIS_PREFIX` in production: the app refuses to start.
+    #[cfg(feature = "queue")]
+    pub fn queue(&self, config: &crate::config::Config, db: crate::db::Db) -> crate::queue::Queue {
+        crate::queue::Queue::new(config, db, (self.jobs)())
+            .unwrap_or_else(|error| panic!("{error}"))
     }
 
     /// `user:create <email> <role> [name]`: migrates, creates the user and
