@@ -25,7 +25,7 @@ jobs:
           repository: rustclamp/kernel
           path: kernel
       # rust-toolchain.toml pins 1.96.1 with clippy and rustfmt; rustup installs it on first use.
-      # ponytail: facade and tooling only; the examples need the full coordinated checkout (tools/check.py)
+      # facade and tooling only; the examples job below runs the full coordinated checkout
       - name: Facade
         working-directory: rustclamp
         run: |
@@ -53,3 +53,25 @@ jobs:
             ./target/debug/clamp init "$RUNNER_TEMP/kit-$kit" --$kit
             (cd "$RUNNER_TEMP/kit-$kit" && npm ci --no-audit --no-fund && npm run build)
           done
+
+  # The full coordinated checkout: every sibling side by side, then tools/check.py
+  # (examples, isolated packages, external consumers). check.py runs offline, so fetch first.
+  examples:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: rustclamp
+      - name: Siblings
+        run: |
+          for repo in core kernel runtime http postgres messaging worker scheduler; do
+            git clone --depth 1 "https://github.com/rustclamp/$repo" "$repo"
+          done
+      - name: Fetch
+        run: |
+          python3 rustclamp/tools/workspace.py --root .
+          cargo generate-lockfile
+          find . -name Cargo.lock -not -path '*/target/*' -print0 |
+            xargs -0 -n1 dirname | xargs -I{} cargo fetch --manifest-path {}/Cargo.toml
+      - name: tools/check.py
+        run: python3 rustclamp/tools/check.py --root .
