@@ -51,6 +51,10 @@
 
 ### Added
 
+- Validation rules (#117): `numeric`, `date` (`YYYY-MM-DD`), `in:a,b`,
+  `confirmed`, and with `db` `unique:table[,column[,except_id]]` against the
+  `Db` in `Router::state`. `Request::validate_with(rules, messages)` takes
+  custom messages keyed `field.rule`.
 - `clamp init NAME --profile cli,service,worker` (ADR 0032, #114): flat,
   combinable profiles in one binary. Each writes its own `src/` file and
   facade features; `main.rs` runs the first, or `serve` / `work`.
