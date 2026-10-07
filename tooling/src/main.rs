@@ -481,6 +481,20 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
         "app/models/.gitkeep",
         include_str!("../templates/web/app/models/.gitkeep"),
     ),
+    // Present from the start: build.rs watches these, and Cargo reruns a build
+    // script on every build while a watched path is missing.
+    (
+        "app/database/migrations/.gitkeep",
+        include_str!("../templates/web/app/database/migrations/.gitkeep"),
+    ),
+    (
+        "app/database/seeders/.gitkeep",
+        include_str!("../templates/web/app/database/seeders/.gitkeep"),
+    ),
+    (
+        "app/database/states/.gitkeep",
+        include_str!("../templates/web/app/database/states/.gitkeep"),
+    ),
     (
         "app/routes/web.rs",
         include_str!("../templates/web/app/routes/web.rs"),
