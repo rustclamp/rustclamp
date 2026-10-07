@@ -434,13 +434,15 @@ fn read(connection: &mut impl BufRead) -> Result<Value, Error> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::net::TcpListener;
 
     /// A fake Redis on a free port that answers each command in `script` with
     /// its reply, in order, and records what it received.
-    fn fake(script: Vec<&'static str>) -> (String, std::thread::JoinHandle<Vec<Vec<String>>>) {
+    pub(crate) fn fake(
+        script: Vec<&'static str>,
+    ) -> (String, std::thread::JoinHandle<Vec<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("redis://{}", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {

@@ -41,6 +41,9 @@ cache = []
 metrics = []
 # Optional synchronous Redis client over std TCP (`rustclamp::redis`, ADR 0027).
 redis = ["config"]
+# Optional background jobs (`rustclamp::queue`, ADR 0019); the Redis driver also
+# needs `redis`.
+queue = ["web", "db"]
 crypto = ["config", "dep:argon2", "dep:chacha20poly1305", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom"]
 
 [[example]]

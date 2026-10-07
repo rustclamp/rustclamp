@@ -56,6 +56,16 @@
   and `GET /` goes to a real controller, `http/controllers/home.rs`.
   `clamp make:controller`, `make:middleware`, `make:request` and `make:model`
   write stubs and add them to the module map in `app/lib.rs`.
+- Queue (ADR 0019, #119), the optional `queue` feature (`web`, `db`): `App`
+  gains `jobs`, handlers by name (`fn(&Job) -> Result<(), String>`, a panic
+  is a failure); `request.queue().dispatch(name, payload)` and
+  `dispatch_later` refuse unknown names. At-least-once with
+  `QUEUE_RETRY_AFTER` (90 s), `QUEUE_TRIES` (3) with 10/60/300 s backoff, then
+  the `failed_jobs` table and an error log. `QUEUE_CONNECTION=database` (a
+  `jobs` table, one `UPDATE ... RETURNING` claim) or `redis` (with `redis`;
+  one Lua script, `REDIS_PREFIX` required in production). `App::run` starts
+  `QUEUE_WORKERS` threads (1, or 0 in production); the argument `queue:work`
+  runs only workers. Tests call `app.queue(..).work_once(now)`.
 - Pagination and route binding (#118): `Query::offset`, `Query::paginate(page,
   per_page, map)` returning a `Page` (`items`, `total`, `last_page`,
   `previous`, `next`; a view value with `web`), `Model::find_public` and

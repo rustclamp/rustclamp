@@ -1,6 +1,6 @@
 # ADR 0019: Queue
 
-Status: Proposed, 2026-10-07.
+Status: Accepted, 2026-10-07.
 
 ## Context
 
@@ -28,10 +28,12 @@ the same pattern as the mail outbox.
 - **An optional `queue` feature** (`web`, `db`), with `rustclamp::queue`. It
   adds no new dependency. The Redis driver also needs the `redis` feature
   (ADR 0027).
-- **Named handlers on the app.** `App::job("thumbnail", |job| ...)` registers
-  a handler for a name. The handler gets the payload as a `&str` (the app
-  chooses the format, usually JSON) and the attempt number, and returns
-  `Result<(), String>`. A panic counts as a failure.
+- **Named handlers on the app.** `App` is a struct literal of function
+  pointers, so the handlers are one more field:
+  `jobs: || vec![("thumbnail", jobs::thumbnail)]`. A handler is
+  `fn(&Job) -> Result<(), String>`; the `Job` carries the payload as a `&str`
+  (the app chooses the format, usually JSON), the attempt number and the
+  app's database, which most jobs need. A panic counts as a failure.
 - **Dispatch from a handler.** `request.queue().dispatch(name, payload)` and
   `dispatch_later(name, payload, delay)` store the job and return a
   `Result`: when the driver can't be reached, the caller decides what to do.
@@ -47,7 +49,8 @@ the same pattern as the mail outbox.
   backoff (10 s, 60 s, 300 s), up to `QUEUE_TRIES` attempts in total
   (default 3). After the last attempt, the job moves to the `failed_jobs`
   table in the app's database (name, payload, error, failed_at) and the
-  failure is logged as an error. `failed_jobs` lives in the database for both
+  failure is logged as an error. An attempt counts when the job is reserved, so a job
+  whose worker dies every time also ends there instead of looping. `failed_jobs` lives in the database for both
   drivers, so failures survive a Redis flush. Retrying a failed job, or
   forgetting it, waits for console commands (#122).
 - **Two drivers, chosen by `QUEUE_CONNECTION`** (`database` by default, or
@@ -75,11 +78,14 @@ the same pattern as the mail outbox.
     its own service, so a slow job never takes HTTP threads and the two can
     restart separately. `queue:work` is a fixed argument for now; it becomes
     an ordinary app command when #122 lands.
-  - On shutdown a worker stops taking jobs and finishes the one it is
-    running. A job cut off by a kill is retried after `QUEUE_RETRY_AFTER`.
+  - A worker checks a `web::Shutdown` between jobs: once stopped, it takes
+    no new job and finishes the one it is running. Std has no signal hook,
+    so `App::run` cannot stop it on SIGTERM; a kill cuts the job off, and
+    it is retried after `QUEUE_RETRY_AFTER`.
 - **Tests.** `App::test` starts no worker. A test dispatches through the app,
-  then calls `queue.work_once()` to run the next due job on the test thread,
-  with a given clock, as mail tests call the delivery step directly.
+  then calls `app.queue(&config, db).work_once(now)` to run the next due job
+  on the test thread, with a given clock, as mail tests call the delivery
+  step directly.
 - **Not included:**
   - several named queues and priorities: a job's name already routes it;
   - unique jobs, chains, batches and per-job rate limits;
