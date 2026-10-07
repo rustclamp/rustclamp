@@ -81,10 +81,13 @@ jobs:
             git clone --depth 1 "https://github.com/rustclamp/$repo" "$repo"
           done
       - name: Fetch
+        # Each repo's own lock first: the isolated package checks use them, and once
+        # the coordination workspace exists, a member's fetch reads the root lock instead.
         run: |
-          python3 rustclamp/tools/workspace.py --root .
-          cargo generate-lockfile
           find . -name Cargo.lock -not -path '*/target/*' -print0 |
             xargs -0 -n1 dirname | xargs -I{} cargo fetch --manifest-path {}/Cargo.toml
+          python3 rustclamp/tools/workspace.py --root .
+          cargo generate-lockfile
+          cargo fetch
       - name: tools/check.py
         run: python3 rustclamp/tools/check.py --root .
