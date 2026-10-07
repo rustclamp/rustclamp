@@ -211,7 +211,7 @@ impl<'a> Query<'a> {
                 .map(|rows| format!(" LIMIT {rows}"))
                 .unwrap_or_default()
         );
-        self.with(|connection| {
+        self.read(|connection| {
             connection
                 .prepare(&sql)?
                 .query_map(params_from_iter(&self.values), map)?
@@ -232,7 +232,7 @@ impl<'a> Query<'a> {
             self.joins.concat(),
             self.where_sql()
         );
-        self.with(|connection| {
+        self.read(|connection| {
             connection.query_row(&sql, params_from_iter(&self.values), |row| row.get(0))
         })
     }
@@ -283,6 +283,13 @@ impl<'a> Query<'a> {
     pub fn delete(&self) -> Result<usize> {
         let sql = format!("DELETE FROM {}{}", self.table, self.where_sql());
         self.with(|connection| connection.execute(&sql, params_from_iter(&self.values)))
+    }
+
+    fn read<T>(&self, work: impl FnOnce(&Connection) -> T) -> T {
+        match self.source {
+            Source::Db(db) => db.read(work),
+            Source::Transaction(connection) => work(connection),
+        }
     }
 
     fn with<T>(&self, work: impl FnOnce(&Connection) -> T) -> T {

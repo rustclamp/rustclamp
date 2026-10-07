@@ -63,13 +63,24 @@ use rusqlite::Connection;
 /// from the column of the same name. See [`Model`](trait@Model).
 pub use rustclamp_macros::Model;
 
-/// A shared database connection. Clones share the same connection.
+/// A shared database. Clones share the same connections: one writer behind
+/// a lock, and for a WAL file database, read-only connections that
+/// [`Db::read`] (and a [`Query`]'s `get`, `first` and `count`) take, so reads
+/// do not wait for the writer or for each other (#39).
 #[derive(Clone)]
 pub struct Db {
-    // ponytail: one connection behind a lock serializes queries across request
-    // threads; a pool when that shows up in measurements. `:memory:` relies on
-    // it: every clone must see the same in-memory database.
+    // `:memory:` relies on the single writer: every clone must see the same
+    // in-memory database, so it gets no readers.
     connection: Arc<Mutex<Connection>>,
+    readers: Option<Arc<Readers>>,
+}
+
+/// Idle read-only connections to the same file, opened on demand.
+struct Readers {
+    path: String,
+    // ponytail: grows to the peak number of concurrent readers and keeps them
+    // all; cap it if an app with thousands of threads shows up.
+    idle: Mutex<Vec<Connection>>,
 }
 
 impl std::fmt::Debug for Db {
@@ -91,6 +102,16 @@ impl<T> Default for Slot<T> {
             waker: None,
         }
     }
+}
+
+/// A read-only connection to `path` for [`Db::read`].
+fn open_reader(path: &str) -> sqlite::Result<Connection> {
+    let connection = Connection::open_with_flags(
+        path,
+        sqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | sqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(connection)
 }
 
 /// Why [`Db::try_connect`] could not open the database.
@@ -250,8 +271,17 @@ impl Db {
             path: path.to_owned(),
             source,
         })?;
+        // A reader on a rollback journal would block the writer; only WAL
+        // lets them run side by side.
+        let readers = (path != ":memory:" && journal == Journal::Wal).then(|| {
+            Arc::new(Readers {
+                path: path.to_owned(),
+                idle: Mutex::new(Vec::new()),
+            })
+        });
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            readers,
         })
     }
 
@@ -264,6 +294,49 @@ impl Db {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         work(&connection)
+    }
+
+    /// Runs `work` with a read-only connection, sharing the database with
+    /// other readers and with the writer ([`Db::with`]) instead of waiting
+    /// for them. It sees everything committed before it started, but not a
+    /// transaction still open on the writer; a write through it fails. An
+    /// in-memory database, or one opened with [`Journal::Keep`], has one
+    /// connection, and this is [`Db::with`].
+    ///
+    /// ```
+    /// use rustclamp::config::Config;
+    /// use rustclamp::db::Db;
+    ///
+    /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    /// let one: i64 = db.read(|sql| sql.query_row("SELECT 1", [], |row| row.get(0))).unwrap();
+    /// assert_eq!(one, 1);
+    /// ```
+    pub fn read<T>(&self, work: impl FnOnce(&Connection) -> T) -> T {
+        let Some(readers) = &self.readers else {
+            return self.with(work);
+        };
+        let idle = readers
+            .idle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop();
+        let connection = match idle {
+            Some(connection) => connection,
+            None => match open_reader(&readers.path) {
+                Ok(connection) => connection,
+                // ponytail: a reader that cannot open falls back to the writer
+                // rather than failing a query the writer could answer.
+                Err(_) => return self.with(work),
+            },
+        };
+        let value = work(&connection);
+        // A panic in `work` drops the connection instead of returning it.
+        readers
+            .idle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(connection);
+        value
     }
 
     /// [`Db::with`] for async callers: runs `work` with the connection on its
@@ -325,7 +398,8 @@ impl Db {
     /// nests: inside another transaction, such as a seeder's, it is a
     /// savepoint. `work` gets a [`Tx`]: query through it (`tx.table(..)`, or
     /// the [`Connection`] it derefs to), not through this `Db`, whose lock it
-    /// holds; a `Db` call inside `work` waits forever.
+    /// holds; a `Db` write inside `work` waits forever, and a `Db` read sees
+    /// only what was committed before it.
     ///
     /// The write lock is taken at the first write, so two transactions that
     /// both read and then write can meet a "database is locked" error; use
@@ -1196,6 +1270,34 @@ mod tests {
             }
         });
         assert_eq!(Db::open(&config).table("hits").count().unwrap(), 160);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn reads_on_a_file_database_do_not_wait_for_the_writer() {
+        let folder =
+            std::env::temp_dir().join(format!("rustclamp-db-readers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let db = Db::open(&Config::parse(&format!(
+            "DB_DATABASE={}",
+            folder.join("read.sqlite").display()
+        )));
+        db.with(|sql| sql.execute_batch("CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1)"))
+            .unwrap();
+        // Holding the writer: a read through it would wait forever.
+        db.with(|sql| {
+            sql.execute_batch("BEGIN; INSERT INTO t VALUES (2)")
+                .unwrap();
+            assert_eq!(
+                db.table("t").count().unwrap(),
+                1,
+                "the open transaction is not seen"
+            );
+            sql.execute_batch("COMMIT").unwrap();
+        });
+        assert_eq!(db.table("t").count().unwrap(), 2, "committed rows are seen");
+        let write = db.read(|sql| sql.execute("INSERT INTO t VALUES (3)", []));
+        assert!(write.is_err(), "readers are read-only");
         let _ = std::fs::remove_dir_all(folder);
     }
 
