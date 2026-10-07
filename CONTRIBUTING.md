@@ -1,9 +1,9 @@
 # Contributing
 
-RustClamp is the ecosystem; Clamp is the framework. The facade now implements the
-Pico closure entrypoint in `examples/00-pico/`; the base facade/Core/Kernel/Runtime
-closure remains small, while optional integrations add only their selected
-ecosystem dependencies.
+RustClamp is the ecosystem; Clamp is the application composition layer. The
+facade now implements the Pico closure entrypoint in `examples/00-pico/`; the
+base facade/Core/Kernel/Runtime closure remains small, while optional
+integrations add only their selected ecosystem dependencies.
 
 ## Decision and Change Flow
 

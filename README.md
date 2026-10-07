@@ -2,10 +2,12 @@
 
 # RustClamp
 
-**RustClamp is a composable application framework for Rust.** This is the main
-framework repository: the `rustclamp` facade crate, the `clamp` developer tool,
-examples and architecture decisions. The component crates live in their own
-repositories (see [Components](#components)).
+**RustClamp is the application composition layer for Rust.** It sits above the
+crates you already use (Axum and Tower, SQLx, Tokio, NATS) and composes them
+into one application: modules, typed capabilities, lifecycle and processes. It
+does not replace them. This is the main repository: the `rustclamp` facade
+crate, the `clamp` developer tool, examples and architecture decisions. The
+component crates live in their own repositories (see [Components](#components)).
 
 The facade starts small. With no features it has no dependencies and one
 entrypoint:
