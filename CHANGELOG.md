@@ -79,6 +79,10 @@
   one Lua script, `REDIS_PREFIX` required in production). `App::run` starts
   `QUEUE_WORKERS` threads (1, or 0 in production); the argument `queue:work`
   runs only workers. Tests call `app.queue(..).work_once(now)`.
+- `queue:retry ID|all` and `queue:forget ID|all` (#136): built-in commands
+  with the `queue` feature, and `Queue::retry` / `Queue::forget`. A retried
+  job goes back to the `jobs` table or the Redis list with its attempts reset.
+  An unknown ID exits 1.
 - Pagination and route binding (#118): `Query::offset`, `Query::paginate(page,
   per_page, map)` returning a `Page` (`items`, `total`, `last_page`,
   `previous`, `next`; a view value with `web`), `Model::find_public` and

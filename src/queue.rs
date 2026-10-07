@@ -6,7 +6,9 @@
 //! once: a job whose worker died runs again after `QUEUE_RETRY_AFTER`, so
 //! handlers must be idempotent. A failed attempt (an `Err` or a panic) is
 //! retried after 10 s, 60 s, then 300 s, up to `QUEUE_TRIES` attempts; the
-//! last failure moves the job to the `failed_jobs` table and logs an error.
+//! last failure moves the job to the `failed_jobs` table and logs an error;
+//! `cargo run -- queue:retry ID|all` queues it again and `queue:forget ID|all`
+//! deletes it.
 //!
 //! Settings:
 //!
@@ -226,6 +228,56 @@ impl Queue {
         if !self.handlers.contains_key(name) {
             return Err(Error::Unknown(name.to_owned()));
         }
+        self.push(name, payload, delay)
+    }
+
+    /// Moves failed job `id`, or every failed job with `None`, back onto the
+    /// queue with its attempts reset (`queue:retry ID|all`). Returns the
+    /// `(id, name)` of each job moved; empty when there was none.
+    ///
+    /// # Errors
+    ///
+    /// A store error. A job pushed before the error stays queued and in
+    /// `failed_jobs`, so it may run twice, never zero times.
+    pub fn retry(&self, id: Option<i64>) -> Result<Vec<(i64, String)>, Error> {
+        let failed =
+            self.db.with(|sql| {
+                sql.prepare(
+                "SELECT id, name, payload FROM failed_jobs WHERE ?1 IS NULL OR id = ?1 ORDER BY id",
+            )?
+            .query_map([id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            })?
+            .collect::<crate::db::sqlite::Result<Vec<_>>>()
+            })?;
+        failed
+            .into_iter()
+            .map(|(id, name, payload)| {
+                self.push(&name, &payload, Duration::ZERO)?;
+                self.db
+                    .with(|sql| sql.execute("DELETE FROM failed_jobs WHERE id = ?1", [id]))?;
+                Ok((id, name))
+            })
+            .collect()
+    }
+
+    /// Deletes failed job `id`, or every failed job with `None`
+    /// (`queue:forget ID|all`). Returns the `(id, name)` of each one deleted.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn forget(&self, id: Option<i64>) -> Result<Vec<(i64, String)>, Error> {
+        Ok(self.db.with(|sql| {
+            sql.prepare("DELETE FROM failed_jobs WHERE ?1 IS NULL OR id = ?1 RETURNING id, name")?
+                .query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<crate::db::sqlite::Result<Vec<_>>>()
+        })?)
+    }
+
+    /// Stores a job with no attempts yet, due after `delay`, without
+    /// checking for its handler.
+    fn push(&self, name: &str, payload: &str, delay: Duration) -> Result<(), Error> {
         let due = seconds(SystemTime::now()).saturating_add_unsigned(delay.as_secs());
         match &self.driver {
             Driver::Database => {
@@ -642,6 +694,42 @@ mod tests {
     }
 
     #[test]
+    fn failed_jobs_can_be_retried_or_forgotten() {
+        let (queue, db) = queue("QUEUE_TRIES=1\n", vec![("flaky", |_| Err("nope".into()))]);
+        for payload in ["a", "b", "c"] {
+            queue.dispatch("flaky", payload).unwrap();
+        }
+        let now = SystemTime::now();
+        while queue.work_once(now).unwrap() {}
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM failed_jobs"), 3);
+
+        assert_eq!(queue.retry(Some(99)).unwrap(), [], "no such job");
+        assert_eq!(queue.retry(Some(1)).unwrap(), [(1, "flaky".to_owned())]);
+        let back: (String, u32, Option<i64>) = db
+            .with(|c| {
+                c.query_row("SELECT payload, attempts, reserved_at FROM jobs", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })
+            })
+            .unwrap();
+        assert_eq!(back, ("a".into(), 0, None), "attempts reset");
+        assert!(queue.work_once(now).unwrap(), "it runs again");
+        assert_eq!(
+            count(&db, "SELECT COUNT(*) FROM failed_jobs"),
+            3,
+            "and fails again"
+        );
+
+        assert_eq!(queue.forget(Some(2)).unwrap(), [(2, "flaky".to_owned())]);
+        assert_eq!(queue.forget(Some(2)).unwrap(), [], "already gone");
+        assert_eq!(queue.retry(None).unwrap().len(), 2, "all");
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM jobs"), 2);
+        while queue.work_once(now).unwrap() {}
+        assert_eq!(queue.forget(None).unwrap().len(), 2, "all");
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM failed_jobs"), 0);
+    }
+
+    #[test]
     fn a_panic_is_a_failure() {
         let (queue, db) = queue("QUEUE_TRIES=1\n", vec![("boom", |_| panic!("kaboom"))]);
         queue.dispatch("boom", "p").unwrap();
@@ -752,6 +840,30 @@ mod tests {
             );
             assert_eq!(seen[3], ["ZREM", "app:queue:reserved", "1 id-1 flaky\np"]);
             assert_eq!(seen[5], ["ZREM", "app:queue:reserved", "3 id-1 flaky\np"]);
+        }
+
+        #[test]
+        fn retried_jobs_go_back_on_the_redis_list() {
+            let (url, server) = fake(vec![":1\r\n"]);
+            let (queue, db) = queue(
+                &format!("QUEUE_CONNECTION=redis\nREDIS_URL={url}\nREDIS_PREFIX=app:\n"),
+                Vec::new(),
+            );
+            db.with(|c| {
+                c.execute(
+                    "INSERT INTO failed_jobs (name, payload, error, failed_at) VALUES ('mail', 'p', 'x', 0)",
+                    [],
+                )
+            })
+            .unwrap();
+            assert_eq!(queue.retry(None).unwrap(), [(1, "mail".to_owned())]);
+            assert_eq!(count(&db, "SELECT COUNT(*) FROM failed_jobs"), 0);
+            let seen = server.join().unwrap();
+            assert_eq!(seen[0][..2], ["RPUSH", "app:queue:jobs"]);
+            assert!(
+                seen[0][2].starts_with("0 ") && seen[0][2].ends_with(" mail\np"),
+                "{seen:?}"
+            );
         }
 
         /// Against a real server, in CI: `RUSTCLAMP_TEST_REDIS_URL`; skipped without it.
