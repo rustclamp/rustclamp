@@ -53,3 +53,13 @@ jobs:
             ./target/debug/clamp init "$RUNNER_TEMP/kit-$kit" --$kit
             (cd "$RUNNER_TEMP/kit-$kit" && npm install --no-audit --no-fund && npm run build)
           done
+      # The Rust side of each scaffold must resolve as a git dependency, with no
+      # sibling repos in reach (#86). Patch only rustclamp itself to this commit.
+      - name: Scaffolds resolve
+        working-directory: rustclamp/tooling
+        run: |
+          for kit in web package; do
+            ./target/debug/clamp init "$RUNNER_TEMP/rs-$kit" --$kit
+            printf '\n[patch."https://github.com/rustclamp/rustclamp"]\nrustclamp = { path = "%s" }\n' "$GITHUB_WORKSPACE/rustclamp" >> "$RUNNER_TEMP/rs-$kit/Cargo.toml"
+            (cd "$RUNNER_TEMP/rs-$kit" && cargo check)
+          done
