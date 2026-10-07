@@ -584,6 +584,7 @@ mod tests {
             migrations: Vec::new,
             seeders: Vec::new,
             routes,
+            commands: &[],
             #[cfg(feature = "auth")]
             roles: &["super-admin", "user", "blocked"],
             #[cfg(feature = "mail")]

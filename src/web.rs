@@ -943,6 +943,61 @@ fn content_type(file: &Path) -> &'static str {
     }
 }
 
+/// A console command the app adds, run with `cargo run -- NAME ARGS`, like
+/// an Artisan command. `run` gets the arguments after the name, the config
+/// and the database, and returns the exit status (0 for success).
+///
+/// ```
+/// use rustclamp::config::Config;
+/// use rustclamp::db::Db;
+/// use rustclamp::web::Command;
+///
+/// pub const COMMAND: Command = Command {
+///     name: "greet",
+///     description: "Say hello: greet NAME",
+///     run,
+/// };
+///
+/// fn run(args: &[String], _config: &Config, _db: &Db) -> i32 {
+///     let Some(name) = args.first() else {
+///         eprintln!("usage: greet NAME");
+///         return 2;
+///     };
+///     println!("Hello, {name}!");
+///     0
+/// }
+/// ```
+#[cfg(feature = "db")]
+#[derive(Debug, Clone, Copy)]
+pub struct Command {
+    /// What follows `cargo run --`, such as `greet` or `report:daily`.
+    pub name: &'static str,
+    /// One line for `cargo run -- list`.
+    pub description: &'static str,
+    /// Runs it: the arguments after the name, the config and the database;
+    /// returns the exit status.
+    pub run: fn(&[String], &crate::config::Config, &crate::db::Db) -> i32,
+}
+
+/// Commands [`App::run`] handles itself, which an app command cannot take.
+#[cfg(feature = "db")]
+const BUILT_IN: &[(&str, &str)] = &[
+    ("list", "List the commands (also: help)"),
+    ("help", ""),
+    ("migrate", "Run the pending migrations"),
+    ("migrate:status", "Show which migrations ran"),
+    ("migrate:rollback", "Roll back the last batch of migrations"),
+    ("db:seed", "Migrate, then run the seeders"),
+    (
+        "user:create",
+        "Create a verified user: user:create EMAIL ROLE [NAME]",
+    ),
+    (
+        "queue:work",
+        "Run only the queue workers (QUEUE_WORKERS, at least one)",
+    ),
+];
+
 /// A web app: its config functions, its migrations and seeders, and its
 /// routes. The app declares one in `app/lib.rs`; `main.rs` runs it and tests
 /// build it, so the wiring every app repeats lives here: opening and migrating
@@ -976,6 +1031,7 @@ fn content_type(file: &Path) -> &'static str {
 ///         migrations: database::migrations,
 ///         seeders: database::seeders,
 ///         routes,
+///         commands: &[],
 ///         # #[cfg(feature = "auth")]
 ///         # roles: &["super-admin", "admin", "user", "blocked"],
 ///         # #[cfg(feature = "mail")]
@@ -1005,6 +1061,9 @@ pub struct App {
     /// Adds the app's routes to a router that already shares the database
     /// and disks and sends security headers.
     pub routes: fn(Router, &crate::config::Config, &crate::db::Db) -> Router,
+    /// The app's console commands, such as `console::greet::COMMAND`, run
+    /// with `cargo run -- NAME ARGS`; `cargo run -- list` shows them.
+    pub commands: &'static [Command],
     /// The app's roles, highest first (ADR 0013), such as
     /// `&["super-admin", "admin", "user", "blocked"]`.
     #[cfg(feature = "auth")]
@@ -1020,18 +1079,18 @@ pub struct App {
 
 #[cfg(feature = "db")]
 impl App {
-    /// Loads `.env`, installs the logger, then either runs a database command
-    /// given as the first argument (`migrate`, `migrate:rollback`, `db:seed`)
-    /// and exits with its status, or migrates, links `public/storage` to the
-    /// public disk (like `php artisan storage:link`; a failure is a warning),
-    /// starts `QUEUE_WORKERS` queue workers with the `queue` feature and
-    /// serves the routes. With the first argument `queue:work`, it runs only
-    /// the queue workers (at least one).
+    /// Loads `.env`, installs the logger, then either runs the command given
+    /// as the first argument (see [`App::command`]) and exits with its status,
+    /// or migrates, links `public/storage` to the public disk (like
+    /// `php artisan storage:link`; a failure is a warning), starts
+    /// `QUEUE_WORKERS` queue workers with the `queue` feature and serves the
+    /// routes.
     ///
     /// # Panics
     ///
     /// When a migration fails: the app must not serve an old schema. When
     /// the queue settings cannot work ([`Queue::new`](crate::queue::Queue::new)).
+    /// When an app command takes a built-in name, or two take the same one.
     pub fn run(self) {
         use crate::db::Db;
         use crate::log::Logger;
@@ -1039,25 +1098,11 @@ impl App {
 
         let config = crate::config::Config::load();
         Log::init(Logger::new(&(self.logging)(&config)));
+        self.check_commands();
         let db = Db::connect(&(self.database)(&config));
-        #[cfg(feature = "auth")]
-        if std::env::args().nth(1).as_deref() == Some("user:create") {
-            std::process::exit(
-                self.create_user(&db, &std::env::args().skip(2).collect::<Vec<_>>()),
-            );
-        }
-        #[cfg(feature = "queue")]
-        if std::env::args().nth(1).as_deref() == Some("queue:work") {
-            let workers = crate::queue::workers(&config).max(1);
-            println!("Working the queue on {workers} threads");
-            for worker in self.queue(&config, db).start(workers, &Shutdown::new()) {
-                let _ = worker.join();
-            }
-            std::process::exit(0);
-        }
-        if let Some(command) = std::env::args().nth(1) {
-            let (migrations, seeders) = ((self.migrations)(), (self.seeders)());
-            std::process::exit(crate::db::command(&db, &command, &migrations, &seeders));
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if let [name, args @ ..] = args.as_slice() {
+            std::process::exit(self.command(&config, &db, name, args));
         }
         db.migrate(&(self.migrations)())
             .unwrap_or_else(|error| panic!("migration failed: {error}"));
@@ -1105,6 +1150,89 @@ impl App {
     pub fn queue(&self, config: &crate::config::Config, db: crate::db::Db) -> crate::queue::Queue {
         crate::queue::Queue::new(config, db, (self.jobs)())
             .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Runs the console command `name` with `args` and returns its exit
+    /// status: `list` (or `help`), the database commands, `user:create` with
+    /// the `auth` feature, then the app's own [`Command`]s. An unknown name
+    /// prints a hint and returns 2.
+    pub fn command(
+        &self,
+        config: &crate::config::Config,
+        db: &crate::db::Db,
+        name: &str,
+        args: &[String],
+    ) -> i32 {
+        match name {
+            "list" | "help" => {
+                print!("{}", self.list());
+                0
+            }
+            "migrate" | "migrate:status" | "migrate:rollback" | "db:seed" => {
+                crate::db::command(db, name, &(self.migrations)(), &(self.seeders)())
+            }
+            #[cfg(feature = "auth")]
+            "user:create" => self.create_user(db, args),
+            #[cfg(feature = "queue")]
+            "queue:work" => {
+                let workers = crate::queue::workers(config).max(1);
+                println!("Working the queue on {workers} threads");
+                for worker in self
+                    .queue(config, db.clone())
+                    .start(workers, &Shutdown::new())
+                {
+                    let _ = worker.join();
+                }
+                0
+            }
+            _ => match self.commands.iter().find(|command| command.name == name) {
+                Some(command) => (command.run)(args, config, db),
+                None => {
+                    eprintln!("unknown command {name:?}; `cargo run -- list` shows them");
+                    2
+                }
+            },
+        }
+    }
+
+    /// The built-in and app commands with their descriptions, for `list`.
+    pub fn list(&self) -> String {
+        let commands: Vec<(&str, &str)> = BUILT_IN
+            .iter()
+            .copied()
+            .filter(|(name, _)| *name != "help")
+            .filter(|(name, _)| cfg!(feature = "auth") || *name != "user:create")
+            .filter(|(name, _)| cfg!(feature = "queue") || *name != "queue:work")
+            .chain(
+                self.commands
+                    .iter()
+                    .map(|command| (command.name, command.description)),
+            )
+            .collect();
+        let width = commands
+            .iter()
+            .map(|(name, _)| name.len())
+            .max()
+            .unwrap_or(0);
+        let mut list = String::from(
+            "Usage: cargo run -- [COMMAND] [ARGS]; no command serves the app.\n\nCommands:\n",
+        );
+        for (name, description) in commands {
+            list += &format!("  {name:width$}  {description}\n");
+        }
+        list
+    }
+
+    /// Panics when an app command takes a built-in name or two share one, so
+    /// the mistake shows on the first run, not when the command is needed.
+    fn check_commands(&self) {
+        for (at, command) in self.commands.iter().enumerate() {
+            let taken = BUILT_IN.iter().any(|(name, _)| *name == command.name)
+                || self.commands[..at]
+                    .iter()
+                    .any(|other| other.name == command.name);
+            assert!(!taken, "app command {:?} is already taken", command.name);
+        }
     }
 
     /// `user:create <email> <role> [name]`: migrates, creates the user and
@@ -1585,6 +1713,90 @@ fn respond(connection: &mut Connection, routes: &Router, shutdown: &Shutdown) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "db")]
+    fn console_app(commands: &'static [Command]) -> App {
+        App {
+            logging: crate::log::Settings::from_config,
+            database: crate::db::Settings::from_config,
+            filesystems: |_| unreachable!("no disks in console tests"),
+            migrations: Vec::new,
+            seeders: Vec::new,
+            routes: |router, _, _| router,
+            commands,
+            #[cfg(feature = "auth")]
+            roles: &["admin", "user"],
+            #[cfg(feature = "mail")]
+            mail: crate::mail::Settings::from_config,
+            #[cfg(feature = "queue")]
+            jobs: Vec::new,
+        }
+    }
+
+    #[cfg(feature = "db")]
+    #[test]
+    fn app_commands_run_with_args_and_return_their_status() {
+        const EXIT: Command = Command {
+            name: "exit:with",
+            description: "Exit with the status given",
+            // The status is the argument, so the test sees args arrive.
+            run: |args, config, db| {
+                assert_eq!(config.get("DB_DATABASE"), Some(":memory:"));
+                db.migrate(&[]).unwrap();
+                args.first().map_or(-1, |status| status.parse().unwrap())
+            },
+        };
+        let app = console_app(&[EXIT]);
+        app.check_commands();
+        let config = crate::config::Config::parse("DB_DATABASE=:memory:\n");
+        let db = crate::db::Db::connect(&(app.database)(&config));
+        let run = |name: &str, args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+            app.command(&config, &db, name, &args)
+        };
+        assert_eq!(run("exit:with", &["7"]), 7);
+        assert_eq!(run("exit:with", &["0"]), 0);
+        assert_eq!(run("exit:with", &[]), -1);
+        assert_eq!(run("nope", &[]), 2, "unknown, not a panic");
+        assert_eq!(run("migrate", &[]), 0, "built-ins still run");
+        assert_eq!(run("list", &[]), 0);
+        let list = app.list();
+        assert!(
+            list.contains("  exit:with         Exit with the status given\n"),
+            "{list}"
+        );
+        assert!(list.contains("  migrate:rollback  "), "{list}");
+        assert!(!list.contains("  help "), "{list}");
+        assert_eq!(
+            list.contains("user:create"),
+            cfg!(feature = "auth"),
+            "{list}"
+        );
+    }
+
+    #[cfg(feature = "db")]
+    #[test]
+    #[should_panic(expected = "app command \"migrate\" is already taken")]
+    fn app_commands_cannot_shadow_built_ins() {
+        const MIGRATE: Command = Command {
+            name: "migrate",
+            description: "Not the real one",
+            run: |_, _, _| 0,
+        };
+        console_app(&[MIGRATE]).check_commands();
+    }
+
+    #[cfg(feature = "db")]
+    #[test]
+    #[should_panic(expected = "app command \"greet\" is already taken")]
+    fn app_commands_have_one_name_each() {
+        const GREET: Command = Command {
+            name: "greet",
+            description: "Say hello",
+            run: |_, _, _| 0,
+        };
+        console_app(&[GREET, GREET]).check_commands();
+    }
 
     #[test]
     fn slow_requests_do_not_hold_up_the_rest() {

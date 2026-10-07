@@ -23,6 +23,10 @@ pub mod http {
     pub mod requests {}
 }
 
+/// Console commands, run with `cargo run -- NAME ARGS` and listed by
+/// `cargo run -- list` (`clamp make:command NAME`).
+pub mod console {}
+
 /// Data the app works with (`clamp make:model NAME`).
 pub mod models {}
 
@@ -70,5 +74,7 @@ pub fn app() -> App {
             // `let router = router.package(blog::Blog::from(config));`
             routes::api::routes(routes::web::routes(router), &settings)
         },
+        // Console commands, such as `console::send_report::COMMAND`.
+        commands: &[],
     }
 }

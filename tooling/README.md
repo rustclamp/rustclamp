@@ -73,8 +73,9 @@ starter app can build before the crates.io publication gate is cleared.
 In a `--web` project, `clamp make:migration NAME` and `make:seeder NAME` add
 files that `build.rs` picks up; `make:controller`, `make:middleware`,
 `make:request` (a validated form struct) and `make:model` (a
-`#[derive(Model)]` struct) write `app/http/...` or `app/models/...`, add the
-module to the map in `app/lib.rs` and print the route or kernel line to add.
+`#[derive(Model)]` struct) write `app/http/...` or `app/models/...`, and
+`make:command` writes `app/console/...` (run with `cargo run -- NAME`); each adds the
+module to the map in `app/lib.rs` and prints the route, kernel or `commands` line to add.
 `NAME` is snake_case or UpperCamelCase (`PostController` becomes
 `post_controller.rs`); an existing file is never overwritten.
 Frontend starter kits are separate under `starter-kits/`. `clamp --version` prints

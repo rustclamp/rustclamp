@@ -1,6 +1,6 @@
 # ADR 0024: Command contribution target
 
-Status: Proposed, 2026-09-30.
+Status: Accepted, 2026-10-07.
 
 ## Context
 
@@ -17,6 +17,28 @@ command declaration under a qualifier, and a target validates the declarations
 (duplicate names), sorts them and compiles them into a `CommandTree`. What it
 is not: a package. Its handler is `fn(Option<&dyn Clock>)`, which only fits
 that example, and it has no argument parsing.
+
+## Decision (2026-10-07)
+
+Web apps get console commands now, without `clap` and without a new
+dependency (rustclamp/rustclamp#122):
+
+- `rustclamp::web::Command` is a name, a one-line description and a handler
+  `fn(&[String], &Config, &Db) -> i32` that gets the arguments after the
+  name and returns the exit status.
+- `App::commands` lists them (`&'static [Command]`). `cargo run -- NAME ARGS`
+  runs one; `cargo run -- list` (or `help`) prints the built-in commands
+  (`migrate`, `migrate:status`, `migrate:rollback`, `db:seed`, `user:create`)
+  and the app's, with descriptions. An unknown name prints a hint and exits
+  with 2. An app command that takes a built-in name, or a name another app
+  command has, panics on the first run.
+- The web template keeps them in `app/console/`; `clamp make:command NAME`
+  writes one and adds it to the module map in `app/lib.rs`.
+
+The kernel-level `CliCommandTarget` with `clap` below is deferred. Its open
+questions stay open; it is the target for non-web CLI processes (levels 07
+and 08) and should reuse the same name/description/handler shape where it
+fits.
 
 ## Proposal
 
