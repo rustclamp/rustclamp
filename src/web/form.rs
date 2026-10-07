@@ -71,6 +71,9 @@ impl Request {
     /// `db` feature, `unique:table,column` fails when a row already has the value,
     /// and `unique:table,column,ID` ignores the row with that `id` (an edit form);
     /// it reads the [`Db`](crate::db::Db) given to [`Router::state`](super::Router::state).
+    /// With the `regex` feature, `regex:NAME` matches the pattern registered as
+    /// `NAME` in the [`Patterns`](super::Patterns) given to `Router::state`, so a
+    /// `|` in a pattern never meets the rule separator.
     /// A field that is empty and not `required` passes. Values are trimmed.
     ///
     /// A field with `file`, `image` or `mimes:...` is an upload
@@ -287,7 +290,60 @@ fn check(request: &Request, rule: &str, value: &str, label: &str, name: &str) ->
                 .unwrap_or_else(|error| panic!("rule unique for {name}: {error}"));
             (taken > 0).then(|| format!("The {label} has already been taken."))
         }
+        #[cfg(feature = "regex")]
+        "regex" => {
+            let patterns = request
+                .state::<Patterns>()
+                .unwrap_or_else(|| panic!("rule regex for {name} needs Patterns in Router::state"));
+            let pattern = patterns
+                .0
+                .iter()
+                .find(|(key, _)| key == argument)
+                .unwrap_or_else(|| panic!("rule regex for {name}: no pattern named {argument}"));
+            (!pattern.1.is_match(value)).then(|| format!("The {label} field format is invalid."))
+        }
         _ => panic!("unknown validation rule {rule} for {name}"),
+    }
+}
+
+/// Named patterns for the `regex:NAME` rule of [`Request::validate`], given to
+/// [`Router::state`](super::Router::state). Each compiles once, here; the
+/// `regex` crate matches in linear time, so no input can make a pattern slow.
+/// A pattern matches anywhere in the value unless anchored with `^…$`.
+///
+/// ```
+/// use rustclamp::web::{Patterns, Request, Router};
+///
+/// let app = Router::new()
+///     .state(Patterns::new(&[("slug", r"^[a-z0-9]+(-[a-z0-9]+)*$")]));
+/// # let _ = app;
+/// ```
+///
+/// A route then validates with `("slug", "required|regex:slug")`.
+#[cfg(feature = "regex")]
+#[derive(Debug)]
+pub struct Patterns(Vec<(String, regex::Regex)>);
+
+#[cfg(feature = "regex")]
+impl Patterns {
+    /// Compiles each `(name, pattern)`.
+    ///
+    /// # Panics
+    ///
+    /// On a pattern that does not compile, naming it: that is a bug in the app,
+    /// found at startup rather than on a request.
+    pub fn new(patterns: &[(&str, &str)]) -> Self {
+        Self(
+            patterns
+                .iter()
+                .map(|(name, pattern)| {
+                    let regex = regex::Regex::new(pattern).unwrap_or_else(|error| {
+                        panic!("regex pattern {name} ({pattern}) does not compile: {error}")
+                    });
+                    ((*name).to_owned(), regex)
+                })
+                .collect(),
+        )
     }
 }
 
@@ -499,6 +555,51 @@ mod tests {
                 .validate(&[("email", "unique:users,email,2")])
                 .is_err()
         );
+    }
+
+    #[cfg(feature = "regex")]
+    #[test]
+    fn regex_matches_named_patterns() {
+        use super::super::request::State;
+        use std::sync::Arc;
+        let patterns = Patterns::new(&[
+            ("slug", r"^[a-z0-9]+(-[a-z0-9]+)*$"),
+            ("pet", r"^(cat|dog)$"),
+            ("code", r"(?i)^\w+-\d{4}$"),
+        ]);
+        let state = State(Arc::new(vec![Arc::new(patterns)]));
+        let rules = [
+            ("slug", "required|regex:slug"),
+            ("pet", "regex:pet"),
+            ("note", "regex:pet"),
+            ("ref", "regex:code"),
+        ];
+        let mut ok =
+            Request::post("/").with_body("slug=hello-world&pet=dog&note=&ref=%C5%A0T-2026");
+        ok.state = state.clone();
+        assert!(
+            ok.validate(&rules).is_ok(),
+            "an empty optional field skips regex"
+        );
+        let mut bad = Request::post("/").with_body("slug=Hello+World&pet=cow&ref=x-12");
+        bad.state = state;
+        assert_eq!(
+            bad.validate_with(&rules, &[("pet.regex", "Cats or dogs.")])
+                .unwrap_err()
+                .errors,
+            [
+                "The slug field format is invalid.",
+                "Cats or dogs.",
+                "The ref field format is invalid."
+            ]
+        );
+    }
+
+    #[cfg(feature = "regex")]
+    #[test]
+    #[should_panic(expected = "regex pattern zip ((\\d) does not compile")]
+    fn invalid_pattern_panics_at_registration() {
+        let _ = Patterns::new(&[("zip", r"(\d")]);
     }
 
     #[test]

@@ -50,6 +50,8 @@ use std::time::{Duration, Instant};
 
 use crate::log::Log;
 
+#[cfg(feature = "regex")]
+pub use form::Patterns;
 pub use form::{Form, Invalid};
 pub use request::{MAX_BODY, Request};
 pub use session::{COOKIE, CSRF_FIELD, Session, Sessions, csrf};

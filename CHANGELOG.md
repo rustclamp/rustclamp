@@ -51,6 +51,11 @@
 
 ### Added
 
+- A `regex:NAME` validation rule (#125, ADR 0033) behind the new optional
+  `regex` feature, which adds the `regex` crate (no `perf` features). Patterns
+  are registered with `web::Patterns::new(&[(name, pattern)])` in
+  `Router::state` and compiled once, so `|` in a pattern is safe; a pattern
+  that doesn't compile panics at startup. Matching is linear-time.
 - The web template has an HTTP kernel (#122): `app/http/kernel.rs` holds all
   middleware (`global`, and the `web` and `api` groups that `routes/` use),
   and `GET /` goes to a real controller, `http/controllers/home.rs`.
