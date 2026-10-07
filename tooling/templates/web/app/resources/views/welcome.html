@@ -76,15 +76,12 @@
         <pre class="overflow-x-auto p-5 font-mono text-sm leading-7 text-neutral-600 dark:text-neutral-400"><span class="text-indigo-500 dark:text-indigo-300">use</span> rustclamp::web::Router;
 
 <span class="text-indigo-500 dark:text-indigo-300">use</span> crate::config::Settings;
-<span class="text-indigo-500 dark:text-indigo-300">use</span> crate::http::controllers::health;
 
 <span class="text-neutral-400 dark:text-neutral-500">/// JSON endpoints, rate limited per client.</span>
 <span class="text-indigo-500 dark:text-indigo-300">pub fn</span> routes(router: Router, settings: &amp;Settings) -&gt; Router {
     <span class="text-indigo-500 dark:text-indigo-300">let</span> throttle = settings.per_minute(settings.api_per_minute);
-    router.group(|api| {
-        api.middleware(throttle.middleware())
-            .get(<span class="text-orange-600 dark:text-orange-400">"/api/health"</span>, health::show)
-    })
+    <span class="text-neutral-400 dark:text-neutral-500">// `/api/health` answers `{"status":"ok"}` while the database answers.</span>
+    router.group(|api| api.middleware(throttle.middleware()).up(<span class="text-orange-600 dark:text-orange-400">"/api/health"</span>))
 }</pre>
       </div>
     </section>
