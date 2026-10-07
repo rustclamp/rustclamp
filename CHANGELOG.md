@@ -79,6 +79,17 @@
   one Lua script, `REDIS_PREFIX` required in production). `App::run` starts
   `QUEUE_WORKERS` threads (1, or 0 in production); the argument `queue:work`
   runs only workers. Tests call `app.queue(..).work_once(now)`.
+- Scheduled tasks (ADR 0035, #120), the optional `schedule` feature (`web`,
+  `db`): `App` gains `schedule: &'static [Task]`, each a name, a UTC `At`
+  (`EveryMinutes(n)`, `Hourly`, `Daily`, `Weekly`) and a
+  `fn(&Config, &Db) -> Result<(), String>` (a panic is a failure). The
+  built-in `schedule:run` runs the tasks due this minute, for cron or a
+  systemd timer; `App::run` also runs them on a thread when `SCHEDULE_THREAD`
+  is true (default outside production). A `schedule_runs` table claims each
+  minute with one `UPDATE`, so a task runs once per minute across processes
+  and never overlaps itself (`SCHEDULE_STALE_AFTER`, 3600 s); missed minutes
+  are skipped. Tests call `app.schedule(..).run_due(now)`.
+  `rustclamp::time` gains `hour_minute` and `weekday`.
 - `queue:retry ID|all` and `queue:forget ID|all` (#136): built-in commands
   with the `queue` feature, and `Queue::retry` / `Queue::forget`. A retried
   job goes back to the `jobs` table or the Redis list with its attempts reset.

@@ -74,6 +74,7 @@ All modules are opt-in Cargo features. Unsafe code is forbidden.
 | `auth` | `rustclamp::web::auth` | Login, roles, email verification and password reset ([ADR 0013](docs/adr/0013-auth-and-roles.md), [0016](docs/adr/0016-account-flows.md)) |
 | `mail` | `rustclamp::mail` | SMTP with STARTTLS over rustls, queued through a `mail_outbox` table ([ADR 0015](docs/adr/0015-mail.md)) |
 | `queue` | `rustclamp::queue` | Background jobs by name: `request.queue().dispatch(..)`, retries with backoff, `failed_jobs` (`queue:retry`, `queue:forget`), a `jobs` table or Redis, `queue:work` ([ADR 0019](docs/adr/0019-queue.md)) |
+| `schedule` | `rustclamp::schedule` | Scheduled tasks in UTC (`EveryMinutes`, `Hourly`, `Daily`, `Weekly`), `schedule:run` for cron, once per minute across processes ([ADR 0035](docs/adr/0035-scheduled-tasks.md)) |
 | `markdown` | `rustclamp::web::markdown` | Markdown to HTML that escapes raw HTML and unsafe links |
 | `regex` | `rustclamp::web::Patterns` | `regex:NAME` validation rule with linear-time patterns ([ADR 0033](docs/adr/0033-regex-validation.md)) |
 | `cache` | `rustclamp::cache` | Bounded in-process cache with LRU eviction and optional TTL |

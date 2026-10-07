@@ -998,6 +998,10 @@ const BUILT_IN: &[(&str, &str)] = &[
     ),
     ("queue:retry", "Queue failed jobs again: queue:retry ID|all"),
     ("queue:forget", "Delete failed jobs: queue:forget ID|all"),
+    (
+        "schedule:run",
+        "Run the scheduled tasks due this minute (cron runs it every minute)",
+    ),
 ];
 
 /// A web app: its config functions, its migrations and seeders, and its
@@ -1040,6 +1044,8 @@ const BUILT_IN: &[(&str, &str)] = &[
 ///         # mail: rustclamp::mail::Settings::from_config,
 ///         # #[cfg(feature = "queue")]
 ///         # jobs: Vec::new,
+///         # #[cfg(feature = "schedule")]
+///         # schedule: &[],
 ///     }
 /// }
 ///
@@ -1077,6 +1083,9 @@ pub struct App {
     /// `|| vec![("thumbnail", jobs::thumbnail)]`.
     #[cfg(feature = "queue")]
     pub jobs: fn() -> Vec<(&'static str, crate::queue::Handler)>,
+    /// The scheduled tasks (ADR 0035), such as `console::schedule::SCHEDULE`.
+    #[cfg(feature = "schedule")]
+    pub schedule: &'static [crate::schedule::Task],
 }
 
 #[cfg(feature = "db")]
@@ -1102,6 +1111,9 @@ impl App {
         Log::init(Logger::new(&(self.logging)(&config)));
         self.check_commands();
         let db = Db::connect(&(self.database)(&config));
+        // Duplicate task names and bad times stop the app on its first run.
+        #[cfg(feature = "schedule")]
+        self.schedule(&config, db.clone());
         let args: Vec<String> = std::env::args().skip(1).collect();
         if let [name, args @ ..] = args.as_slice() {
             std::process::exit(self.command(&config, &db, name, args));
@@ -1131,6 +1143,23 @@ impl App {
                 ));
             }
             queue.start(workers, &Shutdown::new());
+        }
+        #[cfg(feature = "schedule")]
+        if !self.schedule.is_empty() {
+            let schedule = self.schedule(&config, db.clone());
+            if crate::schedule::thread(&config) {
+                schedule.start();
+            } else if let Ok(last) = schedule.last_run() {
+                // No run for an hour: a deploy may be missing its `schedule:run` cron line.
+                let hour_ago = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_secs() as i64 - 3600);
+                if last.is_none_or(|last| last < hour_ago) {
+                    Log::warning(format_args!(
+                        "scheduled tasks and SCHEDULE_THREAD=false, but no schedule:run in the last hour: add a cron line, or nothing runs them"
+                    ));
+                }
+            }
         }
         serve(self.router(&config, db));
     }
@@ -1165,6 +1194,22 @@ impl App {
     pub fn queue(&self, config: &crate::config::Config, db: crate::db::Db) -> crate::queue::Queue {
         crate::queue::Queue::new(config, db, (self.jobs)())
             .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// The app's scheduled tasks on `db`. Tests run them with
+    /// [`Schedule::run_due`](crate::schedule::Schedule::run_due) and a clock
+    /// of their own, on the database [`App::test`] returns.
+    ///
+    /// # Panics
+    ///
+    /// When two tasks share a name or a time is out of range.
+    #[cfg(feature = "schedule")]
+    pub fn schedule(
+        &self,
+        config: &crate::config::Config,
+        db: crate::db::Db,
+    ) -> crate::schedule::Schedule {
+        crate::schedule::Schedule::new(self.schedule, config, db)
     }
 
     /// Runs the console command `name` with `args` and returns its exit
@@ -1202,6 +1247,17 @@ impl App {
             }
             #[cfg(feature = "queue")]
             "queue:retry" | "queue:forget" => self.failed_jobs(config, db, name, args),
+            #[cfg(feature = "schedule")]
+            "schedule:run" => match self
+                .schedule(config, db.clone())
+                .run_due(std::time::SystemTime::now())
+            {
+                Ok(ran) => i32::from(ran.iter().any(|(_, result)| result.is_err())),
+                Err(error) => {
+                    eprintln!("schedule:run failed: {error}");
+                    1
+                }
+            },
             _ => match self.commands.iter().find(|command| command.name == name) {
                 Some(command) => (command.run)(args, config, db),
                 None => {
@@ -1267,6 +1323,7 @@ impl App {
             .filter(|(name, _)| *name != "help")
             .filter(|(name, _)| cfg!(feature = "auth") || *name != "user:create")
             .filter(|(name, _)| cfg!(feature = "queue") || !name.starts_with("queue:"))
+            .filter(|(name, _)| cfg!(feature = "schedule") || !name.starts_with("schedule:"))
             .chain(
                 self.commands
                     .iter()
@@ -1350,6 +1407,25 @@ impl App {
             .unwrap_or_else(|error| panic!("seeding failed: {error}"));
         (self.router(&config, db.clone()), db)
     }
+}
+
+/// Runs `work`, turning a panic into an `Err` with its message, for queue
+/// jobs and scheduled tasks.
+#[cfg(any(feature = "queue", feature = "schedule"))]
+pub(crate) fn catch_panic(
+    work: impl FnOnce() -> std::result::Result<(), String>,
+) -> std::result::Result<(), String> {
+    catch_unwind(AssertUnwindSafe(work))
+        .unwrap_or_else(|panic| Err(format!("panicked: {}", panic_reason(&*panic))))
+}
+
+/// The message of a caught panic, or nothing.
+fn panic_reason(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|text| (*text).to_owned())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_default()
 }
 
 /// Threads answering requests unless `WEB_THREADS` says otherwise.
@@ -1723,11 +1799,7 @@ fn respond(connection: &mut Connection, routes: &Router, shutdown: &Shutdown) ->
         Ok(request) => {
             let response = catch_unwind(AssertUnwindSafe(|| routes.handle(&request)))
                 .unwrap_or_else(|panic| {
-                    let reason = panic
-                        .downcast_ref::<&str>()
-                        .map(|text| (*text).to_owned())
-                        .or_else(|| panic.downcast_ref::<String>().cloned())
-                        .unwrap_or_default();
+                    let reason = panic_reason(&*panic);
                     let reference = request.reference();
                     crate::log::with_reference(reference, || {
                         Log::error(format_args!(
@@ -1794,6 +1866,8 @@ mod tests {
             mail: crate::mail::Settings::from_config,
             #[cfg(feature = "queue")]
             jobs: Vec::new,
+            #[cfg(feature = "schedule")]
+            schedule: &[],
         }
     }
 
