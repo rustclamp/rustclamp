@@ -51,6 +51,12 @@
 
 ### Added
 
+- Pagination and route binding (#118): `Query::offset`, `Query::paginate(page,
+  per_page, map)` returning a `Page` (`items`, `total`, `last_page`,
+  `previous`, `next`; a view value with `web`), `Model::find_public` and
+  `Request::model::<M>(param)` to load a row by its `public_id` route
+  parameter. The `Model` docs show `has_many`, `belongs_to` and eager loading
+  with the existing builder.
 - Validation rules (#117): `numeric`, `date` (`YYYY-MM-DD`), `in:a,b`,
   `confirmed`, and with `db` `unique:table[,column[,except_id]]` against the
   `Db` in `Router::state`. `Request::validate_with(rules, messages)` takes
