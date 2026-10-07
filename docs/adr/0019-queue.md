@@ -51,8 +51,9 @@ the same pattern as the mail outbox.
   table in the app's database (name, payload, error, failed_at) and the
   failure is logged as an error. An attempt counts when the job is reserved, so a job
   whose worker dies every time also ends there instead of looping. `failed_jobs` lives in the database for both
-  drivers, so failures survive a Redis flush. Retrying a failed job, or
-  forgetting it, waits for console commands (#122).
+  drivers, so failures survive a Redis flush. `queue:retry ID|all` moves
+  failed jobs back onto the active driver with their attempts reset;
+  `queue:forget ID|all` deletes them (#136).
 - **Two drivers, chosen by `QUEUE_CONNECTION`** (`database` by default, or
   `redis`).
   - **database:** a framework-owned `jobs` table (id, name, payload,
@@ -76,8 +77,8 @@ the same pattern as the mail outbox.
   - In production, `QUEUE_WORKERS` defaults to 0. The same binary, started
     with the argument `queue:work`, runs only the workers. Deploys run it as
     its own service, so a slow job never takes HTTP threads and the two can
-    restart separately. `queue:work` is a fixed argument for now; it becomes
-    an ordinary app command when #122 lands.
+    restart separately. `queue:work` is a built-in console command
+    (`cargo run -- list`, #122).
   - A worker checks a `web::Shutdown` between jobs: once stopped, it takes
     no new job and finishes the one it is running. Std has no signal hook,
     so `App::run` cannot stop it on SIGTERM; a kill cuts the job off, and

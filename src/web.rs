@@ -996,6 +996,8 @@ const BUILT_IN: &[(&str, &str)] = &[
         "queue:work",
         "Run only the queue workers (QUEUE_WORKERS, at least one)",
     ),
+    ("queue:retry", "Queue failed jobs again: queue:retry ID|all"),
+    ("queue:forget", "Delete failed jobs: queue:forget ID|all"),
 ];
 
 /// A web app: its config functions, its migrations and seeders, and its
@@ -1198,6 +1200,8 @@ impl App {
                 }
                 0
             }
+            #[cfg(feature = "queue")]
+            "queue:retry" | "queue:forget" => self.failed_jobs(config, db, name, args),
             _ => match self.commands.iter().find(|command| command.name == name) {
                 Some(command) => (command.run)(args, config, db),
                 None => {
@@ -1208,6 +1212,53 @@ impl App {
         }
     }
 
+    /// `queue:retry ID|all` and `queue:forget ID|all`: 1 when `ID` is not a
+    /// failed job, 2 for bad arguments.
+    #[cfg(feature = "queue")]
+    fn failed_jobs(
+        &self,
+        config: &crate::config::Config,
+        db: &crate::db::Db,
+        name: &str,
+        args: &[String],
+    ) -> i32 {
+        let id = match args {
+            [all] if all == "all" => None,
+            [id] if id.parse::<i64>().is_ok() => id.parse().ok(),
+            _ => {
+                eprintln!("usage: {name} ID|all");
+                return 2;
+            }
+        };
+        let queue = self.queue(config, db.clone());
+        let (done, result) = match name {
+            "queue:retry" => ("Queued again", queue.retry(id)),
+            _ => ("Deleted", queue.forget(id)),
+        };
+        match result {
+            Ok(jobs) if jobs.is_empty() => match id {
+                Some(id) => {
+                    eprintln!("no failed job {id}");
+                    1
+                }
+                None => {
+                    println!("No failed jobs");
+                    0
+                }
+            },
+            Ok(jobs) => {
+                for (id, job) in jobs {
+                    println!("{done} failed job {id} ({job})");
+                }
+                0
+            }
+            Err(error) => {
+                eprintln!("{name} failed: {error}");
+                1
+            }
+        }
+    }
+
     /// The built-in and app commands with their descriptions, for `list`.
     pub fn list(&self) -> String {
         let commands: Vec<(&str, &str)> = BUILT_IN
@@ -1215,7 +1266,7 @@ impl App {
             .copied()
             .filter(|(name, _)| *name != "help")
             .filter(|(name, _)| cfg!(feature = "auth") || *name != "user:create")
-            .filter(|(name, _)| cfg!(feature = "queue") || *name != "queue:work")
+            .filter(|(name, _)| cfg!(feature = "queue") || !name.starts_with("queue:"))
             .chain(
                 self.commands
                     .iter()
@@ -1785,6 +1836,32 @@ mod tests {
             cfg!(feature = "auth"),
             "{list}"
         );
+    }
+
+    #[cfg(feature = "queue")]
+    #[test]
+    fn queue_retry_and_forget_report_unknown_ids() {
+        let app = console_app(&[]);
+        let config = crate::config::Config::parse("DB_DATABASE=:memory:\n");
+        let db = crate::db::Db::connect(&(app.database)(&config));
+        let run = |name: &str, args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+            app.command(&config, &db, name, &args)
+        };
+        assert_eq!(run("queue:forget", &["all"]), 0, "none is fine");
+        db.with(|c| {
+            c.execute(
+                "INSERT INTO failed_jobs (name, payload, error, failed_at) VALUES ('mail', 'p', 'x', 0)",
+                [],
+            )
+        })
+        .unwrap();
+        assert_eq!(run("queue:retry", &[]), 2, "usage");
+        assert_eq!(run("queue:retry", &["one"]), 2, "usage");
+        assert_eq!(run("queue:forget", &["99"]), 1, "unknown id");
+        assert_eq!(run("queue:retry", &["1"]), 0);
+        assert_eq!(run("queue:retry", &["1"]), 1, "moved already");
+        assert!(app.list().contains("queue:forget"));
     }
 
     #[cfg(feature = "db")]
