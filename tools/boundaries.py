@@ -70,6 +70,10 @@ ALLOWED = {
         "rustclamp-runtime", "tokio", "tokio-macros", "pin-project-lite",
         "bytes", "errno", "libc", "mio", "signal-hook-registry", "socket2",
         "wasi", "windows-link", "windows-sys",
+        # Feature `mqtt` (ADR 0028): rumqttc without default features (no TLS).
+        "rumqttc", "fixedbitset", "flume", "futures-core", "futures-sink",
+        "futures-task", "futures-util", "lock_api", "log", "scopeguard",
+        "slab", "spin", "tokio-stream", "tokio-util",
     },
     "rustclamp-scheduler": {
         "rustclamp-core",
@@ -338,7 +342,7 @@ ALLOWED = {
 }
 OPTIONAL = {
     "rustclamp-runtime": {"tokio"},
-    "rustclamp-worker": {"tokio", "rustclamp-runtime", "rusqlite"},
+    "rustclamp-worker": {"tokio", "rustclamp-runtime", "rusqlite", "rumqttc"},
     "rustclamp-scheduler": {"tokio"},
     "rustclamp": {"rustclamp-core", "rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "rustclamp-macros", "rustls", "webpki-roots"},
 }
