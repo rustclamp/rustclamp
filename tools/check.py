@@ -151,6 +151,7 @@ def check_examples(root):
         ("06-create-order", "rustclamp-example-create-order"),
         ("07-device-loop", "rustclamp-example-device-loop"),
         ("08-site-server", "rustclamp-example-site-server"),
+        ("09-observability", "rustclamp-example-observability"),
         ("a1-capability", "rustclamp-example-capability"),
         ("a2-module", "rustclamp-example-module"),
         ("a3-contribution", "rustclamp-example-contribution"),

@@ -20,5 +20,5 @@ a production asset server.
 
 ## What can I do now?
 
-- [Capability](../a1-capability/README.md): start the architecture track
+- [Observability](../09-observability/README.md): metrics and tracing through one request
 - [Existing Axum app](../02-axum-app/README.md): mount an existing Axum app

@@ -15,6 +15,7 @@ Each step is a runnable package that `tools/check.py` builds and runs in this or
 | 6 | [`06-create-order`](06-create-order/README.md) | PostgreSQL outbox to a broker |
 | 7 | [`07-device-loop`](07-device-loop/README.md) | Deterministic device loop |
 | 8 | [`08-site-server`](08-site-server/README.md) | Serve a site through the HTTP target |
+| 9 | [`09-observability`](09-observability/README.md) | Metrics and one correlation id through API and Worker |
 
 ## Architecture track
 

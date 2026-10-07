@@ -1,17 +1,10 @@
 //! Counters and gauges with a Prometheus text renderer.
 //!
-//! Enabled by the `metrics` feature. Std only. The registry serves nothing
-//! itself: an app keeps one (for example in an `Arc` or a `static`) and
-//! answers its own `/metrics` route with [`Registry::render`] (the `web`
-//! feature's `Router`):
-//!
-//! ```ignore
-//! let metrics = std::sync::Arc::new(Registry::new());
-//! let scrape = metrics.clone();
-//! let router = Router::new().get("/metrics", move |_| {
-//!     Response::new(200, "text/plain; version=0.0.4; charset=utf-8", scrape.render())
-//! });
-//! ```
+//! Enabled by the `metrics` feature. Std only. With the `web` feature,
+//! `Router::metrics` serves a registry at a route and counts requests into
+//! it; elsewhere, answer a scrape with [`Registry::render`].
+//! An HTTP (Axum) app uses `rustclamp_http::with_metrics` and passes
+//! `render` as its extra metrics.
 //!
 //! ```
 //! use rustclamp::metrics::Registry;
