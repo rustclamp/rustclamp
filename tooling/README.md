@@ -102,6 +102,8 @@ version. The command rejects unknown versions.
 
 The inspection model contains architecture metadata only. It never serializes
 configuration values, secrets, live runtime state, or provider credentials.
+`with_config_keys(document, &config)` adds an optional `config_keys` array (key
+names only), which `clamp inspect` shows; a value never enters the document.
 Adding fields to this public schema requires compatibility review.
 
 ## Inspection boundaries and example coverage

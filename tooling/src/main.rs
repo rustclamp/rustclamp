@@ -389,7 +389,22 @@ fn inspection(
     };
 
     let (human, machine) = match command {
-        "inspect" => (inspect_text(process), json!({"process": process})),
+        "inspect" => match document.get("config_keys") {
+            Some(keys) => (
+                format!(
+                    "{}\nConfig keys: {}",
+                    inspect_text(process),
+                    keys.as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                json!({"process": process, "config_keys": keys}),
+            ),
+            None => (inspect_text(process), json!({"process": process})),
+        },
         "tree" => {
             let tree = tree_text(process);
             (tree.clone(), json!({"tree": tree}))
@@ -937,6 +952,35 @@ fn dev() -> Result<u8, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use rustclamp::config::Config;
+    use rustclamp_core::{ApplicationId, ExecutionId, ModuleId, ProcessId};
+    use rustclamp_kernel::ApplicationBlueprint;
+
+    /// `clamp inspect` lists config keys but never a value (#124).
+    #[test]
+    fn inspect_shows_config_keys_never_values() {
+        let root = ModuleId::new("app.web");
+        let mut blueprint = ApplicationBlueprint::new(ApplicationId::new("sample"));
+        blueprint
+            .add_module(root)
+            .add_execution(ExecutionId::new("web"), root)
+            .add_process(ProcessId::new("web"), vec![ExecutionId::new("web")]);
+        let projection = blueprint.project(ProcessId::new("web")).unwrap();
+        let document = rustclamp_tooling::with_config_keys(
+            rustclamp_tooling::inspection_document(&[&projection]).unwrap(),
+            &Config::parse("APP_KEY=hunter2-secret\nAPP_NAME=Site\n"),
+        );
+        let path = std::env::temp_dir().join(format!("clamp-inspect-{}.json", std::process::id()));
+        fs::write(&path, document.to_string()).unwrap();
+        let (human, machine, _) =
+            inspection("inspect", path.to_str().unwrap(), None, None).unwrap();
+        let _ = fs::remove_file(&path);
+        assert!(human.ends_with("Config keys: APP_KEY, APP_NAME"));
+        assert_eq!(machine["config_keys"], json!(["APP_KEY", "APP_NAME"]));
+        assert!(!human.contains("hunter2") && !machine.to_string().contains("hunter2"));
+    }
+
     /// The welcome page quotes `app/routes/api.rs`; a stale copy sends readers
     /// to code the project does not have (#88).
     #[test]
