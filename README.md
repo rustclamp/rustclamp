@@ -75,6 +75,7 @@ All modules are opt-in Cargo features. Unsafe code is forbidden.
 | `mail` | `rustclamp::mail` | SMTP with STARTTLS over rustls, queued through a `mail_outbox` table ([ADR 0015](docs/adr/0015-mail.md)) |
 | `queue` | `rustclamp::queue` | Background jobs by name: `request.queue().dispatch(..)`, retries with backoff, `failed_jobs`, a `jobs` table or Redis, `queue:work` ([ADR 0019](docs/adr/0019-queue.md)) |
 | `markdown` | `rustclamp::web::markdown` | Markdown to HTML that escapes raw HTML and unsafe links |
+| `regex` | `rustclamp::web::Patterns` | `regex:NAME` validation rule with linear-time patterns ([ADR 0033](docs/adr/0033-regex-validation.md)) |
 | `cache` | `rustclamp::cache` | Bounded in-process cache with LRU eviction and optional TTL |
 | `metrics` | `rustclamp::metrics` | Counters and gauges with a Prometheus text renderer; `Router::metrics` serves them |
 | `build` | `rustclamp::build` | `build.rs` helpers such as `build::database` |

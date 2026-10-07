@@ -35,6 +35,8 @@ mail = ["config", "db", "log", "dep:rustls", "dep:webpki-roots"]
 auth = ["web", "db", "crypto"]
 # Optional Markdown to HTML that is safe to print (`rustclamp::web::markdown`).
 markdown = ["web", "dep:pulldown-cmark"]
+# Optional `regex:NAME` validation rule with linear-time patterns (`web::Patterns`, ADR 0033).
+regex = ["web", "dep:regex"]
 # Optional bounded in-process cache (`rustclamp::cache`).
 cache = []
 # Optional counters and gauges with a Prometheus text renderer (`rustclamp::metrics`).
@@ -70,6 +72,7 @@ getrandom = { version = "0.4.3", optional = true }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 webpki-roots = { version = "1.0.9", optional = true }
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"], optional = true }
+regex = { version = "1.13.1", default-features = false, features = ["std", "unicode-perl", "unicode-case"], optional = true }
 
 # Local multi-repo development: build against the sibling ../core checkout instead of
 # fetching it. Only applies when this repository is the build root; a project that

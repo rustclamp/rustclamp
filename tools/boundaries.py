@@ -32,6 +32,11 @@ ALLOWED = {
         "rand_core", "r-efi", "sha2", "typenum", "universal-hash",
         # The optional `markdown` feature: pulldown-cmark, HTML output only.
         "memchr", "pulldown-cmark", "pulldown-cmark-escape", "unicase",
+        # The optional `regex` feature: the regex crate without its perf
+        # features (ADR 0033). aho-corasick is never built: regex's `std`
+        # feature names it weakly (`aho-corasick?/std`), which Cargo still
+        # locks and reports in metadata (rust-lang/cargo#10801).
+        "aho-corasick", "regex", "regex-automata", "regex-syntax",
         # The optional `mail` feature: rustls with the ring provider and
         # webpki-roots (ADR 0015). ring compiles C and assembly with cc; the
         # windows* and wasi entries build only for those targets.
@@ -350,7 +355,7 @@ OPTIONAL = {
     "rustclamp-runtime": {"tokio"},
     "rustclamp-worker": {"tokio", "rustclamp-runtime", "rusqlite", "rumqttc"},
     "rustclamp-scheduler": {"tokio"},
-    "rustclamp": {"rustclamp-core", "rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "rustclamp-macros", "rustls", "webpki-roots"},
+    "rustclamp": {"rustclamp-core", "rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "regex", "rustclamp-macros", "rustls", "webpki-roots"},
 }
 
 
