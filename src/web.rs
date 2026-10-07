@@ -179,6 +179,57 @@ impl Router {
         })
     }
 
+    /// Answers `GET path` with `metrics` in the Prometheus text format, and
+    /// counts every other request into it as `http_requests_total`,
+    /// `http_server_errors_total` and `http_request_duration_microseconds_total`.
+    ///
+    /// ```
+    /// use rustclamp::metrics::Registry;
+    /// use rustclamp::web::{Request, Response, Router};
+    /// use std::sync::Arc;
+    ///
+    /// let metrics = Arc::new(Registry::new());
+    /// let app = Router::new()
+    ///     .metrics("/metrics", Arc::clone(&metrics))
+    ///     .get("/", |_| Response::text(200, "hi"));
+    /// app.handle(&Request::get("/"));
+    /// metrics.inc("signups_total");
+    /// let text = String::from_utf8(app.handle(&Request::get("/metrics")).body).unwrap();
+    /// assert!(text.contains("http_requests_total 1\n"));
+    /// assert!(text.contains("signups_total 1\n"));
+    /// ```
+    ///
+    /// ponytail: totals only, no per-route labels or buckets; time stops when
+    /// the handler returns. Add labels to [`Registry`](crate::metrics::Registry)
+    /// when a dashboard needs them.
+    #[cfg(feature = "metrics")]
+    #[must_use]
+    pub fn metrics(self, path: &str, metrics: Arc<crate::metrics::Registry>) -> Self {
+        let scrape = Arc::clone(&metrics);
+        let own = path.to_owned();
+        self.middleware(move |request, next| {
+            if request.path == own {
+                return next(request);
+            }
+            let started = Instant::now();
+            let response = next(request);
+            let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            metrics.inc("http_requests_total");
+            metrics.add("http_request_duration_microseconds_total", micros);
+            if response.status >= 500 {
+                metrics.inc("http_server_errors_total");
+            }
+            response
+        })
+        .get(path, move |_| {
+            Response::new(
+                200,
+                "text/plain; version=0.0.4; charset=utf-8",
+                scrape.render(),
+            )
+        })
+    }
+
     /// Answers `GET path` with the built view `name`, as [`view`] does.
     #[must_use]
     pub fn view(self, path: &str, name: &'static str) -> Self {

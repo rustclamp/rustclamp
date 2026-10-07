@@ -150,6 +150,7 @@ that it has started or is healthy.
 | `07-device-loop` | Deterministic updates, input, CAN decoder table, and runtime selection | Its hardware composition projection; device and loop state are omitted |
 | `a6-platform-neutral` | Core-only `no_std + alloc` consumer | No; it has no Kernel projection |
 | `08-site-server` | HTTP route target serving generated static files | No; route composition is not a process projection |
+| `09-observability` | Request metrics and one correlation id across API and Worker | No; metrics and traces are runtime output |
 
 This is a coverage boundary, not a claim that `clamp` has been run against each
 example. The coordinated runner compares every reference example that exports

@@ -51,6 +51,11 @@
 
 ### Added
 
+- Metrics and tracing (ADR 0030, #108): `Router::metrics(path, registry)`
+  (`web` + `metrics`) serves a `metrics::Registry` and counts requests, `5xx`
+  and time into it; `examples/09-observability` shows rustclamp-http's
+  `with_metrics` and one correlation id from the API's request to the
+  Worker's handler.
 - `auth` bearer API tokens (ADR 0023, proposed, #33): `Auth::issue_token` /
   `revoke_token`, the `bearer` middleware and `token_role` guard, and
   `Request::principal()`. Tokens are stored as SHA-256; the app owns the

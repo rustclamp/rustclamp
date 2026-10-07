@@ -73,7 +73,7 @@ All modules are opt-in Cargo features. Unsafe code is forbidden.
 | `mail` | `rustclamp::mail` | SMTP with STARTTLS over rustls, queued through a `mail_outbox` table ([ADR 0015](docs/adr/0015-mail.md)) |
 | `markdown` | `rustclamp::web::markdown` | Markdown to HTML that escapes raw HTML and unsafe links |
 | `cache` | `rustclamp::cache` | Bounded in-process cache with LRU eviction and optional TTL |
-| `metrics` | `rustclamp::metrics` | Counters and gauges with a Prometheus text renderer |
+| `metrics` | `rustclamp::metrics` | Counters and gauges with a Prometheus text renderer; `Router::metrics` serves them |
 | `build` | `rustclamp::build` | `build.rs` helpers such as `build::database` |
 
 `rustclamp::error` is always available: the `ExitError` trait and `error::run` /
