@@ -97,7 +97,8 @@ pub fn make(root: &Path, kind: &str, name: Option<&String>) -> Result<String, St
                     vec![format!("mod {name};"), format!("pub use {name}::{title};")],
                 )),
                 format!(
-                    "Check the table name in app/models/{name}.rs: #[model(table = \"{name}s\")]"
+                    "Check the table name in app/models/{name}.rs: #[model(table = \"{}\")]",
+                    plural(name)
                 ),
             ),
             _ => {
@@ -310,11 +311,26 @@ fn request(title: &str) -> String {
     )
 }
 
+/// The English plural of a snake_case name, for its table: `category` →
+/// `categories`, `box` → `boxes`, `post` → `posts`.
+fn plural(name: &str) -> String {
+    // ponytail: regular rules only (`person` → `persons`); the make output says to check it.
+    if let Some(stem) = name.strip_suffix('y')
+        && !stem.ends_with(['a', 'e', 'i', 'o', 'u'])
+    {
+        return format!("{stem}ies");
+    }
+    if name.ends_with(['s', 'x', 'z']) || name.ends_with("ch") || name.ends_with("sh") {
+        return format!("{name}es");
+    }
+    format!("{name}s")
+}
+
 /// A struct read from a table row by column name.
 fn model(title: &str, name: &str) -> String {
-    // ponytail: naive plural (`categorys`); the make output says to check it.
+    let table = plural(name);
     format!(
-        "use rustclamp::db::Model;\n\n/// A row of `{name}s`, one field per column: `{title}::all(request.db())`,\n/// `{title}::find(request.db(), id)`, `{title}::query(request.db())`.\n#[derive(Debug, Model)]\n#[model(table = \"{name}s\")]\npub struct {title} {{\n    pub id: i64,\n}}\n"
+        "use rustclamp::db::Model;\n\n/// A row of `{table}`, one field per column: `{title}::all(request.db())`,\n/// `{title}::find(request.db(), id)`, `{title}::query(request.db())`.\n#[derive(Debug, Model)]\n#[model(table = \"{table}\")]\npub struct {title} {{\n    pub id: i64,\n}}\n"
     )
 }
 
@@ -434,6 +450,15 @@ mod tests {
         assert!(read("app/http/requests/contact.rs").contains("pub struct ContactRequest {"));
         let model = read("app/models/post.rs");
         assert!(model.contains("#[model(table = \"posts\")]\npub struct Post {"));
+        for (name, table) in [
+            ("category", "categories"),
+            ("day", "days"),
+            ("box", "boxes"),
+            ("match", "matches"),
+            ("blog_post", "blog_posts"),
+        ] {
+            assert_eq!(plural(name), table);
+        }
         // No block to add to: the file is still made, with the lines to add.
         fs::write(&lib, "").unwrap();
         let made = make("model", "tag").unwrap();
