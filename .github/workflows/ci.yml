@@ -11,6 +11,13 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    # A real server for rustclamp::redis's live test; the other tests use fakes.
+    services:
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+    env:
+      RUSTCLAMP_TEST_REDIS_URL: redis://127.0.0.1:6379/1
     steps:
       # tooling depends on ../../core and ../../kernel: check the repos out side by side.
       - uses: actions/checkout@v7

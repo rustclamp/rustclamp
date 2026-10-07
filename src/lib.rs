@@ -27,6 +27,8 @@ pub mod log;
 pub mod mail;
 #[cfg(feature = "metrics")]
 pub mod metrics;
+#[cfg(feature = "redis")]
+pub mod redis;
 #[cfg(feature = "storage")]
 pub mod storage;
 #[cfg(feature = "time")]

@@ -39,6 +39,8 @@ markdown = ["web", "dep:pulldown-cmark"]
 cache = []
 # Optional counters and gauges with a Prometheus text renderer (`rustclamp::metrics`).
 metrics = []
+# Optional synchronous Redis client over std TCP (`rustclamp::redis`, ADR 0027).
+redis = ["config"]
 crypto = ["config", "dep:argon2", "dep:chacha20poly1305", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom"]
 
 [[example]]
