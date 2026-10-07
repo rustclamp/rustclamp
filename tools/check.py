@@ -41,6 +41,8 @@ def local_dependency_repositories(root, repo):
             for target in package.get("target", {}).values()
             for section in ("dependencies", "dev-dependencies", "build-dependencies")
         )
+        # [patch] redirects a git dependency to a sibling checkout (#86).
+        sections.extend(package.get("patch", {}).values())
         for section in sections:
             for alias, declaration in section.items():
                 if not isinstance(declaration, dict) or "path" not in declaration:
