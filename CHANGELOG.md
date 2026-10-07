@@ -51,6 +51,11 @@
 
 ### Added
 
+- The web template has an HTTP kernel (#122): `app/http/kernel.rs` holds all
+  middleware (`global`, and the `web` and `api` groups that `routes/` use),
+  and `GET /` goes to a real controller, `http/controllers/home.rs`.
+  `clamp make:controller`, `make:middleware`, `make:request` and `make:model`
+  write stubs and add them to the module map in `app/lib.rs`.
 - Pagination and route binding (#118): `Query::offset`, `Query::paginate(page,
   per_page, map)` returning a `Page` (`items`, `total`, `last_page`,
   `previous`, `next`; a view value with `web`), `Model::find_public` and

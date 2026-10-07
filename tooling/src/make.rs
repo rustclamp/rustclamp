@@ -1,51 +1,111 @@
-//! `clamp make:migration` and `clamp make:seeder`: new files from stubs in a
-//! `clamp init --web` project, which `build.rs` then picks up.
+//! `clamp make:*`: new files from stubs in a `clamp init --web` project.
+//! Migrations and seeders are picked up by `build.rs`; controllers,
+//! middleware, form requests and models are added to the module map in
+//! `app/lib.rs`.
 
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Writes the file for `kind` (`migration` or `seeder`) named `name` under
-/// `root`, and returns its path.
+/// Words a module or function cannot be named.
+const KEYWORDS: &[&str] = &[
+    "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
+    "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl",
+    "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
+    "return", "self", "static", "struct", "super", "trait", "true", "try", "type", "typeof",
+    "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
+];
+
+/// Writes the file for `kind` named `name` under `root`, adds it to
+/// `app/lib.rs` when it is a module, and says what it did.
 pub fn make(root: &Path, kind: &str, name: Option<&String>) -> Result<String, String> {
-    let name = name.ok_or(format!("usage: clamp make:{kind} NAME"))?;
-    if name.is_empty()
-        || !name.starts_with(|c: char| c.is_ascii_lowercase())
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-    {
-        return Err(format!(
-            "{name}: use snake_case, such as create_posts or posts"
-        ));
-    }
+    let given = name.ok_or(format!("usage: clamp make:{kind} NAME"))?;
+    let name = &snake(given).ok_or(format!(
+        "{given}: use a Rust name, such as create_posts, posts or PostController"
+    ))?;
     if !root.join("app/lib.rs").exists() {
         return Err("run it in a project made with `clamp init NAME --web`".into());
     }
-    let (folder, file, source) = match kind {
-        "migration" => {
-            let stem = format!(
-                "{}_{name}",
-                next_stamp(&root.join("app/database/migrations"))
-            );
-            let file = format!("{stem}.rs");
-            ("app/database/migrations", file, migration(name))
-        }
-        "seeder" => {
-            let stem = if name.ends_with("_seeder") {
-                name.clone()
-            } else {
-                format!("{name}_seeder")
-            };
-            let source = seeder(&stem);
-            ("app/database/seeders", format!("{stem}.rs"), source)
-        }
-        _ => {
-            return Err(format!(
-                "unknown make:{kind}; try make:migration or make:seeder"
-            ));
-        }
-    };
+    let title = struct_name(name);
+    // (folder, file, stub, the `pub mod` block in lib.rs and its lines, what to do next)
+    let (folder, file, source, module, next): (_, _, _, Option<(&str, Vec<String>)>, String) =
+        match kind {
+            "migration" => {
+                let stem = format!(
+                    "{}_{name}",
+                    next_stamp(&root.join("app/database/migrations"))
+                );
+                let file = format!("{stem}.rs");
+                let source = migration(name);
+                ("app/database/migrations", file, source, None, String::new())
+            }
+            "seeder" => {
+                let stem = if name.ends_with("_seeder") {
+                    name.clone()
+                } else {
+                    format!("{name}_seeder")
+                };
+                let source = seeder(&stem);
+                let file = format!("{stem}.rs");
+                ("app/database/seeders", file, source, None, String::new())
+            }
+            "controller" => (
+                "app/http/controllers",
+                format!("{name}.rs"),
+                controller(name),
+                Some(("controllers", vec![format!("pub mod {name};")])),
+                format!(
+                    "Route it in app/routes/web.rs: .get(\"/{name}\", crate::http::controllers::{name}::index)"
+                ),
+            ),
+            "middleware" => (
+                "app/http/middleware",
+                format!("{name}.rs"),
+                middleware(name),
+                Some((
+                    "middleware",
+                    vec![format!("mod {name};"), format!("pub use {name}::{name};")],
+                )),
+                format!(
+                    "Add it in app/http/kernel.rs: .middleware(crate::http::middleware::{name})"
+                ),
+            ),
+            "request" => {
+                let title = match name.ends_with("_request") {
+                    true => title,
+                    false => format!("{title}Request"),
+                };
+                (
+                    "app/http/requests",
+                    format!("{name}.rs"),
+                    request(&title),
+                    Some((
+                        "requests",
+                        vec![format!("mod {name};"), format!("pub use {name}::{title};")],
+                    )),
+                    format!(
+                        "Validate in a controller: crate::http::requests::{title}::validate(request)"
+                    ),
+                )
+            }
+            "model" => (
+                "app/models",
+                format!("{name}.rs"),
+                model(&title, name),
+                Some((
+                    "models",
+                    vec![format!("mod {name};"), format!("pub use {name}::{title};")],
+                )),
+                format!(
+                    "Check the table name in app/models/{name}.rs: #[model(table = \"{name}s\")]"
+                ),
+            ),
+            _ => {
+                return Err(format!(
+                    "unknown make:{kind}; try make:migration, make:seeder, make:controller, make:middleware, make:request or make:model"
+                ));
+            }
+        };
     let folder = root.join(folder);
     fs::create_dir_all(&folder)
         .map_err(|error| format!("cannot create {}: {error}", folder.display()))?;
@@ -55,7 +115,72 @@ pub fn make(root: &Path, kind: &str, name: Option<&String>) -> Result<String, St
     }
     fs::write(&path, source)
         .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-    Ok(path.display().to_string())
+    let mut message = format!("Created {}", path.display());
+    if let Some((module, lines)) = module {
+        let lib = root.join("app/lib.rs");
+        let source = fs::read_to_string(&lib).unwrap_or_default();
+        match register(&source, module, &lines) {
+            Some(source) => {
+                fs::write(&lib, source)
+                    .map_err(|error| format!("cannot write {}: {error}", lib.display()))?;
+                message += &format!("\nAdded {} to app/lib.rs", lines.join(" "));
+            }
+            None => {
+                message += &format!(
+                    "\nAdd {} inside `pub mod {module}` in app/lib.rs",
+                    lines.join(" ")
+                );
+            }
+        }
+    }
+    if !next.is_empty() {
+        message += &format!("\n{next}");
+    }
+    Ok(message)
+}
+
+/// `PostController` or `post_controller` → `post_controller`; `None` unless
+/// it is an ASCII name that is not a Rust keyword.
+fn snake(name: &str) -> Option<String> {
+    let mut snake = String::new();
+    let mut previous = '_';
+    for c in name.chars() {
+        if c.is_ascii_uppercase() && (previous.is_ascii_lowercase() || previous.is_ascii_digit()) {
+            snake.push('_');
+        }
+        snake.push(c.to_ascii_lowercase());
+        previous = c;
+    }
+    let valid = snake.starts_with(|c: char| c.is_ascii_lowercase())
+        && snake
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !KEYWORDS.contains(&snake.as_str());
+    valid.then_some(snake)
+}
+
+/// `lib` with `lines` added at the end of the `pub mod {module} { ... }` that
+/// starts a line, or `None` when there is no such block.
+fn register(lib: &str, module: &str, lines: &[String]) -> Option<String> {
+    let open = format!("pub mod {module} {{");
+    let (at, indent) = lib.match_indices(&open).find_map(|(at, _)| {
+        let start = lib[..at].rfind('\n').map_or(0, |newline| newline + 1);
+        let indent = &lib[start..at];
+        indent.trim().is_empty().then_some((at, indent))
+    })?;
+    let body: String = lines
+        .iter()
+        .map(|line| format!("{indent}    {line}\n"))
+        .collect();
+    let after = at + open.len();
+    Some(if lib[after..].starts_with('}') {
+        // `pub mod models {}` → a block with the new lines.
+        format!("{}\n{body}{indent}{}", &lib[..after], &lib[after..])
+    } else {
+        // The block's own `}` is the first one at its indent; nested ones are deeper.
+        let end = after + lib[after..].find(&format!("\n{indent}}}"))? + 1;
+        format!("{}{body}{}", &lib[..end], &lib[end..])
+    })
 }
 
 fn now() -> u64 {
@@ -164,6 +289,35 @@ fn seeder(stem: &str) -> String {
     )
 }
 
+/// A controller with one action; more are more functions.
+fn controller(name: &str) -> String {
+    format!(
+        "use super::controller::*;\n\n/// `GET /{name}`\npub fn index(_request: &Request) -> Response {{\n    Response::text(200, \"{name}\")\n}}\n"
+    )
+}
+
+/// Middleware that lets every request through until filled in.
+fn middleware(name: &str) -> String {
+    format!(
+        "use rustclamp::web::{{Next, Request, Response}};\n\n/// Runs around the routes it wraps; add it in `app/http/kernel.rs`. To stop\n/// a request, return a response without calling `next`, such as\n/// `rustclamp::web::error(403)`.\npub fn {name}(request: &Request, next: Next) -> Response {{\n    next(request)\n}}\n"
+    )
+}
+
+/// Typed form input, checked with `Request::validate` and its rules.
+fn request(title: &str) -> String {
+    format!(
+        "use rustclamp::web::{{Invalid, Request}};\n\n/// The input a form sends, trimmed and valid.\n#[derive(Debug)]\npub struct {title} {{\n    pub name: String,\n}}\n\nimpl {title} {{\n    /// The input, or `Invalid`, whose `.back(request, \"/form\")` redirects\n    /// with the errors and input kept. Rules: `required`, `min:N`, `max:N`,\n    /// `email`, `integer`, `in:a,b`, `confirmed`, `unique:table,column`, ...\n    pub fn validate(request: &Request) -> Result<Self, Invalid> {{\n        let form = request.validate(&[(\"name\", \"required|max:255\")])?;\n        Ok(Self {{\n            name: form.get(\"name\").to_owned(),\n        }})\n    }}\n}}\n"
+    )
+}
+
+/// A struct read from a table row by column name.
+fn model(title: &str, name: &str) -> String {
+    // ponytail: naive plural (`categorys`); the make output says to check it.
+    format!(
+        "use rustclamp::db::Model;\n\n/// A row of `{name}s`, one field per column: `{title}::all(request.db())`,\n/// `{title}::find(request.db(), id)`, `{title}::query(request.db())`.\n#[derive(Debug, Model)]\n#[model(table = \"{name}s\")]\npub struct {title} {{\n    pub id: i64,\n}}\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +369,75 @@ mod tests {
         );
         let bad = "Create-Posts".to_owned();
         assert!(make(&root, "migration", Some(&bad)).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn names_become_snake_case_modules() {
+        assert_eq!(snake("PostController").as_deref(), Some("post_controller"));
+        assert_eq!(snake("Post2Tag").as_deref(), Some("post2_tag"));
+        assert_eq!(snake("posts").as_deref(), Some("posts"));
+        for bad in ["", "Create-Posts", "9lives", "_x", "type", "Self", "naïve"] {
+            assert_eq!(snake(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn registers_modules_in_the_map() {
+        let lib = include_str!("../templates/web/app/lib.rs");
+        let lib = register(lib, "controllers", &["pub mod posts;".into()]).unwrap();
+        assert!(lib.contains("        pub mod home;\n        pub mod posts;\n    }"));
+        let lines = ["mod post;".into(), "pub use post::Post;".into()];
+        let lib = register(&lib, "models", &lines).unwrap();
+        assert!(lib.contains("pub mod models {\n    mod post;\n    pub use post::Post;\n}"));
+        let lib = register(&lib, "models", &["mod tag;".into()]).unwrap();
+        assert!(lib.contains("    pub use post::Post;\n    mod tag;\n}"));
+        assert_eq!(register("// pub mod models {}\n", "models", &[]), None);
+    }
+
+    #[test]
+    fn http_files_go_into_the_map() {
+        let root = std::env::temp_dir().join(format!("clamp-make-http-{}", std::process::id()));
+        fs::create_dir_all(root.join("app")).unwrap();
+        let lib = root.join("app/lib.rs");
+        fs::write(&lib, include_str!("../templates/web/app/lib.rs")).unwrap();
+        let make = |kind: &str, name: &str| make(&root, kind, Some(&name.to_owned()));
+        let made = make("controller", "PostController").unwrap();
+        assert!(
+            made.contains("app/http/controllers/post_controller.rs"),
+            "{made}"
+        );
+        assert!(
+            made.contains("controllers::post_controller::index"),
+            "{made}"
+        );
+        assert!(
+            make("controller", "post_controller").is_err(),
+            "never overwrites"
+        );
+        make("middleware", "EnsureAdmin").unwrap();
+        make("request", "contact").unwrap();
+        make("model", "Post").unwrap();
+        assert!(make("widget", "thing").is_err());
+        assert!(make("model", "fn").is_err());
+        let read = |path: &str| fs::read_to_string(root.join(path)).unwrap();
+        let map = read("app/lib.rs");
+        for line in [
+            "pub mod post_controller;",
+            "mod ensure_admin;\n        pub use ensure_admin::ensure_admin;",
+            "mod contact;\n        pub use contact::ContactRequest;",
+            "pub mod models {\n    mod post;\n    pub use post::Post;\n}",
+        ] {
+            assert!(map.contains(line), "{line} in\n{map}");
+        }
+        assert!(read("app/http/middleware/ensure_admin.rs").contains("pub fn ensure_admin("));
+        assert!(read("app/http/requests/contact.rs").contains("pub struct ContactRequest {"));
+        let model = read("app/models/post.rs");
+        assert!(model.contains("#[model(table = \"posts\")]\npub struct Post {"));
+        // No block to add to: the file is still made, with the lines to add.
+        fs::write(&lib, "").unwrap();
+        let made = make("model", "tag").unwrap();
+        assert!(made.contains("Add mod tag; pub use tag::Tag; inside `pub mod models`"));
         fs::remove_dir_all(root).unwrap();
     }
 }
