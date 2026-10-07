@@ -17,7 +17,7 @@ probes, and explicit migration ordering/execution. SQL and transaction handles
 stay in application adapters. Core and Kernel do not depend on SQLx or a
 database runtime.
 
-The `06-users` consumer demonstrates a domain-owned repository port with memory
+The `01-users` consumer demonstrates a domain-owned repository port with memory
 and PostgreSQL adapters. Direct calls, console, and HTTP use the same Users
 operations. The console feature graph excludes HTTP, PostgreSQL, and Tokio.
 PostgreSQL transactions are held by an infrastructure repository instance

@@ -30,10 +30,10 @@ projection and is not a claim about OS process boundaries or shared resources.
 The five runnable examples are:
 
 - [00 Pico](../../examples/00-pico/main.rs): minimal facade path and baseline.
-- [01 Capability](../../examples/01-capability/examples/01-capability.rs): direct typed capability injection.
-- [02 Module](../../examples/02-module/examples/02-module.rs): module requirement/provider resolution.
-- [03 Contribution](../../examples/03-contribution/README.md): domain-owned target assembly.
-- [04 Process](../../examples/04-process/README.md): roots, projection, configuration isolation, freeze, and inspection.
+- [01 Capability](../../examples/a1-capability/examples/a1-capability.rs): direct typed capability injection.
+- [02 Module](../../examples/a2-module/examples/a2-module.rs): module requirement/provider resolution.
+- [03 Contribution](../../examples/a3-contribution/README.md): domain-owned target assembly.
+- [04 Process](../../examples/a4-process/README.md): roots, projection, configuration isolation, freeze, and inspection.
 
 ## Behavior and Tests
 
@@ -52,14 +52,14 @@ The process projection integration tests cover:
 | Same target with different qualifiers across processes | Contributors remain isolated by process and qualifier |
 | Frozen blueprint | Runtime module/target plan agrees with inspection; compile-fail doctest rejects structural mutation |
 
-The `04-process` tests also prove the CLI setting reader is not called when
+The `a4-process` tests also prove the CLI setting reader is not called when
 Worker configuration is absent or malformed. In a combined in-memory host,
 Worker's setting reader, factory, target builder, and startup callback each run
 once; CLI's command target runs once. CLI and Worker mutable state is independent
 in that host fixture. This does not demonstrate sharing across OS processes.
 
 One inspection run (`cargo run --offline --locked --manifest-path
-examples/04-process/Cargo.toml --example 04-process -- inspect cli`) showed the
+examples/a4-process/Cargo.toml --example a4-process -- inspect cli`) showed the
 Clock path as:
 
 ```text
@@ -72,7 +72,7 @@ inspection is derived from the same frozen resolution as the runtime module plan
 
 ## Runtime Selection vs Build Targets
 
-[`build-targets/`](../../examples/04-process/build-targets/Cargo.toml) keeps
+[`build-targets/`](../../examples/a4-process/build-targets/Cargo.toml) keeps
 Kernel optional and offers a runtime-selected binary plus CLI- and Worker-specific
 Cargo targets. `cargo tree` reports these internal package closures:
 
@@ -151,7 +151,7 @@ Verified commands:
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --manifest-path rustclamp/examples/04-process/Cargo.toml
+cargo test --manifest-path rustclamp/examples/a4-process/Cargo.toml
 cargo test --doc -p rustclamp-kernel
 cargo bench --offline --locked -p rustclamp-kernel --bench process_projection
 python3 rustclamp/tools/check.py

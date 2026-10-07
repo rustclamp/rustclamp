@@ -2,7 +2,7 @@
 
 Phase 3 proves that generic composition contracts can feed a domain-owned
 target without moving command rules into Core or Kernel. The working fixture is
-[`examples/03-contribution`](../../examples/03-contribution/README.md).
+[`examples/a3-contribution`](../../examples/a3-contribution/README.md).
 
 ## Composition Flow
 

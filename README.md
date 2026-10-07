@@ -90,7 +90,7 @@ including breaking changes to views and `Db::transaction`.
 Applications compose modules through typed capabilities and contributions.
 Kernel resolves a process projection from selected roots; a runtime drives the
 work. The composition model is still prototype-stage, and the examples show
-each step (`examples/01-capability` through `examples/13-site-server`).
+each step: see the [examples](examples/README.md) for the learning path and the architecture track.
 
 | Repository | Responsibility |
 | --- | --- |

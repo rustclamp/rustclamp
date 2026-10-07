@@ -4,7 +4,7 @@ Date: 2026-09-29
 
 ## RustClamp hosted-site proof
 
-Added `examples/13-site-server`, a small Axum server assembled through
+Added `examples/08-site-server`, a small Axum server assembled through
 `rustclamp-http`'s public `HttpRoutes<Public>` contribution target. The same app
 serves either site's generated `public/` directory. It does not reconstruct the
 site model or replace the Python static-site generator.
@@ -99,8 +99,8 @@ Those deployment checks establish the state at that time. Search Console and
 broader site QA remain open.
 The coordinated check runner compares `inspect`, `tree`, `graph`, and
 `why` against real resolved projections from every reference example that
-exports a `ProcessProjection`: `04-process`, `05-lifecycle`, `09-create-order`,
-and `11-device-loop`. This exposed and fixed quoted IDs in graph output, with a
+exports a `ProcessProjection`: `a4-process`, `a5-lifecycle`, `06-create-order`,
+and `07-device-loop`. This exposed and fixed quoted IDs in graph output, with a
 regression test. The opt-in exporters leave each example's default dependency
 graph unchanged. Examples without a `ProcessProjection` do not have comparable
 output for this API. Configuration evaluation, lifecycle outcomes, message

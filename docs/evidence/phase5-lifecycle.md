@@ -2,7 +2,7 @@
 
 Status: complete. Lifecycle behavior uses deterministic fake resources; runtime, dependency, and build measurements cover both default and Tokio paths.
 
-The `examples/05-lifecycle` package projects and freezes a Worker composition
+The `examples/a5-lifecycle` package projects and freezes a Worker composition
 before it opens its fake Database state or starts Users. Provider dependencies
 derive Database → Users initialization; started consumers drain and stop before
 their dependencies. Structured process status separates started, ready, alive,
@@ -70,7 +70,7 @@ The Phase 4 comparison below is retained as historical context. The final P5
 build reports separately compare the same lifecycle executable with the default
 and optional Tokio feature, with three release-build repetitions each.
 
-| Metric | Phase 4 `04-process` | Earlier Phase 5 snapshot | Difference |
+| Metric | Phase 4 `a4-process` | Earlier Phase 5 snapshot | Difference |
 | --- | ---: | ---: | ---: |
 | Clean-build median | 1.920 s (n=2) | 2.202 s (n=3) | +0.282 s |
 | Unchanged-build median | 38.67 ms (n=2) | 40.13 ms (n=3) | +1.46 ms |

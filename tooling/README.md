@@ -106,37 +106,37 @@ Use these fields to explain the resolved architecture:
 | Which setting names/defaults does the application need? | Not represented in this Kernel projection | Configuration readers are application-owned; use the application's setup documentation and validation errors |
 
 The projection shows static provider selection, but it cannot claim that a
-runtime setting was read or validated. For concrete examples, [`04-process`](../examples/04-process/README.md)
+runtime setting was read or validated. For concrete examples, [`a4-process`](../examples/a4-process/README.md)
 requires positive-integer `WORKER_CONCURRENCY` only for Worker;
-[`09-create-order`](../examples/09-create-order/README.md) requires
+[`06-create-order`](../examples/06-create-order/README.md) requires
 `DATABASE_URL` and defaults `NATS_URL` to its local NATS endpoint. Those
 examples' setup and validation code owns the authoritative rules.
 
 Lifecycle and ownership are outside this schema. Inspection does not report
 which process owns a runtime resource, initialization and cleanup order,
 readiness, task state, active work, or shutdown progress. The
-[`05-lifecycle` example](../examples/05-lifecycle/README.md) documents those
+[`a5-lifecycle` example](../examples/a5-lifecycle/README.md) documents those
 owner and cleanup boundaries. They are runtime outcomes
 and can change after a projection is frozen. An included module does not imply
 that it has started or is healthy.
 
 | Example | Architecture evidence | What inspection can represent |
 | --- | --- | --- |
-| `03-contribution` | Typed CLI contribution target and command assembly | Not target assembly; it is not a process projection |
-| `04-process` | Roots, reachable providers, contributions, exclusions, and selected-process configuration | Its resolved projection; configuration reading remains application-owned |
-| `05-lifecycle` | Projection plus resource ownership, startup, readiness, drain, and cleanup | Projection only; lifecycle outcomes are omitted |
-| `06-users` | Domain operation with console, HTTP, and PostgreSQL adapters | No exported process projection |
-| `07-messaging` | Message mapping and transport-neutral envelope | No; message delivery is outside projection metadata |
-| `08-email-worker` | API-to-worker message flow and broker adapter | No; process-to-process transport is not represented |
-| `09-create-order` | PostgreSQL outbox/inbox and broker failure windows | Its process projections; transaction and delivery state are not represented |
-| `10-scheduler` | Job composition, timing, admission, and drain | No; scheduler state is not represented |
-| `11-device-loop` | Deterministic updates, input, CAN decoder table, and runtime selection | Its hardware composition projection; device and loop state are omitted |
-| `12-platform-neutral` | Core-only `no_std + alloc` consumer | No; it has no Kernel projection |
-| `13-site-server` | HTTP route target serving generated static files | No; route composition is not a process projection |
+| `a3-contribution` | Typed CLI contribution target and command assembly | Not target assembly; it is not a process projection |
+| `a4-process` | Roots, reachable providers, contributions, exclusions, and selected-process configuration | Its resolved projection; configuration reading remains application-owned |
+| `a5-lifecycle` | Projection plus resource ownership, startup, readiness, drain, and cleanup | Projection only; lifecycle outcomes are omitted |
+| `01-users` | Domain operation with console, HTTP, and PostgreSQL adapters | No exported process projection |
+| `05-messaging` | Message mapping and transport-neutral envelope | No; message delivery is outside projection metadata |
+| `03-email-worker` | API-to-worker message flow and broker adapter | No; process-to-process transport is not represented |
+| `06-create-order` | PostgreSQL outbox/inbox and broker failure windows | Its process projections; transaction and delivery state are not represented |
+| `04-scheduler` | Job composition, timing, admission, and drain | No; scheduler state is not represented |
+| `07-device-loop` | Deterministic updates, input, CAN decoder table, and runtime selection | Its hardware composition projection; device and loop state are omitted |
+| `a6-platform-neutral` | Core-only `no_std + alloc` consumer | No; it has no Kernel projection |
+| `08-site-server` | HTTP route target serving generated static files | No; route composition is not a process projection |
 
 This is a coverage boundary, not a claim that `clamp` has been run against each
 example. The coordinated runner compares every reference example that exports
-a `ProcessProjection`: `04-process`, `05-lifecycle`, `09-create-order`, and
-`11-device-loop`. Rows without a process projection have no comparable output
+a `ProcessProjection`: `a4-process`, `a5-lifecycle`, `06-create-order`, and
+`07-device-loop`. Rows without a process projection have no comparable output
 for this API. Runtime facts remain in their owning runtime or domain report
 rather than being inferred from this document.

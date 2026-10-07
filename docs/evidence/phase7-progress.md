@@ -3,7 +3,7 @@
 The initial `rustclamp-messaging` package defines a transport-neutral serialized
 envelope with stable message identity, semantic name, schema version, correlation
 and optional causation identity, and JSON payload. Local Rust events remain
-ordinary in-process values. The `07-messaging` example maps a local `UserCreated`
+ordinary in-process values. The `05-messaging` example maps a local `UserCreated`
 event explicitly to this envelope before serialization.
 
 The boundary and JSON payload choice are recorded in
@@ -20,7 +20,7 @@ handlers, rejects invalid or duplicate declarations, decodes serialized
 envelopes, and preserves handler errors. It depends on public Core and Messaging
 contracts; routing has no broker-specific message type.
 
-The `08-email-worker` example wires the domain `EmailSender` port to a
+The `03-email-worker` example wires the domain `EmailSender` port to a
 `QueuedEmailSender`, routes its envelope through the in-memory bus, and invokes
 the worker handler, which calls the email operation with a memory gateway. It
 also defines independent `email-api` and `email-worker` executables that exchange
@@ -111,14 +111,14 @@ release-size estimates.
 
 ## Inspection
 
-The `phase7-inspect` binary in `09-create-order` derives four Kernel process
+The `phase7-inspect` binary in `06-create-order` derives four Kernel process
 projections: API, outbox publisher, orders Worker, and scheduler. Its output
 includes reachable-module paths and selected resource providers, exact Worker
 handler and Scheduler job contribution IDs, the `orders.order-created/v1`
 boundary through JetStream, and which process owns its database/broker clients
 and shutdown gate. A test checks each of these sections against the blueprint.
 
-The `09-create-order` example adds an atomic PostgreSQL transaction for
+The `06-create-order` example adds an atomic PostgreSQL transaction for
 inventory decrement, order insert, and serialized outbox intent. A supervised
 publisher claims at most ten rows with `FOR UPDATE SKIP LOCKED`, publishes each
 message to a bounded JetStream stream, and marks it sent only after broker
@@ -138,7 +138,7 @@ retrying, while later reconciliation can settle that state explicitly.
 The new `rustclamp-scheduler` target validates unique names, positive fixed
 intervals, and a 128-job capacity. It defines skip/run-once misfire behavior,
 sequential tick execution, and process-local overlap suppression; it does not
-claim distributed locking. The `10-scheduler` example composes an unchanged job
+claim distributed locking. The `04-scheduler` example composes an unchanged job
 operation and advances an injected Core `Clock` through regular and missed
 intervals without Tokio or cron. The scheduler crate and example compile cleanly,
 pass Clippy with warnings denied, and the controlled-clock example runs. Focused

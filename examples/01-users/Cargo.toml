@@ -1,0 +1,54 @@
+[package]
+name = "rustclamp-example-users"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.1"
+publish = false
+
+[dependencies]
+futures-executor = "0.3"
+rustclamp-core = { version = "0.1.0", path = "../../../core" }
+rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
+rustclamp-http = { version = "0.1.0", path = "../../../http", optional = true }
+rustclamp-postgres = { version = "0.1.0", path = "../../../postgres", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+futures-util = { version = "0.3", optional = true }
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"], optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+http-body-util = { version = "0.1", optional = true }
+stats_alloc = { version = "0.1.10", optional = true }
+tower = { version = "0.5", features = ["util"], optional = true }
+
+[features]
+default = []
+http = ["dep:rustclamp-http", "dep:tokio", "dep:futures-util", "dep:serde", "dep:serde_json", "dep:http-body-util", "dep:tower"]
+postgres = ["dep:rustclamp-postgres", "dep:tokio"]
+tracing = ["dep:tracing", "dep:tracing-subscriber"]
+measure-allocations = ["dep:stats_alloc"]
+
+[[bin]]
+name = "users-console"
+path = "src/main.rs"
+
+[[example]]
+name = "01-users-http"
+path = "examples/http.rs"
+required-features = ["http"]
+
+[[example]]
+name = "measure-http"
+path = "examples/measure_http.rs"
+required-features = ["http", "measure-allocations"]
+
+[[example]]
+name = "measure-postgres"
+path = "examples/measure_postgres.rs"
+required-features = ["postgres", "measure-allocations"]
+
+[workspace]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"

@@ -139,20 +139,22 @@ def check(path):
 
 
 def check_examples(root):
+    # Learning path first (00-pico runs in check_pico_runtime_absence), then the architecture track.
     examples = (
-        ("01-capability", "rustclamp-example-capability"),
-        ("02-module", "rustclamp-example-module"),
-        ("03-contribution", "rustclamp-example-contribution"),
-        ("04-process", "rustclamp-example-process"),
-        ("05-lifecycle", "rustclamp-example-lifecycle"),
-        ("06-users", "rustclamp-example-users"),
-        ("07-messaging", "rustclamp-example-messaging"),
-        ("08-email-worker", "rustclamp-example-email-worker"),
-        ("09-create-order", "rustclamp-example-create-order"),
-        ("10-scheduler", "rustclamp-example-scheduler"),
-        ("11-device-loop", "rustclamp-example-device-loop"),
-        ("12-platform-neutral", "rustclamp-example-platform-neutral"),
-        ("13-site-server", "rustclamp-example-site-server"),
+        ("01-users", "rustclamp-example-users"),
+        ("02-axum-app", "rustclamp-example-axum-app"),
+        ("03-email-worker", "rustclamp-example-email-worker"),
+        ("04-scheduler", "rustclamp-example-scheduler"),
+        ("05-messaging", "rustclamp-example-messaging"),
+        ("06-create-order", "rustclamp-example-create-order"),
+        ("07-device-loop", "rustclamp-example-device-loop"),
+        ("08-site-server", "rustclamp-example-site-server"),
+        ("a1-capability", "rustclamp-example-capability"),
+        ("a2-module", "rustclamp-example-module"),
+        ("a3-contribution", "rustclamp-example-contribution"),
+        ("a4-process", "rustclamp-example-process"),
+        ("a5-lifecycle", "rustclamp-example-lifecycle"),
+        ("a6-platform-neutral", "rustclamp-example-platform-neutral"),
     )
     for example, package_name in examples:
         example_root = root / "rustclamp/examples" / example
@@ -162,13 +164,13 @@ def check_examples(root):
              "--manifest-path", str(manifest)], cwd=root, text=True))
         dependencies = resolved_dependencies(metadata, package_name)
         assert "rustclamp" not in dependencies, f"{example} unexpectedly depends on the facade"
-        if example in {"04-process", "05-lifecycle", "09-create-order", "11-device-loop"}:
+        if example in {"a4-process", "a5-lifecycle", "06-create-order", "07-device-loop"}:
             assert "rustclamp-tooling" not in dependencies, (
                 f"{example} activated optional inspection tooling by default"
             )
-        if example == "11-device-loop":
+        if example == "07-device-loop":
             assert "tokio" not in dependencies, "default device loop activated Tokio"
-        if example == "12-platform-neutral":
+        if example == "a6-platform-neutral":
             assert "rustclamp-kernel" not in dependencies, "platform-neutral consumer activated Kernel"
         print(f"{example} dependency graph: {', '.join(sorted(dependencies))}; facade absent")
 
@@ -176,21 +178,21 @@ def check_examples(root):
         run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
             "--all-targets", "--", "-D", "warnings", cwd=root)
         run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest), cwd=root)
-        if example == "11-device-loop":
+        if example == "07-device-loop":
             run("cargo", "clippy", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--all-targets", "--all-features", "--", "-D", "warnings", cwd=root)
             run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--all-features", cwd=root)
             run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
-                "--example", "11-device-loop-direct", cwd=root)
+                "--example", "07-device-loop-direct", cwd=root)
             run("cargo", "build", "--offline", "--locked", "--release", "--manifest-path",
                 str(manifest), "--examples", cwd=root)
             run("cargo", "bench", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--bench", "loop", cwd=root)
-        if example not in {"06-users", "09-create-order", "13-site-server"}:
+        if example not in {"01-users", "06-create-order", "08-site-server"}:
             run("cargo", "run", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--example", example, cwd=root)
-        if example == "05-lifecycle":
+        if example == "a5-lifecycle":
             assert "tokio" not in dependencies, "Tokio activated in the default lifecycle example"
             feature_metadata = json.loads(subprocess.check_output(
                 ["cargo", "metadata", "--offline", "--locked", "--format-version", "1",
@@ -202,7 +204,7 @@ def check_examples(root):
                 "--all-targets", "--all-features", "--", "-D", "warnings", cwd=root)
             run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest),
                 "--all-features", cwd=root)
-        if example == "06-users":
+        if example == "01-users":
             assert {"rustclamp-http", "rustclamp-postgres", "tokio"}.isdisjoint(dependencies), (
                 "console-only Users graph activated an optional integration"
             )
@@ -216,13 +218,13 @@ def check_examples(root):
                     "--features", feature, "--all-targets", "--", "-D", "warnings", cwd=root)
                 run("cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest),
                     "--features", feature, "--all-targets", cwd=root)
-        if example == "03-contribution":
+        if example == "a3-contribution":
                 run("cargo", "bench", "--offline", "--locked", "--manifest-path", str(manifest),
                     "--bench", "assembly", cwd=root)
 
 
 def check_process_build_targets(root):
-    manifest = root / "rustclamp/examples/04-process/build-targets/Cargo.toml"
+    manifest = root / "rustclamp/examples/a4-process/build-targets/Cargo.toml"
     modes = (
         ("runtime-selected", "runtime-selected", [["cli"], ["worker"]],
          {"rustclamp-core", "rustclamp-kernel"}),
@@ -403,19 +405,19 @@ def compare_tooling_projection(root, example, export_args, expected_processes):
 
 def check_tooling_reference(root):
     compare_tooling_projection(
-        root, "04-process", ["--example", "inspection-json", "--features", "tooling-inspection"],
+        root, "a4-process", ["--example", "inspection-json", "--features", "tooling-inspection"],
         ["example.process.cli", "example.process.worker"],
     )
     compare_tooling_projection(
-        root, "05-lifecycle", ["--example", "inspection-json", "--features", "tooling-inspection"],
+        root, "a5-lifecycle", ["--example", "inspection-json", "--features", "tooling-inspection"],
         ["example.lifecycle.worker", "example.lifecycle.reporter"],
     )
     compare_tooling_projection(
-        root, "11-device-loop", ["--example", "inspection-json", "--features", "tooling-inspection"],
+        root, "07-device-loop", ["--example", "inspection-json", "--features", "tooling-inspection"],
         ["example.device-loop.simulation"],
     )
     compare_tooling_projection(
-        root, "09-create-order",
+        root, "06-create-order",
         ["--bin", "phase7-inspect", "--features", "tooling-inspection", "--", "--tooling-json"],
         ["orders-api", "outbox-publisher", "orders-worker", "orders-scheduler"],
     )

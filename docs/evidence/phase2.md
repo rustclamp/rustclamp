@@ -132,10 +132,10 @@ the isolated cost of traits or Kernel.
 
 | Example | Internal dependency packages | Clean builds, s | Median clean | No-op rebuilds, s | Median no-op | Binary bytes | Process times, ms | Median process |
 | --- | ---: | --- | ---: | --- | ---: | --- | --- | ---: |
-| `01-capability` | 1 (Core) | 0.560, 0.285, 0.300 | 0.300 | 0.042, 0.041, 0.042 | 0.042 | 4,345,912 each | 1.430, 1.631, 1.131 | 1.430 |
-| `02-module` | 2 (Core, Kernel) | 0.676, 0.694, 0.671 | 0.676 | 0.041, 0.041, 0.039 | 0.041 | 4,354,696 each | 1.234, 1.280, 1.102 | 1.234 |
+| `a1-capability` | 1 (Core) | 0.560, 0.285, 0.300 | 0.300 | 0.042, 0.041, 0.042 | 0.042 | 4,345,912 each | 1.430, 1.631, 1.131 | 1.430 |
+| `a2-module` | 2 (Core, Kernel) | 0.676, 0.694, 0.671 | 0.676 | 0.041, 0.041, 0.039 | 0.041 | 4,354,696 each | 1.234, 1.280, 1.102 | 1.234 |
 
-The `02-module` binary is 8,784 bytes larger in this sample and has one
+The `a2-module` binary is 8,784 bytes larger in this sample and has one
 additional internal dependency. These are different programs, so the delta is
 not a causal estimate of composition overhead. The Phase 1 paired plain/Pico
 comparison remains the appropriate facade baseline. Process times include
@@ -146,10 +146,10 @@ launch, output, and exit. Full raw data and commands are preserved in
 Run either example from the facade repository:
 
 ```sh
-cargo test --offline --locked --manifest-path examples/01-capability/Cargo.toml
-cargo run --offline --locked --manifest-path examples/01-capability/Cargo.toml --example 01-capability
-cargo test --offline --locked --manifest-path examples/02-module/Cargo.toml
-cargo run --offline --locked --manifest-path examples/02-module/Cargo.toml --example 02-module
+cargo test --offline --locked --manifest-path examples/a1-capability/Cargo.toml
+cargo run --offline --locked --manifest-path examples/a1-capability/Cargo.toml --example a1-capability
+cargo test --offline --locked --manifest-path examples/a2-module/Cargo.toml
+cargo run --offline --locked --manifest-path examples/a2-module/Cargo.toml --example a2-module
 ```
 
 Environment: Rust/Cargo 1.96.1, x86_64 Linux, AMD Ryzen 5 PRO 4650U, release

@@ -2,7 +2,7 @@
 
 ## Deterministic and device proof
 
-`examples/11-device-loop` demonstrates explicit target-owned integer steps,
+`examples/07-device-loop` demonstrates explicit target-owned integer steps,
 injected simulation time, seeded randomness, fixed inputs, and replay of the
 same fixture with equal state traces. Integer millimeter and milli-Celsius
 units keep this small model deterministic without a math dependency. No
