@@ -1,4 +1,17 @@
-/target/
-/examples/*/target/
-/examples/*/*/target/
+# Cargo build output (root, examples, nested build-target crates)
+target/
+**/*.rs.bk
+
+# Frontend tooling in starter kits and clamp templates
+node_modules/
+.vite/
+
+# Python helpers (tools/, boundary checks)
 __pycache__/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+!.env.encrypted
+!.env.*.encrypted
