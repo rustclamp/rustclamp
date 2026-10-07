@@ -70,6 +70,23 @@ starter app can build before the crates.io publication gate is cleared.
 Frontend starter kits are separate under `starter-kits/`. `clamp --version` prints
 the installed version, which matches the `clamp-v*` release tag.
 
+## MCP server
+
+`clamp mcp` serves the inspection commands to an AI client as MCP tools over
+stdio (newline-delimited JSON-RPC 2.0, protocol `2025-11-25` with the
+`initialize` handshake; older revisions the client asks for are echoed). The
+tools are `inspect`, `tree`, `graph`, `why` and `doctor`. Each takes `file`
+(the inspection document), optional `process`, and for `why` a `module`, and
+returns the same JSON as `--json`. They only read the document; nothing is built
+or run. Register it with Claude Code:
+
+```sh
+claude mcp add clamp -- clamp mcp
+```
+
+Other clients take the same command in their config:
+`{"mcpServers": {"clamp": {"command": "clamp", "args": ["mcp"]}}}`. See ADR 0031.
+
 ## Schema version 1
 
 Every document has `schema_version: 1`, an `application` semantic ID, and a

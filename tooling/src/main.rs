@@ -2,6 +2,7 @@
 
 mod envfile;
 mod make;
+mod mcp;
 
 use serde_json::{Value, json};
 use std::{
@@ -124,6 +125,11 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     }
     if command == "--help" || command == "help" {
         println!("{}", usage());
+        return Ok(0);
+    }
+    if command == "mcp" {
+        mcp::serve(io::stdin().lock(), io::stdout().lock())
+            .map_err(|error| format!("mcp: {error}"))?;
         return Ok(0);
     }
     if matches!(command, "key:generate" | "env:encrypt" | "env:decrypt") {
@@ -316,6 +322,28 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         index += 1;
     }
     let path = positional.first().ok_or("missing inspection JSON path")?;
+    let (human, machine, code) = inspection(
+        command,
+        path,
+        process_id.as_deref(),
+        positional.get(1).map(String::as_str),
+    )?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&machine).unwrap());
+    } else {
+        println!("{human}");
+    }
+    Ok(code)
+}
+
+/// Runs one read-only inspection command on a document file and returns its
+/// human text, its `--json` value, and the exit status. `clamp mcp` calls this too.
+fn inspection(
+    command: &str,
+    path: &str,
+    process_id: Option<&str>,
+    module: Option<&str>,
+) -> Result<(String, Value, u8), String> {
     let document: Value = serde_json::from_slice(
         &fs::read(path).map_err(|error| format!("cannot read {path}: {error}"))?,
     )
@@ -323,16 +351,12 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     validate_document(&document)?;
 
     if command == "doctor" {
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&document).unwrap());
-        } else {
-            println!("{}", doctor_text(&document).0);
-        }
-        return Ok(if document["status"] == "resolved" {
+        let code = if document["status"] == "resolved" {
             0
         } else {
             1
-        });
+        };
+        return Ok((doctor_text(&document).0, document, code));
     }
     if document["status"] != "resolved" {
         return Err("document contains composition errors; run `clamp doctor FILE`".into());
@@ -341,7 +365,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     let processes = document["processes"]
         .as_array()
         .ok_or("resolved document has no process list")?;
-    let process = match process_id.as_deref() {
+    let process = match process_id {
         Some(id) => processes
             .iter()
             .find(|process| process["id"].as_str() == Some(id))
@@ -364,7 +388,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
             )
         }
         "why" => {
-            let module = positional.get(1).ok_or("why requires a module id")?;
+            let module = module.ok_or("why requires a module id")?;
             let explanation = why_text(process, module)?;
             (
                 explanation.clone(),
@@ -373,16 +397,11 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         }
         _ => return Err(format!("unknown command {command:?}")),
     };
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&machine).unwrap());
-    } else {
-        println!("{human}");
-    }
-    Ok(0)
+    Ok((human, machine, 0))
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--vue|--react|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp key:generate [--force]\n  clamp env:encrypt | env:decrypt [--key=KEY] [--env=NAME] [--force]\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web (plain, Vue or React) or TUI scaffold or a package, inspect a resolved projection, run Procfile.dev concurrently, make migrations and seeders, run database commands, manage APP_KEY and encrypted .env files, reinstall clamp, or run a Cargo command."
+    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--vue|--react|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp mcp\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp key:generate [--force]\n  clamp env:encrypt | env:decrypt [--key=KEY] [--env=NAME] [--force]\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web (plain, Vue or React) or TUI scaffold or a package, inspect a resolved projection (also as an MCP server over stdio), run Procfile.dev concurrently, make migrations and seeders, run database commands, manage APP_KEY and encrypted .env files, reinstall clamp, or run a Cargo command."
 }
 
 fn create_application(root: &std::path::Path) -> Result<(), String> {
