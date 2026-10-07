@@ -53,7 +53,7 @@ mod query;
 mod schema;
 mod states;
 pub mod timestamp;
-pub use query::Query;
+pub use query::{Page, Query};
 pub use schema::{Column, OnDelete, Schema, Table};
 pub use states::{Change, States, Transition};
 
@@ -713,6 +713,38 @@ impl std::ops::Deref for Tx<'_> {
 /// assert_eq!(Post::all(&db).unwrap()[0].published_at, None);
 /// ```
 ///
+/// Relations are queries, not a new type: `has_many` is a `where_eq` on the
+/// foreign key, `belongs_to` is [`find`](Model::find), and loading the
+/// owners of a list at once (no query per row) is a `where_in`:
+///
+/// ```
+/// # use rustclamp::config::Config;
+/// # use rustclamp::db::{Db, Model, sqlite::ToSql};
+/// #[derive(Model)]
+/// #[model(table = "comments")]
+/// struct Comment { id: i64, post_id: i64, body: String }
+/// #[derive(Model)]
+/// #[model(table = "posts")]
+/// struct Post { id: i64, title: String }
+///
+/// # let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+/// # db.with(|sql| sql.execute_batch("CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT);
+/// #     CREATE TABLE comments (id INTEGER PRIMARY KEY, post_id INTEGER, body TEXT);
+/// #     INSERT INTO posts VALUES (1, 'a'), (2, 'b');
+/// #     INSERT INTO comments VALUES (1, 1, 'x'), (2, 1, 'y'), (3, 2, 'z');")).unwrap();
+/// // has_many
+/// let comments = Comment::query(&db).where_eq("post_id", &1).get(Comment::from_row).unwrap();
+/// assert_eq!(comments.len(), 2);
+/// // belongs_to
+/// let post = Post::find(&db, comments[0].post_id).unwrap().unwrap();
+/// assert_eq!(post.title, "a");
+/// // eager: every comment's post in one query
+/// let all = Comment::all(&db).unwrap();
+/// let ids: Vec<&dyn ToSql> = all.iter().map(|c| &c.post_id as &dyn ToSql).collect();
+/// let posts = Post::query(&db).where_in("id", &ids).get(Post::from_row).unwrap();
+/// assert_eq!(posts.len(), 2);
+/// ```
+///
 /// By hand, when a field is not a column of the same name:
 ///
 /// ```
@@ -766,6 +798,17 @@ pub trait Model: Sized {
     /// The row whose `id` is `id`.
     fn find(db: &Db, id: i64) -> sqlite::Result<Option<Self>> {
         Self::query(db).where_eq("id", &id).first(Self::from_row)
+    }
+
+    /// The row whose `public_id` column is `public_id`, the UUID that goes in
+    /// URLs so `id` never leaves the app. `None` for text that is not a UUID.
+    fn find_public(db: &Db, public_id: &str) -> sqlite::Result<Option<Self>> {
+        let Some(uuid) = crate::uuid::Uuid::parse(public_id) else {
+            return Ok(None);
+        };
+        Self::query(db)
+            .where_eq("public_id", &uuid)
+            .first(Self::from_row)
     }
 }
 
@@ -857,6 +900,28 @@ impl crate::web::Request {
         self.state::<Db>()
             .expect("no database: add .state(db) to the router")
     }
+
+    /// The `M` whose `public_id` is the route parameter `param`, like
+    /// Laravel's route model binding; `None` answers 404:
+    ///
+    /// ```ignore
+    /// fn show(request: &Request) -> rustclamp::web::Result {
+    ///     let Some(post) = request.model::<Post>("post")? else {
+    ///         return Ok(error(404));
+    ///     };
+    ///     Ok(request.render("posts/show", &[("post", &post)]))
+    /// }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// As [`db`](Self::db).
+    pub fn model<M: Model>(&self, param: &str) -> sqlite::Result<Option<M>> {
+        match self.param(param) {
+            Some(public_id) => M::find_public(self.db(), public_id),
+            None => Ok(None),
+        }
+    }
 }
 
 /// Stored as its hyphenated text, so it reads well in the database and in
@@ -943,6 +1008,52 @@ pub trait Migration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "web")]
+    #[test]
+    fn model_binds_by_public_id() {
+        use crate::web::{Request, Router, error};
+        struct Post {
+            title: String,
+        }
+        impl Model for Post {
+            const TABLE: &'static str = "posts";
+            fn from_row(row: &sqlite::Row<'_>) -> sqlite::Result<Self> {
+                Ok(Self {
+                    title: row.get("title")?,
+                })
+            }
+        }
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let public_id = crate::uuid::Uuid::v7();
+        db.with(|sql| {
+            sql.execute_batch(
+                "CREATE TABLE posts (id INTEGER PRIMARY KEY, public_id TEXT, title TEXT)",
+            )?;
+            sql.execute("INSERT INTO posts VALUES (7, ?1, 'Hi')", [&public_id])
+        })
+        .unwrap();
+        let app = Router::new()
+            .state(db)
+            .get("/posts/{post}", |request: &Request| {
+                let Some(post) = request.model::<Post>("post")? else {
+                    return Ok(error(404));
+                };
+                crate::web::Result::Ok(crate::web::Response::text(200, &post.title))
+            });
+        assert_eq!(
+            app.handle(&Request::get(&format!("/posts/{public_id}")))
+                .body,
+            b"Hi"
+        );
+        // The internal id and non-UUID text are both just "not found".
+        assert_eq!(app.handle(&Request::get("/posts/7")).status, 404);
+        let other = crate::uuid::Uuid::v7();
+        assert_eq!(
+            app.handle(&Request::get(&format!("/posts/{other}"))).status,
+            404
+        );
+    }
 
     /// A migration from literal SQL.
     struct Sql(&'static str, &'static str, &'static str);
