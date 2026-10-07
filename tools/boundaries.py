@@ -169,6 +169,13 @@ ALLOWED = {
     'r-efi', 'rand', 'rand_chacha', 'rand_core', 'sha1', 'thiserror',
     'thiserror-impl', 'tokio-tungstenite', 'tungstenite', 'typenum',
     'version_check', 'wasip2', 'wit-bindgen', 'zerocopy', 'zerocopy-derive',
+    # Feature `grpc` (ADR 0029): tonic without transport plus axum/http2 (h2);
+    # the gRPC tests add tonic's client channel and prost/tonic-prost for one
+    # hand-written message, so no protoc.
+    'anyhow', 'async-trait', 'either', 'equivalent', 'fnv', 'h2', 'hashbrown',
+    'hyper-timeout', 'indexmap', 'itertools', 'pin-project',
+    'pin-project-internal', 'prost', 'prost-derive', 'tokio-stream',
+    'tokio-util', 'tonic', 'tonic-prost', 'try-lock', 'want',
     },
     "rustclamp-postgres": {
     # cipher, inout and const-oid are feature-unification artifacts, not
