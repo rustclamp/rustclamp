@@ -42,8 +42,15 @@ into it.
   fragments of `where_exists` and `order_by_raw` are `&'static str`;
   table and column names must be plain identifiers or it panics, so a name
   taken from a request cannot carry SQL.
-- One connection behind a mutex, shared by every request thread. A pool waits
-  for measurements that show the lock matters.
+- One writer connection behind a mutex, shared by every request thread. A WAL
+  file database also keeps read-only connections, opened on demand, that
+  `Db::read` and a query's `get`, `first` and `count` use, so reads neither
+  wait for the writer nor for each other (#39). `:memory:` and
+  `Journal::Keep` stay on the one connection. Measured 2026-10-07 (6 cores,
+  point lookups through `Query` beside one inserting thread, 2 s): with one
+  reader thread, reads went from 992/s to 73,694/s; with eight, from 36,912/s
+  to 232,788/s. Writes fell from 80,185/s to 15,616/s at eight readers on
+  six cores: the writer no longer has the CPU to itself.
 - rusqlite is re-exported as `rustclamp::db::sqlite`. Apps use it rather than
   their own `rusqlite`: `libsqlite3-sys` links `sqlite3`, so two versions cannot
   coexist in one binary.
