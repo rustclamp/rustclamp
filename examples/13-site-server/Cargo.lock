@@ -300,6 +300,7 @@ dependencies = [
  "futures-core",
  "matchit",
  "rustclamp-core",
+ "serde_json",
  "tokio",
  "tower-http",
 ]

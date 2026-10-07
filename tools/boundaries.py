@@ -160,6 +160,15 @@ ALLOWED = {
     'windows-link',
     'windows-sys',
     'zmij',
+    # Feature `ws` (rustclamp/http#6): axum/ws pulls tokio-tungstenite and
+    # tungstenite (SHA-1 handshake, random masking keys), and the WebSocket
+    # tests use tokio-tungstenite as a client. r-efi, wasip2 and wit-bindgen
+    # build only for UEFI and WASI.
+    'base64', 'block-buffer', 'cfg-if', 'cpufeatures', 'crypto-common',
+    'data-encoding', 'digest', 'generic-array', 'getrandom', 'ppv-lite86',
+    'r-efi', 'rand', 'rand_chacha', 'rand_core', 'sha1', 'thiserror',
+    'thiserror-impl', 'tokio-tungstenite', 'tungstenite', 'typenum',
+    'version_check', 'wasip2', 'wit-bindgen', 'zerocopy', 'zerocopy-derive',
     },
     "rustclamp-postgres": {
     # cipher, inout and const-oid are feature-unification artifacts, not
