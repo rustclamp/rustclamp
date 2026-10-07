@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::db::Db;
-use crate::db::sqlite::{OptionalExtension, params};
+use crate::db::params;
 use crate::log::Log;
 
 /// How the app sends mail: `app/config/mail.rs`, from `MAIL_*` keys.
@@ -189,12 +189,12 @@ impl Mailer {
     /// # Errors
     ///
     /// A database error.
-    pub fn send(&self, db: &Db, message: Message) -> crate::db::sqlite::Result<i64> {
+    pub fn send(&self, db: &Db, message: Message) -> crate::db::Result<i64> {
         db.with(create_outbox)?;
         db.with(|sql| {
-            sql.execute(
+            sql.query_row(
                 "INSERT INTO mail_outbox (to_address, to_name, subject, body, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                 VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id",
                 params![
                     message.to.address,
                     message.to.name,
@@ -202,8 +202,8 @@ impl Mailer {
                     message.text,
                     now()
                 ],
-            )?;
-            Ok(sql.last_insert_rowid())
+                |row| row.get(0),
+            )
         })
     }
 
@@ -215,7 +215,7 @@ impl Mailer {
             db.with(|sql| {
                 sql.execute(
                     "UPDATE mail_outbox SET status = 'queued', sent_day = NULL WHERE status = 'sending'",
-                    [],
+                    &[],
                 )
             })
         }) {
@@ -237,7 +237,7 @@ impl Mailer {
     /// # Errors
     ///
     /// A database error.
-    pub fn deliver(&self, db: &Db) -> crate::db::sqlite::Result<usize> {
+    pub fn deliver(&self, db: &Db) -> crate::db::Result<usize> {
         let settings = &self.settings;
         self.deliver_with(db, &today(), &mut |mail| match settings.mailer.as_str() {
             "smtp" => smtp::send(settings, mail),
@@ -263,7 +263,7 @@ impl Mailer {
         db: &Db,
         today: &str,
         transport: &mut dyn FnMut(&Outgoing) -> Result<(), String>,
-    ) -> crate::db::sqlite::Result<usize> {
+    ) -> crate::db::Result<usize> {
         db.with(create_outbox)?;
         let mut sent = 0;
         loop {
@@ -343,20 +343,20 @@ enum Claim {
 /// Takes the oldest due mail, in one transaction, only while today's count
 /// (sent or being sent) is under `cap`, so parallel deliverers cannot
 /// overshoot.
-fn claim(db: &Db, today: &str, cap: u32) -> crate::db::sqlite::Result<Claim> {
+fn claim(db: &Db, today: &str, cap: u32) -> crate::db::Result<Claim> {
     db.transaction(|sql| {
         let used: i64 = sql.query_row(
             "SELECT COUNT(*) FROM mail_outbox WHERE sent_day = ?1 AND status IN ('sent', 'sending')",
-            [today],
+            &[&today],
             |row| row.get(0),
         )?;
         if used >= i64::from(cap) {
             let waiting: i64 =
-                sql.query_row("SELECT COUNT(*) FROM mail_outbox WHERE status = 'queued'", [], |row| row.get(0))?;
+                sql.query_row("SELECT COUNT(*) FROM mail_outbox WHERE status = 'queued'", &[], |row| row.get(0))?;
             return Ok(if waiting > 0 { Claim::CapReached(waiting) } else { Claim::Empty });
         }
         let mail = sql
-            .query_row(
+            .query(
                 "UPDATE mail_outbox SET status = 'sending', sent_day = ?1
                  WHERE id = (SELECT id FROM mail_outbox WHERE status = 'queued' AND next_attempt_at <= ?2
                              ORDER BY id LIMIT 1)
@@ -372,13 +372,13 @@ fn claim(db: &Db, today: &str, cap: u32) -> crate::db::sqlite::Result<Claim> {
                         attempts: row.get(5)?,
                     })
                 },
-            )
-            .optional()?;
+            )?
+            .pop();
         Ok(mail.map_or(Claim::Empty, Claim::Mail))
     })
 }
 
-fn create_outbox(sql: &crate::db::sqlite::Connection) -> crate::db::sqlite::Result<()> {
+fn create_outbox(sql: &crate::db::Connection<'_>) -> crate::db::Result<()> {
     sql.execute_batch(
         "CREATE TABLE IF NOT EXISTS mail_outbox (
             id INTEGER PRIMARY KEY,
@@ -547,7 +547,7 @@ mod tests {
             .with(|sql| {
                 sql.query_row(
                     "SELECT status, attempts, next_attempt_at FROM mail_outbox",
-                    [],
+                    &[],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
             })

@@ -26,7 +26,7 @@ use super::request::State;
 use super::{Next, Request, Response, Throttle, ToValue, Value, error, redirect};
 use crate::crypto::Hash;
 use crate::db::Db;
-use crate::db::sqlite::{Row, params};
+use crate::db::{Row, params};
 
 /// The session key holding the logged-in user's id.
 const SESSION_KEY: &str = "_user";
@@ -71,14 +71,14 @@ pub struct User {
 }
 
 impl User {
-    fn from_row(row: &Row<'_>) -> crate::db::sqlite::Result<Self> {
+    fn from_row(row: &Row) -> crate::db::Result<Self> {
         Ok(Self {
             id: row.get("id")?,
             public_id: row.get("public_id")?,
             name: row.get("name")?,
             email: row.get("email")?,
             role: row.get("role")?,
-            verified: row.get::<_, Option<String>>("email_verified_at")?.is_some(),
+            verified: row.get::<Option<String>>("email_verified_at")?.is_some(),
         })
     }
 }
@@ -206,7 +206,7 @@ impl Auth {
         let found = db
             .table("users")
             .where_eq("email", &email)
-            .first(|row| Ok((User::from_row(row)?, row.get::<_, String>("password")?)))?;
+            .first(|row| Ok((User::from_row(row)?, row.get::<String>("password")?)))?;
         // An unknown email costs the same Argon2 check as a wrong password.
         let hash = found
             .as_ref()
@@ -283,7 +283,7 @@ impl Auth {
             sql.execute(
                 "UPDATE users SET email_verified_at = CURRENT_TIMESTAMP
                  WHERE id = ?1 AND email_verified_at IS NULL",
-                [id],
+                &[&id],
             )
         })?;
         Ok(())
@@ -385,7 +385,7 @@ pub fn authenticate(request: &Request, next: Next) -> Response {
         .db()
         .table("users")
         .where_eq("id", &id)
-        .first(|row| Ok((User::from_row(row)?, row.get::<_, String>("password")?)));
+        .first(|row| Ok((User::from_row(row)?, row.get::<String>("password")?)));
     // A changed password (a reset elsewhere) ends this session.
     let current =
         |hash: &str| session.get(FINGERPRINT_KEY).as_deref() == Some(fingerprint(hash).as_str());

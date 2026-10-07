@@ -4,6 +4,23 @@
 
 ### Changed (breaking)
 
+- `rustclamp::db` names no engine in its API (ADR 0034, step 1 of 3; #121).
+  The `db::sqlite` (rusqlite) re-export is gone; use the facade types:
+  - `Db::with`, `Db::read`, `Db::blocking` and `Tx` lend a `db::Connection`
+    with `execute`, `execute_batch`, `query_row` and `query` (all rows as a
+    `Vec`; `.pop()` replaces `.optional()`). `prepare`/`query_map` become
+    `query`, `last_insert_rowid` becomes `INSERT ... RETURNING id`.
+  - Parameters are a slice: `[]` becomes `&[]`, `[id]` becomes `&[&id]`, and
+    `sqlite::params![..]` becomes `db::params![..]`. `&dyn ToSql` becomes
+    `&dyn db::Param` (`where_eq`, `where_in`, `update`, `update_values`,
+    `States::transition_in`); `Query::insert` takes `&[&dyn Param]`.
+  - `sqlite::Row` becomes `db::Row`, and `row.get::<_, T>(..)` becomes
+    `row.get::<T>(..)`. `Model::from_row(row: &db::Row) -> db::Result<Self>`.
+  - `sqlite::Result`/`sqlite::Error` become `db::Result`/`db::Error`
+    (`DbError::Open`, `Transition::Database` and `queue::Error::Db` carry it).
+  - Your own types bind with `impl db::Param` and read with
+    `impl db::FromColumn` instead of `ToSql`/`FromSql`.
+
 - `web::App` has a `commands` field (#122). Add `commands: &[]` to an
   `App { .. }` literal that predates it.
 

@@ -233,7 +233,7 @@ impl Sessions {
             db.with(|sql| {
                 sql.query_row(
                     "SELECT payload FROM sessions WHERE id = ?1 AND last_activity > ?2",
-                    crate::db::sqlite::params![id, fresh],
+                    crate::db::params![id, fresh],
                     |row| row.get(0),
                 )
             })
@@ -244,7 +244,7 @@ impl Sessions {
         }
         // A new session is a good moment to forget expired ones.
         let _ =
-            db.with(|sql| sql.execute("DELETE FROM sessions WHERE last_activity <= ?1", [fresh]));
+            db.with(|sql| sql.execute("DELETE FROM sessions WHERE last_activity <= ?1", &[&fresh]));
         (random_token(), Data::default())
     }
 
@@ -253,7 +253,7 @@ impl Sessions {
         let id = random_token();
         #[cfg(feature = "db")]
         if let Some(db) = &self.database {
-            let _ = db.with(|sql| sql.execute("DELETE FROM sessions WHERE id = ?1", [old]));
+            let _ = db.with(|sql| sql.execute("DELETE FROM sessions WHERE id = ?1", &[&old]));
             return id;
         }
         let mut store = self
@@ -274,7 +274,7 @@ impl Sessions {
                 sql.execute(
                     "INSERT INTO sessions (id, payload, last_activity) VALUES (?1, ?2, ?3)
                      ON CONFLICT (id) DO UPDATE SET payload = ?2, last_activity = ?3",
-                    crate::db::sqlite::params![id, payload, unix_seconds()],
+                    crate::db::params![id, payload, unix_seconds()],
                 )
             });
             if let Err(error) = saved {
@@ -578,7 +578,7 @@ mod tests {
         assert_eq!(got.body, b"");
         assert_ne!(cookie_of(&got), cookie);
         let rows: i64 = db
-            .with(|sql| sql.query_row("SELECT count(*) FROM sessions", [], |row| row.get(0)))
+            .with(|sql| sql.query_row("SELECT count(*) FROM sessions", &[], |row| row.get(0)))
             .unwrap();
         assert_eq!(
             rows, 1,

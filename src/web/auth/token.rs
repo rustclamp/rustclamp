@@ -14,7 +14,7 @@ use std::error::Error;
 use super::{Auth, allows_role};
 use crate::crypto::{constant_time_eq, sha256};
 use crate::db::Db;
-use crate::db::sqlite::params;
+use crate::db::params;
 use crate::web::{Next, Request, Response, problem};
 
 /// Who a valid bearer token speaks for. Not a [`User`](super::User): a token
@@ -80,7 +80,7 @@ impl Auth {
 }
 
 /// The principal `token` speaks for, if it is a live token.
-fn resolve(db: &Db, token: &str) -> Result<Option<Principal>, crate::db::sqlite::Error> {
+fn resolve(db: &Db, token: &str) -> Result<Option<Principal>, crate::db::Error> {
     let Some((public_id, secret)) = token.split_once('.') else {
         return Ok(None);
     };
@@ -94,7 +94,7 @@ fn resolve(db: &Db, token: &str) -> Result<Option<Principal>, crate::db::sqlite:
                     name: row.get("name")?,
                     role: row.get("role")?,
                 },
-                row.get::<_, String>("token_hash")?,
+                row.get::<String>("token_hash")?,
             ))
         })?;
     Ok(found

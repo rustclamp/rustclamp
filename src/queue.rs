@@ -31,7 +31,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::db::Db;
-use crate::db::sqlite::{OptionalExtension, params};
+use crate::db::params;
 use crate::log::Log;
 use crate::web::Shutdown;
 
@@ -86,7 +86,7 @@ pub enum Error {
     /// `REDIS_PREFIX` in production.
     Config(String),
     /// The database failed.
-    Db(crate::db::sqlite::Error),
+    Db(crate::db::Error),
     /// Redis failed or could not be reached.
     #[cfg(feature = "redis")]
     Redis(crate::redis::Error),
@@ -115,8 +115,8 @@ impl std::error::Error for Error {
     }
 }
 
-impl From<crate::db::sqlite::Error> for Error {
-    fn from(error: crate::db::sqlite::Error) -> Self {
+impl From<crate::db::Error> for Error {
+    fn from(error: crate::db::Error) -> Self {
         Self::Db(error)
     }
 }
@@ -242,20 +242,18 @@ impl Queue {
     pub fn retry(&self, id: Option<i64>) -> Result<Vec<(i64, String)>, Error> {
         let failed =
             self.db.with(|sql| {
-                sql.prepare(
+                sql.query(
                 "SELECT id, name, payload FROM failed_jobs WHERE ?1 IS NULL OR id = ?1 ORDER BY id",
-            )?
-            .query_map([id], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-            })?
-            .collect::<crate::db::sqlite::Result<Vec<_>>>()
+                &[&id],
+                |row| Ok((row.get::<i64>(0)?, row.get::<String>(1)?, row.get::<String>(2)?)),
+            )
             })?;
         failed
             .into_iter()
             .map(|(id, name, payload)| {
                 self.push(&name, &payload, Duration::ZERO)?;
                 self.db
-                    .with(|sql| sql.execute("DELETE FROM failed_jobs WHERE id = ?1", [id]))?;
+                    .with(|sql| sql.execute("DELETE FROM failed_jobs WHERE id = ?1", &[&id]))?;
                 Ok((id, name))
             })
             .collect()
@@ -269,9 +267,11 @@ impl Queue {
     /// A database error.
     pub fn forget(&self, id: Option<i64>) -> Result<Vec<(i64, String)>, Error> {
         Ok(self.db.with(|sql| {
-            sql.prepare("DELETE FROM failed_jobs WHERE ?1 IS NULL OR id = ?1 RETURNING id, name")?
-                .query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .collect::<crate::db::sqlite::Result<Vec<_>>>()
+            sql.query(
+                "DELETE FROM failed_jobs WHERE ?1 IS NULL OR id = ?1 RETURNING id, name",
+                &[&id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
         })?)
     }
 
@@ -313,7 +313,7 @@ impl Queue {
             Driver::Database => Ok(self
                 .db
                 .with(|sql| {
-                    sql.query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get::<_, i64>(0))
+                    sql.query_row("SELECT COUNT(*) FROM jobs", &[], |row| row.get::<i64>(0))
                 })?
                 .unsigned_abs()),
             #[cfg(feature = "redis")]
@@ -437,7 +437,7 @@ impl Queue {
     fn reserve(&self, now: i64) -> Result<Option<Reserved>, Error> {
         match &self.driver {
             Driver::Database => Ok(self.db.with(|sql| {
-                sql.query_row(
+                sql.query(
                     "UPDATE jobs SET reserved_at = ?1, attempts = attempts + 1
                      WHERE id = (SELECT id FROM jobs WHERE available_at <= ?1
                                  AND (reserved_at IS NULL OR reserved_at <= ?2) ORDER BY id LIMIT 1)
@@ -445,14 +445,14 @@ impl Queue {
                     params![now, now - self.retry_after],
                     |row| {
                         Ok(Reserved {
-                            token: row.get::<_, i64>(0)?.to_string(),
+                            token: row.get::<i64>(0)?.to_string(),
                             name: row.get(1)?,
                             payload: row.get(2)?,
                             attempt: row.get(3)?,
                         })
                     },
                 )
-                .optional()
+                .map(|mut rows| rows.pop())
             })?),
             #[cfg(feature = "redis")]
             Driver::Redis { redis, prefix, .. } => {
@@ -523,7 +523,7 @@ impl Queue {
         match &self.driver {
             Driver::Database => {
                 self.db
-                    .with(|sql| sql.execute("DELETE FROM jobs WHERE id = ?1", [row_id(job)]))?;
+                    .with(|sql| sql.execute("DELETE FROM jobs WHERE id = ?1", &[&row_id(job)]))?;
             }
             #[cfg(feature = "redis")]
             Driver::Redis { redis, prefix, .. } => {
@@ -562,7 +562,7 @@ fn row_id(job: &Reserved) -> i64 {
         .expect("a database job's token is its row id")
 }
 
-fn create_tables(sql: &crate::db::sqlite::Connection) -> crate::db::sqlite::Result<()> {
+fn create_tables(sql: &crate::db::Connection<'_>) -> crate::db::Result<()> {
     sql.execute_batch(
         "CREATE TABLE IF NOT EXISTS jobs (
             id INTEGER PRIMARY KEY,
@@ -611,7 +611,8 @@ mod tests {
     }
 
     fn count(db: &Db, sql: &str) -> i64 {
-        db.with(|c| c.query_row(sql, [], |row| row.get(0))).unwrap()
+        db.with(|c| c.query_row(sql, &[], |row| row.get(0)))
+            .unwrap()
     }
 
     fn record(job: &Job<'_>) -> Result<(), String> {
@@ -640,7 +641,7 @@ mod tests {
         assert_eq!(queue.waiting().unwrap(), 0);
         let done: (String, u32) = db
             .with(|c| {
-                c.query_row("SELECT payload, attempt FROM done", [], |r| {
+                c.query_row("SELECT payload, attempt FROM done", &[], |r| {
                     Ok((r.get(0)?, r.get(1)?))
                 })
             })
@@ -719,7 +720,7 @@ mod tests {
         assert_eq!(count(&db, "SELECT COUNT(*) FROM jobs"), 0);
         let failed: (String, String, String) = db
             .with(|c| {
-                c.query_row("SELECT name, payload, error FROM failed_jobs", [], |r| {
+                c.query_row("SELECT name, payload, error FROM failed_jobs", &[], |r| {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?))
                 })
             })
@@ -737,13 +738,15 @@ mod tests {
         while queue.work_once(now).unwrap() {}
         assert_eq!(count(&db, "SELECT COUNT(*) FROM failed_jobs"), 3);
 
-        assert_eq!(queue.retry(Some(99)).unwrap(), [], "no such job");
+        assert_eq!(queue.retry(Some(99)).unwrap(), &[], "no such job");
         assert_eq!(queue.retry(Some(1)).unwrap(), [(1, "flaky".to_owned())]);
         let back: (String, u32, Option<i64>) = db
             .with(|c| {
-                c.query_row("SELECT payload, attempts, reserved_at FROM jobs", [], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })
+                c.query_row(
+                    "SELECT payload, attempts, reserved_at FROM jobs",
+                    &[],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
             })
             .unwrap();
         assert_eq!(back, ("a".into(), 0, None), "attempts reset");
@@ -755,7 +758,7 @@ mod tests {
         );
 
         assert_eq!(queue.forget(Some(2)).unwrap(), [(2, "flaky".to_owned())]);
-        assert_eq!(queue.forget(Some(2)).unwrap(), [], "already gone");
+        assert_eq!(queue.forget(Some(2)).unwrap(), &[], "already gone");
         assert_eq!(queue.retry(None).unwrap().len(), 2, "all");
         assert_eq!(count(&db, "SELECT COUNT(*) FROM jobs"), 2);
         while queue.work_once(now).unwrap() {}
@@ -769,7 +772,7 @@ mod tests {
         queue.dispatch("boom", "p").unwrap();
         assert!(queue.work_once(SystemTime::now()).unwrap());
         let error: String = db
-            .with(|c| c.query_row("SELECT error FROM failed_jobs", [], |r| r.get(0)))
+            .with(|c| c.query_row("SELECT error FROM failed_jobs", &[], |r| r.get(0)))
             .unwrap();
         assert_eq!(error, "panicked: kaboom");
     }
@@ -886,7 +889,7 @@ mod tests {
             db.with(|c| {
                 c.execute(
                     "INSERT INTO failed_jobs (name, payload, error, failed_at) VALUES ('mail', 'p', 'x', 0)",
-                    [],
+                    &[],
                 )
             })
             .unwrap();
@@ -927,9 +930,9 @@ mod tests {
             assert!(queue.work_once(now + Duration::from_secs(90)).unwrap());
             let runs: Vec<(String, u32)> = db
                 .with(|c| {
-                    c.prepare("SELECT payload, attempt FROM done")?
-                        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                        .collect::<Result<_, _>>()
+                    c.query("SELECT payload, attempt FROM done", &[], |r| {
+                        Ok((r.get(0)?, r.get(1)?))
+                    })
                 })
                 .unwrap();
             assert_eq!(

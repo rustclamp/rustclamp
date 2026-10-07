@@ -5,8 +5,10 @@
 //! names the engine (only `sqlite` so far) and `DB_DATABASE` the file,
 //! `storage/database.sqlite` by default, or `:memory:`.
 //!
-//! Use the re-exported [`sqlite`] (rusqlite) rather than adding `rusqlite` to
-//! the app: two versions of it cannot link into one binary.
+//! The API names no engine: [`Db::with`] lends a [`Connection`] that takes
+//! `?`/`?N` marks and [`Param`]s ([`params!`]), and rows come back as
+//! [`Row`]s of [`Value`]s, so the same code can later run on Postgres
+//! (ADR 0034).
 //!
 //! A migration is a struct implementing [`Migration`], one per file, with
 //! `up` and `down` SQL written by [`Schema`] or by hand. [`Db::table`] builds
@@ -14,7 +16,7 @@
 //!
 //! ```
 //! use rustclamp::config::Config;
-//! use rustclamp::db::{Db, Migration, Schema, sqlite::params};
+//! use rustclamp::db::{Db, Migration, Schema, params};
 //!
 //! struct CreatePosts;
 //!
@@ -40,7 +42,7 @@
 //! let titles = db
 //!     .table("posts")
 //!     .where_eq("title", &"Hello")
-//!     .get(|row| row.get::<_, String>("title"))
+//!     .get(|row| row.get::<String>("title"))
 //!     .unwrap();
 //! assert_eq!(titles, ["Hello"]);
 //! ```
@@ -49,6 +51,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::config::Config;
 
+mod connection;
 mod query;
 mod schema;
 mod states;
@@ -57,8 +60,11 @@ pub use query::{Page, Query};
 pub use schema::{Column, OnDelete, Schema, Table};
 pub use states::{Change, States, Transition};
 
-pub use rusqlite as sqlite;
-use rusqlite::Connection;
+/// A list of [`Param`]s for a statement, of any types:
+/// `params![title, 3, None::<String>]`.
+#[doc(inline)]
+pub use crate::__db_params as params;
+pub use connection::{ColumnIndex, Connection, Error, FromColumn, Param, Result, Row, Value};
 /// `#[derive(Model)]` with `#[model(table = "posts")]`: reads each field
 /// from the column of the same name. See [`Model`](trait@Model).
 pub use rustclamp_macros::Model;
@@ -69,10 +75,19 @@ pub use rustclamp_macros::Model;
 /// do not wait for the writer or for each other (#39).
 #[derive(Clone)]
 pub struct Db {
-    // `:memory:` relies on the single writer: every clone must see the same
-    // in-memory database, so it gets no readers.
-    connection: Arc<Mutex<Connection>>,
-    readers: Option<Arc<Readers>>,
+    backend: Backend,
+}
+
+/// The engine behind a [`Db`].
+#[derive(Clone)]
+// ponytail: one engine; step 2 of ADR 0034 adds `Postgres(Pool)`.
+enum Backend {
+    Sqlite {
+        // `:memory:` relies on the single writer: every clone must see the
+        // same in-memory database, so it gets no readers.
+        writer: Arc<Mutex<rusqlite::Connection>>,
+        readers: Option<Arc<Readers>>,
+    },
 }
 
 /// Idle read-only connections to the same file, opened on demand.
@@ -80,7 +95,7 @@ struct Readers {
     path: String,
     // ponytail: grows to the peak number of concurrent readers and keeps them
     // all; cap it if an app with thousands of threads shows up.
-    idle: Mutex<Vec<Connection>>,
+    idle: Mutex<Vec<rusqlite::Connection>>,
 }
 
 impl std::fmt::Debug for Db {
@@ -105,10 +120,10 @@ impl<T> Default for Slot<T> {
 }
 
 /// A read-only connection to `path` for [`Db::read`].
-fn open_reader(path: &str) -> sqlite::Result<Connection> {
-    let connection = Connection::open_with_flags(
+fn open_reader(path: &str) -> rusqlite::Result<rusqlite::Connection> {
+    let connection = rusqlite::Connection::open_with_flags(
         path,
-        sqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | sqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(connection)
@@ -124,7 +139,7 @@ pub enum DbError {
         /// The `DB_DATABASE` path.
         path: String,
         /// What SQLite said.
-        source: sqlite::Error,
+        source: Error,
     },
 }
 
@@ -237,9 +252,9 @@ impl Db {
         }
         let path = settings.database.as_str();
         let connection = if path == ":memory:" {
-            Connection::open_in_memory()
+            rusqlite::Connection::open_in_memory()
         } else {
-            Connection::open(path).and_then(|connection| {
+            rusqlite::Connection::open(path).and_then(|connection| {
                 let patience = std::time::Duration::from_secs(5);
                 connection.busy_timeout(patience)?;
                 // WAL lets readers work while a write is in progress. The
@@ -269,7 +284,7 @@ impl Db {
         })
         .map_err(|source| DbError::Open {
             path: path.to_owned(),
-            source,
+            source: source.into(),
         })?;
         // A reader on a rollback journal would block the writer; only WAL
         // lets them run side by side.
@@ -280,20 +295,24 @@ impl Db {
             })
         });
         Ok(Self {
-            connection: Arc::new(Mutex::new(connection)),
-            readers,
+            backend: Backend::Sqlite {
+                writer: Arc::new(Mutex::new(connection)),
+                readers,
+            },
         })
     }
 
     /// Runs `work` with the connection, holding it for the duration.
-    pub fn with<T>(&self, work: impl FnOnce(&Connection) -> T) -> T {
+    pub fn with<T>(&self, work: impl FnOnce(&Connection<'_>) -> T) -> T {
+        work(&Connection(&self.writer()))
+    }
+
+    /// The SQLite writer, locked.
+    fn writer(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
+        let Backend::Sqlite { writer, .. } = &self.backend;
         // A panic in another request leaves the connection usable; SQLite
         // rolls back its unfinished transaction.
-        let connection = self
-            .connection
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        work(&connection)
+        writer.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Runs `work` with a read-only connection, sharing the database with
@@ -308,11 +327,12 @@ impl Db {
     /// use rustclamp::db::Db;
     ///
     /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
-    /// let one: i64 = db.read(|sql| sql.query_row("SELECT 1", [], |row| row.get(0))).unwrap();
+    /// let one: i64 = db.read(|sql| sql.query_row("SELECT 1", &[], |row| row.get(0))).unwrap();
     /// assert_eq!(one, 1);
     /// ```
-    pub fn read<T>(&self, work: impl FnOnce(&Connection) -> T) -> T {
-        let Some(readers) = &self.readers else {
+    pub fn read<T>(&self, work: impl FnOnce(&Connection<'_>) -> T) -> T {
+        let Backend::Sqlite { readers, .. } = &self.backend;
+        let Some(readers) = readers else {
             return self.with(work);
         };
         let idle = readers
@@ -329,7 +349,7 @@ impl Db {
                 Err(_) => return self.with(work),
             },
         };
-        let value = work(&connection);
+        let value = work(&Connection(&connection));
         // A panic in `work` drops the connection instead of returning it.
         readers
             .idle
@@ -360,12 +380,12 @@ impl Db {
     /// #     }
     /// # }
     /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
-    /// let one: i64 = block_on(db.blocking(|sql| sql.query_row("SELECT 1", [], |row| row.get(0)))).unwrap();
+    /// let one: i64 = block_on(db.blocking(|sql| sql.query_row("SELECT 1", &[], |row| row.get(0)))).unwrap();
     /// assert_eq!(one, 1);
     /// ```
     pub fn blocking<T: Send + 'static>(
         &self,
-        work: impl FnOnce(&Connection) -> T + Send + 'static,
+        work: impl FnOnce(&Connection<'_>) -> T + Send + 'static,
     ) -> impl std::future::Future<Output = T> + Send + 'static {
         // ponytail: a thread per call, no pool: the pool waits for
         // measurements (ADR 0009); a bounded worker set replaces this if
@@ -407,23 +427,23 @@ impl Db {
     ///
     /// ```
     /// use rustclamp::config::Config;
-    /// use rustclamp::db::{Db, sqlite};
+    /// use rustclamp::db::{self, Db};
     ///
     /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
     /// db.with(|sql| sql.execute_batch("CREATE TABLE t (n INTEGER)")).unwrap();
-    /// let failed: Result<(), sqlite::Error> = db.transaction(|tx| {
-    ///     tx.table("t").insert(&["n"], [&1])?;
-    ///     tx.execute("NOT SQL", [])?;
+    /// let failed: db::Result<()> = db.transaction(|tx| {
+    ///     tx.table("t").insert(&["n"], &[&1])?;
+    ///     tx.execute("NOT SQL", &[])?;
     ///     Ok(())
     /// });
     /// assert!(failed.is_err());
     /// assert_eq!(db.table("t").count().unwrap(), 0, "the insert was undone");
     /// ```
-    pub fn transaction<T, E: From<sqlite::Error>>(
+    pub fn transaction<T, E: From<Error>>(
         &self,
         work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
-        self.run_transaction(sqlite::TransactionBehavior::Deferred, work)
+        self.run_transaction(rusqlite::TransactionBehavior::Deferred, work)
     }
 
     /// [`Db::transaction`], but it takes the write lock up front (`BEGIN
@@ -431,33 +451,32 @@ impl Db {
     /// cannot fail halfway on a lock another process took meanwhile. Inside
     /// another transaction it is a savepoint of that one, which keeps
     /// whatever lock that one has.
-    pub fn transaction_immediate<T, E: From<sqlite::Error>>(
+    pub fn transaction_immediate<T, E: From<Error>>(
         &self,
         work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
-        self.run_transaction(sqlite::TransactionBehavior::Immediate, work)
+        self.run_transaction(rusqlite::TransactionBehavior::Immediate, work)
     }
 
-    fn run_transaction<T, E: From<sqlite::Error>>(
+    fn run_transaction<T, E: From<Error>>(
         &self,
-        behavior: sqlite::TransactionBehavior,
+        behavior: rusqlite::TransactionBehavior,
         work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
-        let mut connection = self
-            .connection
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut connection = self.writer();
         // rusqlite's Transaction and Savepoint roll back when dropped, so an
         // `Err` or a panic in `work` leaves no transaction open behind it.
         if connection.is_autocommit() {
-            let transaction = connection.transaction_with_behavior(behavior)?;
-            let value = work(&Tx(&transaction))?;
-            transaction.commit()?;
+            let transaction = connection
+                .transaction_with_behavior(behavior)
+                .map_err(Error::from)?;
+            let value = work(&Tx(Connection(&transaction)))?;
+            transaction.commit().map_err(Error::from)?;
             Ok(value)
         } else {
-            let savepoint = connection.savepoint()?;
-            let value = work(&Tx(&savepoint))?;
-            savepoint.commit()?;
+            let savepoint = connection.savepoint().map_err(Error::from)?;
+            let value = work(&Tx(Connection(&savepoint)))?;
+            savepoint.commit().map_err(Error::from)?;
             Ok(value)
         }
     }
@@ -470,7 +489,7 @@ impl Db {
     /// Runs `up` for each migration not yet run, in order, as one batch,
     /// recording each in the `migrations` table. A migration that fails is
     /// rolled back and stops the rest.
-    pub fn migrate(&self, migrations: &[&dyn Migration]) -> sqlite::Result<()> {
+    pub fn migrate(&self, migrations: &[&dyn Migration]) -> Result<()> {
         self.with(|connection| {
             connection.execute_batch(
                 "CREATE TABLE IF NOT EXISTS migrations (
@@ -481,14 +500,14 @@ impl Db {
             )?;
             let batch: i64 = connection.query_row(
                 "SELECT coalesce(max(batch), 0) + 1 FROM migrations",
-                [],
+                &[],
                 |row| row.get(0),
             )?;
             for migration in migrations {
                 let name = migration.name();
                 let ran: bool = connection.query_row(
                     "SELECT EXISTS (SELECT 1 FROM migrations WHERE name = ?1)",
-                    [name],
+                    &[&name],
                     |row| row.get(0),
                 )?;
                 if ran {
@@ -498,7 +517,7 @@ impl Db {
                     connection.execute_batch(&migration.up())?;
                     connection.execute(
                         "INSERT INTO migrations (name, batch) VALUES (?1, ?2)",
-                        rusqlite::params![name, batch],
+                        params![name, batch],
                     )
                 })?;
             }
@@ -539,32 +558,33 @@ impl Db {
     /// let first = Sql("0001", "CREATE TABLE posts (id INTEGER PRIMARY KEY);");
     /// let second = Sql("0002", "CREATE TABLE tags (id INTEGER PRIMARY KEY);");
     /// db.migrate_user_version(1, &[&first, &second]).unwrap();
-    /// assert_eq!(db.with(|sql| sql.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))).unwrap(), 2);
+    /// assert_eq!(db.with(|sql| sql.query_row("PRAGMA user_version", &[], |r| r.get::<i64>(0))).unwrap(), 2);
     /// ```
     pub fn migrate_user_version(
         &self,
         baseline: usize,
         migrations: &[&dyn Migration],
-    ) -> sqlite::Result<()> {
+    ) -> Result<()> {
         self.with(|connection| {
-            let version = |connection: &Connection| -> sqlite::Result<i64> {
-                connection.pragma_query_value(None, "user_version", |row| row.get(0))
+            let set_version = |version: i64| {
+                connection.execute_batch(&format!("PRAGMA user_version = {version}"))
             };
-            let mut current = version(connection)?;
+            let mut current: i64 =
+                connection.query_row("PRAGMA user_version", &[], |row| row.get(0))?;
             if current == 0 && baseline > 0 {
                 let has_tables: bool = connection.query_row(
                     "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%')",
-                    [],
+                    &[],
                     |row| row.get(0),
                 )?;
                 if has_tables {
                     // `baseline` is a count of migrations, never near i64::MAX.
                     current = baseline as i64;
-                    connection.pragma_update(None, "user_version", current)?;
+                    set_version(current)?;
                 }
             }
             if current < 0 || current as usize > migrations.len() {
-                return Err(sqlite::Error::InvalidParameterName(format!(
+                return Err(Error::new(format!(
                     "database user_version {current} is beyond the {} known migrations",
                     migrations.len()
                 )));
@@ -572,7 +592,7 @@ impl Db {
             for (index, migration) in migrations.iter().enumerate().skip(current as usize) {
                 savepoint(connection, |connection| {
                     connection.execute_batch(&migration.up())?;
-                    connection.pragma_update(None, "user_version", index as i64 + 1)
+                    set_version(index as i64 + 1)
                 })?;
             }
             Ok(())
@@ -589,18 +609,17 @@ impl Db {
             .with(|connection| {
                 let exists: bool = connection.query_row(
                     "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'migrations')",
-                    [],
+                    &[],
                     |row| row.get(0),
                 )?;
                 if !exists {
                     return Ok(Vec::new());
                 }
-                connection
-                    .prepare("SELECT name, batch FROM migrations")?
-                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-                    .collect()
+                connection.query("SELECT name, batch FROM migrations", &[], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
             })
-            .map_err(|error: sqlite::Error| error.to_string())?;
+            .map_err(|error: Error| error.to_string())?;
         Ok(migrations
             .iter()
             .map(|migration| {
@@ -641,12 +660,13 @@ impl Db {
     pub fn rollback(&self, migrations: &[&dyn Migration]) -> Result<Vec<&'static str>, String> {
         self.with(|connection| {
             let names: Vec<String> = connection
-                .prepare(
+                .query(
                     "SELECT name FROM migrations
                      WHERE batch = (SELECT max(batch) FROM migrations)
                      ORDER BY rowid DESC",
+                    &[],
+                    |row| row.get(0),
                 )
-                .and_then(|mut query| query.query_map([], |row| row.get(0))?.collect())
                 .map_err(|error| error.to_string())?;
             let mut undone = Vec::new();
             for name in names {
@@ -656,9 +676,9 @@ impl Db {
                     .ok_or_else(|| format!("migration {name} ran but is not in the list"))?;
                 savepoint(connection, |connection| {
                     connection.execute_batch(&migration.down())?;
-                    connection.execute("DELETE FROM migrations WHERE name = ?1", [&name])
+                    connection.execute("DELETE FROM migrations WHERE name = ?1", &[&name])
                 })
-                .map_err(|error: sqlite::Error| format!("{name}: {error}"))?;
+                .map_err(|error: Error| format!("{name}: {error}"))?;
                 undone.push(migration.name());
             }
             Ok(undone)
@@ -668,7 +688,7 @@ impl Db {
 
 /// The connection inside [`Db::transaction`]. It derefs to [`Connection`]
 /// for raw SQL, and [`Tx::table`] builds queries that run in the transaction.
-pub struct Tx<'a>(&'a Connection);
+pub struct Tx<'a>(Connection<'a>);
 
 impl<'a> Tx<'a> {
     /// A query on `table` inside this transaction; see [`Query`].
@@ -677,11 +697,11 @@ impl<'a> Tx<'a> {
     }
 }
 
-impl std::ops::Deref for Tx<'_> {
-    type Target = Connection;
+impl<'a> std::ops::Deref for Tx<'a> {
+    type Target = Connection<'a>;
 
-    fn deref(&self) -> &Connection {
-        self.0
+    fn deref(&self) -> &Connection<'a> {
+        &self.0
     }
 }
 
@@ -692,7 +712,7 @@ impl std::ops::Deref for Tx<'_> {
 ///
 /// ```
 /// use rustclamp::config::Config;
-/// use rustclamp::db::{Db, Model, sqlite::params};
+/// use rustclamp::db::{Db, Model, params};
 ///
 /// #[derive(Model)]
 /// #[model(table = "posts")]
@@ -719,7 +739,7 @@ impl std::ops::Deref for Tx<'_> {
 ///
 /// ```
 /// # use rustclamp::config::Config;
-/// # use rustclamp::db::{Db, Model, sqlite::ToSql};
+/// # use rustclamp::db::{Db, Model, Param};
 /// #[derive(Model)]
 /// #[model(table = "comments")]
 /// struct Comment { id: i64, post_id: i64, body: String }
@@ -740,7 +760,7 @@ impl std::ops::Deref for Tx<'_> {
 /// assert_eq!(post.title, "a");
 /// // eager: every comment's post in one query
 /// let all = Comment::all(&db).unwrap();
-/// let ids: Vec<&dyn ToSql> = all.iter().map(|c| &c.post_id as &dyn ToSql).collect();
+/// let ids: Vec<&dyn Param> = all.iter().map(|c| &c.post_id as &dyn Param).collect();
 /// let posts = Post::query(&db).where_in("id", &ids).get(Post::from_row).unwrap();
 /// assert_eq!(posts.len(), 2);
 /// ```
@@ -748,7 +768,7 @@ impl std::ops::Deref for Tx<'_> {
 /// By hand, when a field is not a column of the same name:
 ///
 /// ```
-/// use rustclamp::db::{Model, sqlite::{Result, Row}};
+/// use rustclamp::db::{Model, Result, Row};
 ///
 /// struct Tag {
 ///     label: String,
@@ -757,7 +777,7 @@ impl std::ops::Deref for Tx<'_> {
 /// impl Model for Tag {
 ///     const TABLE: &'static str = "tags";
 ///
-///     fn from_row(row: &Row<'_>) -> Result<Self> {
+///     fn from_row(row: &Row) -> Result<Self> {
 ///         Ok(Self { label: row.get("name")? })
 ///     }
 /// }
@@ -782,7 +802,7 @@ pub trait Model: Sized {
     const TABLE: &'static str;
 
     /// Builds `Self` from one row, reading columns by name.
-    fn from_row(row: &sqlite::Row<'_>) -> sqlite::Result<Self>;
+    fn from_row(row: &Row) -> Result<Self>;
 
     /// A query on [`TABLE`](Self::TABLE); finish it with
     /// `.get(Self::from_row)` or `.first(Self::from_row)`.
@@ -791,18 +811,18 @@ pub trait Model: Sized {
     }
 
     /// Every row.
-    fn all(db: &Db) -> sqlite::Result<Vec<Self>> {
+    fn all(db: &Db) -> Result<Vec<Self>> {
         Self::query(db).get(Self::from_row)
     }
 
     /// The row whose `id` is `id`.
-    fn find(db: &Db, id: i64) -> sqlite::Result<Option<Self>> {
+    fn find(db: &Db, id: i64) -> Result<Option<Self>> {
         Self::query(db).where_eq("id", &id).first(Self::from_row)
     }
 
     /// The row whose `public_id` column is `public_id`, the UUID that goes in
     /// URLs so `id` never leaves the app. `None` for text that is not a UUID.
-    fn find_public(db: &Db, public_id: &str) -> sqlite::Result<Option<Self>> {
+    fn find_public(db: &Db, public_id: &str) -> Result<Option<Self>> {
         let Some(uuid) = crate::uuid::Uuid::parse(public_id) else {
             return Ok(None);
         };
@@ -916,7 +936,7 @@ impl crate::web::Request {
     /// # Panics
     ///
     /// As [`db`](Self::db).
-    pub fn model<M: Model>(&self, param: &str) -> sqlite::Result<Option<M>> {
+    pub fn model<M: Model>(&self, param: &str) -> Result<Option<M>> {
         match self.param(param) {
             Some(public_id) => M::find_public(self.db(), public_id),
             None => Ok(None),
@@ -924,27 +944,11 @@ impl crate::web::Request {
     }
 }
 
-/// Stored as its hyphenated text, so it reads well in the database and in
-/// `public_id` columns.
-impl sqlite::types::ToSql for crate::uuid::Uuid {
-    fn to_sql(&self) -> sqlite::Result<sqlite::types::ToSqlOutput<'_>> {
-        Ok(self.to_string().into())
-    }
-}
-
-impl sqlite::types::FromSql for crate::uuid::Uuid {
-    fn column_result(value: sqlite::types::ValueRef<'_>) -> sqlite::types::FromSqlResult<Self> {
-        let text = value.as_str()?;
-        Self::parse(text)
-            .ok_or_else(|| sqlite::types::FromSqlError::Other(format!("not a UUID: {text}").into()))
-    }
-}
-
 /// Runs `work` inside a savepoint: a transaction of its own, or a nested one
 /// inside a transaction already open.
-fn savepoint<T, E: From<sqlite::Error>>(
-    connection: &Connection,
-    work: impl FnOnce(&Connection) -> Result<T, E>,
+fn savepoint<T, E: From<Error>>(
+    connection: &Connection<'_>,
+    work: impl FnOnce(&Connection<'_>) -> Result<T, E>,
 ) -> Result<T, E> {
     connection.execute_batch("SAVEPOINT clamp")?;
     match work(connection) {
@@ -1018,7 +1022,7 @@ mod tests {
         }
         impl Model for Post {
             const TABLE: &'static str = "posts";
-            fn from_row(row: &sqlite::Row<'_>) -> sqlite::Result<Self> {
+            fn from_row(row: &Row) -> Result<Self> {
                 Ok(Self {
                     title: row.get("title")?,
                 })
@@ -1030,7 +1034,7 @@ mod tests {
             sql.execute_batch(
                 "CREATE TABLE posts (id INTEGER PRIMARY KEY, public_id TEXT, title TEXT)",
             )?;
-            sql.execute("INSERT INTO posts VALUES (7, ?1, 'Hi')", [&public_id])
+            sql.execute("INSERT INTO posts VALUES (7, ?1, 'Hi')", &[&public_id])
         })
         .unwrap();
         let app = Router::new()
@@ -1071,7 +1075,7 @@ mod tests {
     }
 
     fn count(db: &Db, sql: &str) -> i64 {
-        db.with(|connection| connection.query_row(sql, [], |row| row.get(0)))
+        db.with(|connection| connection.query_row(sql, &[], |row| row.get(0)))
             .unwrap()
     }
 
@@ -1114,7 +1118,7 @@ mod tests {
         assert_eq!(count(&db, "SELECT count(*) FROM t"), 1, "same connection");
         // Many at once all complete.
         let all: Vec<_> = (0..8)
-            .map(|n| db.blocking(move |sql| sql.execute("INSERT INTO t VALUES (?1)", [n])))
+            .map(|n| db.blocking(move |sql| sql.execute("INSERT INTO t VALUES (?1)", &[&n])))
             .collect();
         for one in all {
             assert_eq!(block_on(one).unwrap(), 1);
@@ -1170,7 +1174,7 @@ mod tests {
         db.migrate(&[&posts]).unwrap();
         db.migrate(&[&posts]).unwrap();
         let ran: i64 = db
-            .with(|sql| sql.query_row("SELECT count(*) FROM migrations", [], |row| row.get(0)))
+            .with(|sql| sql.query_row("SELECT count(*) FROM migrations", &[], |row| row.get(0)))
             .unwrap();
         assert_eq!(ran, 1);
     }
@@ -1184,7 +1188,7 @@ mod tests {
             .with(|sql| {
                 sql.query_row(
                     "SELECT count(*) FROM sqlite_master WHERE name = 'posts'",
-                    [],
+                    &[],
                     |row| row.get(0),
                 )
             })
@@ -1243,7 +1247,7 @@ mod tests {
 
     impl Seeder for Posts {
         fn run(&self, db: &Db) -> Result<(), SeedError> {
-            db.table("posts").insert(&["title"], [&"one"])?;
+            db.table("posts").insert(&["title"], &[&"one"])?;
             db.with(|connection| connection.execute_batch(self.0))?;
             Ok(())
         }
@@ -1279,10 +1283,10 @@ mod tests {
             .unwrap();
         let other = db.clone();
         other
-            .with(|sql| sql.execute("INSERT INTO posts VALUES ('a')", []))
+            .with(|sql| sql.execute("INSERT INTO posts VALUES ('a')", &[]))
             .unwrap();
         let count: i64 = db
-            .with(|sql| sql.query_row("SELECT count(*) FROM posts", [], |row| row.get(0)))
+            .with(|sql| sql.query_row("SELECT count(*) FROM posts", &[], |row| row.get(0)))
             .unwrap();
         assert_eq!(count, 1);
     }
@@ -1322,14 +1326,14 @@ mod tests {
         let db = memory();
         db.migrate(&[&Sql("0001", "CREATE TABLE posts (title TEXT)", "")])
             .unwrap();
-        let failed: sqlite::Result<()> = db.transaction(|tx| {
-            tx.table("posts").insert(&["title"], [&"a"])?;
+        let failed: Result<()> = db.transaction(|tx| {
+            tx.table("posts").insert(&["title"], &[&"a"])?;
             assert_eq!(tx.table("posts").count()?, 1);
-            tx.execute("NOT SQL", [])?;
+            tx.execute("NOT SQL", &[])?;
             Ok(())
         });
         assert!(failed.is_err());
-        db.transaction(|tx| tx.table("posts").insert(&["title"], [&"b"]))
+        db.transaction(|tx| tx.table("posts").insert(&["title"], &[&"b"]))
             .unwrap();
         assert_eq!(db.table("posts").count().unwrap(), 1);
     }
@@ -1340,13 +1344,13 @@ mod tests {
         db.migrate(&[&Sql("0001", "CREATE TABLE posts (title TEXT)", "")])
             .unwrap();
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _: sqlite::Result<()> = db.transaction_immediate(|tx| {
-                tx.table("posts").insert(&["title"], [&"a"])?;
+            let _: Result<()> = db.transaction_immediate(|tx| {
+                tx.table("posts").insert(&["title"], &[&"a"])?;
                 panic!("boom");
             });
         }));
         assert!(panicked.is_err());
-        assert!(db.with(Connection::is_autocommit));
+        assert!(db.with(|sql| sql.0.is_autocommit()));
         assert_eq!(db.table("posts").count().unwrap(), 0);
     }
 
@@ -1375,7 +1379,7 @@ mod tests {
                     for _ in 0..10 {
                         db.transaction_immediate(|tx| {
                             let n = tx.table("hits").count()?;
-                            tx.table("hits").insert(&["n"], [&n])
+                            tx.table("hits").insert(&["n"], &[&n])
                         })
                         .unwrap();
                     }
@@ -1409,7 +1413,7 @@ mod tests {
             sql.execute_batch("COMMIT").unwrap();
         });
         assert_eq!(db.table("t").count().unwrap(), 2, "committed rows are seen");
-        let write = db.read(|sql| sql.execute("INSERT INTO t VALUES (3)", []));
+        let write = db.read(|sql| sql.execute("INSERT INTO t VALUES (3)", &[]));
         assert!(write.is_err(), "readers are read-only");
         let _ = std::fs::remove_dir_all(folder);
     }
@@ -1452,7 +1456,7 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         let path = folder.join("rollback.sqlite");
         {
-            let plain = Connection::open(&path).unwrap();
+            let plain = rusqlite::Connection::open(&path).unwrap();
             plain.execute_batch("CREATE TABLE t (n INTEGER)").unwrap();
         }
         let before = std::fs::read(&path).unwrap();
@@ -1461,10 +1465,8 @@ mod tests {
             database: path.display().to_string(),
         };
         let mode = |db: &Db| {
-            db.with(|sql| {
-                sql.pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
-            })
-            .unwrap()
+            db.with(|sql| sql.query_row("PRAGMA journal_mode", &[], |row| row.get::<String>(0)))
+                .unwrap()
         };
         let kept = Db::try_connect_with(&settings, Journal::Keep).unwrap();
         assert_eq!(mode(&kept), "delete");

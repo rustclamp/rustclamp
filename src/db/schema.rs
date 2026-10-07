@@ -148,7 +148,7 @@ impl Table {
         self.column(name, "REAL")
     }
 
-    /// A `0`/`1` integer column; rusqlite reads it as `bool`.
+    /// A `0`/`1` integer column; `Row::get` reads it as `bool`.
     pub fn boolean(&mut self, name: &str) -> &mut Column {
         self.column(name, "INTEGER")
     }
@@ -357,14 +357,14 @@ mod tests {
         ];
         let all: Vec<&dyn Migration> = migrations.iter().map(|m| m as &dyn Migration).collect();
         db.migrate(&all).unwrap();
-        let run = |sql: &str| db.with(|c| c.execute(sql, []));
+        let run = |sql: &str| db.with(|c| c.execute(sql, &[]));
         assert!(run("INSERT INTO users (age) VALUES (-1)").is_err(), "CHECK");
         run("INSERT INTO users (age) VALUES (30)").unwrap();
         run("INSERT INTO users (age) VALUES (31)").unwrap();
         run("DELETE FROM users WHERE id = 2").unwrap();
         run("INSERT INTO users (age) VALUES (32)").unwrap();
         let id: i64 = db
-            .with(|c| c.query_row("SELECT max(id) FROM users", [], |r| r.get(0)))
+            .with(|c| c.query_row("SELECT max(id) FROM users", &[], |r| r.get(0)))
             .unwrap();
         assert_eq!(id, 3, "AUTOINCREMENT does not reuse ids");
         run("INSERT INTO memberships VALUES (1, 7)").unwrap();
@@ -378,11 +378,11 @@ mod tests {
         assert!(run("DELETE FROM users WHERE id = 3").is_err(), "RESTRICT");
         run("DELETE FROM users WHERE id = 1").unwrap();
         let orphaned: Option<i64> = db
-            .with(|c| c.query_row("SELECT user_id FROM notes", [], |r| r.get(0)))
+            .with(|c| c.query_row("SELECT user_id FROM notes", &[], |r| r.get(0)))
             .unwrap();
         assert_eq!(orphaned, None, "SET NULL");
         let memberships: i64 = db
-            .with(|c| c.query_row("SELECT count(*) FROM memberships", [], |r| r.get(0)))
+            .with(|c| c.query_row("SELECT count(*) FROM memberships", &[], |r| r.get(0)))
             .unwrap();
         assert_eq!(memberships, 0, "CASCADE stays the default");
     }
@@ -431,21 +431,21 @@ mod tests {
         db.with(|sql| {
             sql.execute(
                 "INSERT INTO posts (public_id, slug) VALUES (?1, 'a')",
-                [crate::uuid::Uuid::v7()],
+                &[&crate::uuid::Uuid::v7()],
             )?;
             let stored: crate::uuid::Uuid =
-                sql.query_row("SELECT public_id FROM posts", [], |row| row.get(0))?;
+                sql.query_row("SELECT public_id FROM posts", &[], |row| row.get(0))?;
             assert_eq!(stored.version(), 7);
-            sql.execute("INSERT INTO comments (post_id, body) VALUES (1, 'hi')", [])?;
-            sql.execute("DELETE FROM posts", [])
+            sql.execute("INSERT INTO comments (post_id, body) VALUES (1, 'hi')", &[])?;
+            sql.execute("DELETE FROM posts", &[])
         })
         .unwrap();
         let comments: i64 = db
-            .with(|sql| sql.query_row("SELECT count(*) FROM comments", [], |row| row.get(0)))
+            .with(|sql| sql.query_row("SELECT count(*) FROM comments", &[], |row| row.get(0)))
             .unwrap();
         assert_eq!(comments, 0, "deleting a post deletes its comments");
         let orphan =
-            db.with(|sql| sql.execute("INSERT INTO comments (post_id, body) VALUES (9, 'x')", []));
+            db.with(|sql| sql.execute("INSERT INTO comments (post_id, body) VALUES (9, 'x')", &[]));
         assert!(orphan.is_err(), "foreign keys are enforced");
         db.migrate(&[&Up("0004", Schema::drop("comments"))])
             .unwrap();

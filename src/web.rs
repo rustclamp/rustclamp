@@ -170,7 +170,7 @@ impl Router {
             #[cfg(feature = "db")]
             if let Some(db) = request.state::<crate::db::Db>()
                 && db
-                    .with(|sql| sql.query_row("SELECT 1", [], |_| Ok(())))
+                    .with(|sql| sql.query_row("SELECT 1", &[], |_| Ok(())))
                     .is_err()
             {
                 return error(503);
@@ -1852,7 +1852,7 @@ mod tests {
         db.with(|c| {
             c.execute(
                 "INSERT INTO failed_jobs (name, payload, error, failed_at) VALUES ('mail', 'p', 'x', 0)",
-                [],
+                &[],
             )
         })
         .unwrap();
