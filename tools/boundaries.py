@@ -180,6 +180,9 @@ ALLOWED = {
     'hyper-timeout', 'indexmap', 'itertools', 'pin-project',
     'pin-project-internal', 'prost', 'prost-derive', 'tokio-stream',
     'tokio-util', 'tonic', 'tonic-prost', 'try-lock', 'want',
+    # hashbrown's default hasher, enabled by the facade's hashlink when the
+    # coordinated workspace unifies features.
+    'foldhash',
     },
     "rustclamp-postgres": {
     # cipher, inout and const-oid are feature-unification artifacts, not
