@@ -64,9 +64,14 @@ impl Request {
     }
 
     /// Checks form fields against rules separated by `|`: `required`,
-    /// `min:N` and `max:N` (characters), `email`, `integer` and `url` (`http`
-    /// or `https` only, so a stored link can never be `javascript:`). A field that
-    /// is empty and not `required` passes. Values are trimmed.
+    /// `min:N` and `max:N` (characters), `email`, `integer`, `numeric`,
+    /// `date` (`YYYY-MM-DD`, what `<input type="date">` sends), `in:a,b,c`,
+    /// `confirmed` (equal to the `{field}_confirmation` field) and `url` (`http`
+    /// or `https` only, so a stored link can never be `javascript:`). With the
+    /// `db` feature, `unique:table,column` fails when a row already has the value,
+    /// and `unique:table,column,ID` ignores the row with that `id` (an edit form);
+    /// it reads the [`Db`](crate::db::Db) given to [`Router::state`](super::Router::state).
+    /// A field that is empty and not `required` passes. Values are trimmed.
     ///
     /// A field with `file`, `image` or `mimes:...` is an upload
     /// ([`Request::file`]): `image` is a JPEG, PNG, GIF or WebP by extension
@@ -89,6 +94,37 @@ impl Request {
     ///
     /// On a rule it does not know: that is a bug in the app, not bad input.
     pub fn validate(&self, rules: &[(&str, &str)]) -> Result<Form, Invalid> {
+        self.validate_with(rules, &[])
+    }
+
+    /// [`validate`](Self::validate) with your own messages, keyed
+    /// `field.rule`; rules without one keep the default message.
+    ///
+    /// ```
+    /// use rustclamp::web::Request;
+    ///
+    /// let request = Request::post("/").with_body("plan=gold");
+    /// let invalid = request
+    ///     .validate_with(&[("plan", "in:free,pro")], &[("plan.in", "Pick a plan.")])
+    ///     .unwrap_err();
+    /// assert_eq!(invalid.errors, ["Pick a plan."]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// As [`validate`](Self::validate).
+    pub fn validate_with(
+        &self,
+        rules: &[(&str, &str)],
+        messages: &[(&str, &str)],
+    ) -> Result<Form, Invalid> {
+        let message = |name: &str, rule: &str, default: String| {
+            let rule = rule.split_once(':').map_or(rule, |(rule, _)| rule);
+            messages
+                .iter()
+                .find(|(key, _)| key.rsplit_once('.') == Some((name, rule)))
+                .map_or(default, |(_, custom)| (*custom).to_owned())
+        };
         let mut values = Vec::new();
         let mut errors = Vec::new();
         let mut files = Vec::new();
@@ -100,13 +136,15 @@ impl Request {
                 .any(|rule| matches!(rule, "file" | "image") || rule.starts_with("mimes:"));
             if is_file {
                 match self.file(name) {
-                    None if required => errors.push(format!("The {label} field is required.")),
+                    None if required => errors.push(message(
+                        name,
+                        "required",
+                        format!("The {label} field is required."),
+                    )),
                     None => {}
-                    Some(file) => errors.extend(
-                        field_rules
-                            .split('|')
-                            .filter_map(|rule| check_file(rule, &file, &label, name)),
-                    ),
+                    Some(file) => errors.extend(field_rules.split('|').filter_map(|rule| {
+                        check_file(rule, &file, &label, name).map(|m| message(name, rule, m))
+                    })),
                 }
                 let sent = self.file(name).map(|file| file.name).unwrap_or_default();
                 values.push(((*name).to_owned(), sent));
@@ -116,14 +154,16 @@ impl Request {
             let value = self.form(name).unwrap_or_default().trim().to_owned();
             if value.is_empty() {
                 if required {
-                    errors.push(format!("The {label} field is required."));
+                    errors.push(message(
+                        name,
+                        "required",
+                        format!("The {label} field is required."),
+                    ));
                 }
             } else {
-                errors.extend(
-                    field_rules
-                        .split('|')
-                        .filter_map(|rule| check(rule, &value, &label, name)),
-                );
+                errors.extend(field_rules.split('|').filter_map(|rule| {
+                    check(self, rule, &value, &label, name).map(|m| message(name, rule, m))
+                }));
             }
             values.push(((*name).to_owned(), value));
         }
@@ -179,7 +219,7 @@ impl Request {
 }
 
 /// The message for `value` failing `rule`, if it does.
-fn check(rule: &str, value: &str, label: &str, name: &str) -> Option<String> {
+fn check(request: &Request, rule: &str, value: &str, label: &str, name: &str) -> Option<String> {
     let (rule, argument) = rule.split_once(':').unwrap_or((rule, ""));
     let limit = || {
         argument
@@ -215,6 +255,38 @@ fn check(rule: &str, value: &str, label: &str, name: &str) -> Option<String> {
         "url" => (!is_web_url(value)).then(|| {
             format!("The {label} field must be a link starting with http:// or https://.")
         }),
+        "numeric" => (!value.parse::<f64>().is_ok_and(f64::is_finite))
+            .then(|| format!("The {label} field must be a number.")),
+        "date" => crate::time::parse_date(value)
+            .is_none()
+            .then(|| format!("The {label} field must be a valid date (YYYY-MM-DD).")),
+        "in" => (!argument.split(',').any(|allowed| allowed == value))
+            .then(|| format!("The selected {label} is invalid.")),
+        "confirmed" => {
+            let confirmation = request.form(&format!("{name}_confirmation"));
+            (confirmation.unwrap_or_default().trim() != value)
+                .then(|| format!("The {label} field confirmation does not match."))
+        }
+        #[cfg(feature = "db")]
+        "unique" => {
+            let db = request
+                .state::<crate::db::Db>()
+                .unwrap_or_else(|| panic!("rule unique for {name} needs a Db in Router::state"));
+            let mut parts = argument.split(',');
+            let table = parts.next().filter(|table| !table.is_empty());
+            let table = table.unwrap_or_else(|| panic!("rule unique for {name} needs a table"));
+            let column = parts.next().unwrap_or(name);
+            let except = parts.next();
+            let mut query = db.table(table).where_eq(column, &value);
+            if let Some(id) = &except {
+                query = query.where_op("id", "!=", id);
+            }
+            // A database error is not bad input: it panics into a 500.
+            let taken = query
+                .count()
+                .unwrap_or_else(|error| panic!("rule unique for {name}: {error}"));
+            (taken > 0).then(|| format!("The {label} has already been taken."))
+        }
         _ => panic!("unknown validation rule {rule} for {name}"),
     }
 }
@@ -340,6 +412,92 @@ mod tests {
         assert_eq!(
             invalid.errors,
             ["The site field must be a link starting with http:// or https://."]
+        );
+    }
+
+    #[test]
+    fn numeric_date_in_and_confirmed() {
+        let request = Request::post("/").with_body(
+            "price=1.5&bad_price=inf&day=2026-02-29&plan=gold&password=a&password_confirmation=b",
+        );
+        let invalid = request
+            .validate(&[
+                ("price", "numeric"),
+                ("bad_price", "numeric"),
+                ("day", "date"),
+                ("plan", "in:free,pro"),
+                ("password", "confirmed"),
+            ])
+            .unwrap_err();
+        assert_eq!(
+            invalid.errors,
+            [
+                "The bad price field must be a number.",
+                "The day field must be a valid date (YYYY-MM-DD).",
+                "The selected plan is invalid.",
+                "The password field confirmation does not match.",
+            ]
+        );
+        let ok = Request::post("/").with_body("day=2028-02-29&plan=pro&pin=1&pin_confirmation=1");
+        assert!(
+            ok.validate(&[
+                ("day", "date"),
+                ("plan", "in:free,pro"),
+                ("pin", "confirmed")
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn custom_messages_by_field_and_rule() {
+        let request = Request::post("/").with_body("email=x");
+        let invalid = request
+            .validate_with(
+                &[("name", "required"), ("email", "email|min:3")],
+                &[
+                    ("name.required", "Who are you?"),
+                    ("email.min", "Too short."),
+                ],
+            )
+            .unwrap_err();
+        assert_eq!(
+            invalid.errors,
+            [
+                "Who are you?",
+                "The email field must be a valid email address.",
+                "Too short."
+            ]
+        );
+    }
+
+    #[cfg(feature = "db")]
+    #[test]
+    fn unique_reads_the_router_db() {
+        use super::super::request::State;
+        use std::sync::Arc;
+        let db = crate::db::Db::open(&crate::config::Config::parse("DB_DATABASE=:memory:"));
+        db.with(|sql| {
+            sql.execute_batch(
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);
+                 INSERT INTO users (id, email) VALUES (1, 'a@b.si');",
+            )
+        })
+        .unwrap();
+        let state = State(Arc::new(vec![Arc::new(db)]));
+        let mut request = Request::post("/").with_body("email=a%40b.si");
+        request.state = state;
+        let invalid = request.validate(&[("email", "unique:users")]).unwrap_err();
+        assert_eq!(invalid.errors, ["The email has already been taken."]);
+        assert!(
+            request
+                .validate(&[("email", "unique:users,email,1")])
+                .is_ok()
+        );
+        assert!(
+            request
+                .validate(&[("email", "unique:users,email,2")])
+                .is_err()
         );
     }
 
