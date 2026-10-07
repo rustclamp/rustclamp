@@ -44,7 +44,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::db::Db;
-use crate::db::sqlite::{self, params};
+use crate::db::{Connection, params};
 use crate::log::Log;
 use crate::time::{self, Weekday};
 
@@ -161,7 +161,7 @@ impl Schedule {
     pub fn run_due(
         &self,
         now: SystemTime,
-    ) -> sqlite::Result<Vec<(&'static str, Result<(), String>)>> {
+    ) -> crate::db::Result<Vec<(&'static str, Result<(), String>)>> {
         let now = seconds(now);
         let slot = now.div_euclid(60);
         self.db.with(create_table)?;
@@ -195,7 +195,7 @@ impl Schedule {
     }
 
     /// Claims `slot` for `task`: true when this call may run it.
-    fn claim(&self, task: &str, slot: i64, now: i64) -> sqlite::Result<bool> {
+    fn claim(&self, task: &str, slot: i64, now: i64) -> crate::db::Result<bool> {
         self.db.with(|sql| {
             sql.execute(
                 "INSERT OR IGNORE INTO schedule_runs (task, slot, started_at, finished_at) VALUES (?1, -1, 0, 0)",
@@ -247,12 +247,12 @@ impl Schedule {
     }
 
     /// Unix seconds of the latest run, if any task ever ran.
-    pub(crate) fn last_run(&self) -> sqlite::Result<Option<i64>> {
+    pub(crate) fn last_run(&self) -> crate::db::Result<Option<i64>> {
         self.db.with(|sql| {
             create_table(sql)?;
             sql.query_row(
                 "SELECT MAX(started_at) FROM schedule_runs WHERE slot >= 0",
-                [],
+                &[],
                 |row| row.get(0),
             )
         })
@@ -269,7 +269,7 @@ pub fn thread(config: &Config) -> bool {
     config.get_or("SCHEDULE_THREAD", !config.is_production())
 }
 
-fn create_table(sql: &sqlite::Connection) -> sqlite::Result<()> {
+fn create_table(sql: &Connection<'_>) -> crate::db::Result<()> {
     sql.execute_batch(
         "CREATE TABLE IF NOT EXISTS schedule_runs (
             task TEXT PRIMARY KEY,
@@ -380,14 +380,14 @@ mod tests {
         let next_day = schedule.run_due(at("2026-10-06T03:00:00Z")).unwrap();
         assert!(names(&next_day).contains(&"report:daily"));
         let done: i64 = db
-            .with(|c| c.query_row("SELECT COUNT(*) FROM done", [], |r| r.get(0)))
+            .with(|c| c.query_row("SELECT COUNT(*) FROM done", &[], |r| r.get(0)))
             .unwrap();
         assert_eq!(done, 2);
         let error: Option<String> = db
             .with(|c| {
                 c.query_row(
                     "SELECT error FROM schedule_runs WHERE task = 'fails'",
-                    [],
+                    &[],
                     |r| r.get(0),
                 )
             })
@@ -413,7 +413,7 @@ mod tests {
         db.with(|c| {
             c.execute(
                 "UPDATE schedule_runs SET finished_at = NULL WHERE task = 'fails'",
-                [],
+                &[],
             )
         })
         .unwrap();
@@ -451,7 +451,7 @@ mod tests {
         assert!(app.list().contains("schedule:run"));
         assert_eq!(app.command(&config, &db, "schedule:run", &[]), 0);
         let done: i64 = db
-            .with(|c| c.query_row("SELECT COUNT(*) FROM done", [], |r| r.get(0)))
+            .with(|c| c.query_row("SELECT COUNT(*) FROM done", &[], |r| r.get(0)))
             .unwrap();
         assert_eq!(done, 1);
     }
