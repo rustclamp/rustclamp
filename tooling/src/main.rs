@@ -494,6 +494,10 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
         include_str!("../templates/web/package.json"),
     ),
     (
+        "package-lock.json",
+        include_str!("../templates/web/package-lock.json"),
+    ),
+    (
         "vite.config.ts",
         include_str!("../templates/web/vite.config.ts"),
     ),
@@ -514,6 +518,10 @@ const VUE_OVERLAY: &[(&str, &str)] = &[
         include_str!("../templates/web-vue/package.json"),
     ),
     (
+        "package-lock.json",
+        include_str!("../templates/web-vue/package-lock.json"),
+    ),
+    (
         "vite.config.ts",
         include_str!("../templates/web-vue/vite.config.ts"),
     ),
@@ -532,6 +540,10 @@ const REACT_OVERLAY: &[(&str, &str)] = &[
     (
         "package.json",
         include_str!("../templates/web-react/package.json"),
+    ),
+    (
+        "package-lock.json",
+        include_str!("../templates/web-react/package-lock.json"),
     ),
     (
         "vite.config.ts",
