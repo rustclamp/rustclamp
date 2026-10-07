@@ -171,12 +171,17 @@ fn run(args: Vec<String>) -> Result<u8, String> {
             ["--react"] | ["--template", "react"] => ("web", Some("react")),
             ["--tui"] | ["--template", "tui"] => ("tui", None),
             ["--package"] | ["--template", "package"] => ("package", None),
+            ["--profile", _] => ("profile", None),
             _ => {
                 return Err(
-                    "usage: clamp init NAME [--blank|--app|--web|--vue|--react|--tui|--package]"
+                    "usage: clamp init NAME [--blank|--app|--web|--vue|--react|--tui|--package|--profile cli,service,worker]"
                         .into(),
                 );
             }
+        };
+        let profiles = match flags.as_slice() {
+            ["--profile", list] => profiles(list)?,
+            _ => Vec::new(),
         };
         // Written directly rather than with `cargo new`, which would also add the
         // project to any workspace above it; `[workspace]` keeps it standalone.
@@ -197,9 +202,17 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         fs::create_dir_all(root.join("src"))
             .map_err(|error| format!("cannot create project directory: {error}"))?;
         let features = match template {
-            "web" => ", features = [\"web\", \"db\", \"crypto\"]",
-            "package" => ", features = [\"web\"]",
-            _ => "",
+            "web" => ", features = [\"web\", \"db\", \"crypto\"]".to_owned(),
+            "package" => ", features = [\"web\"]".to_owned(),
+            "profile" => {
+                let features: std::collections::BTreeSet<_> =
+                    profiles.iter().flat_map(|profile| profile.2).collect();
+                match features.len() {
+                    0 => String::new(),
+                    _ => format!(", features = {:?}", Vec::from_iter(features)),
+                }
+            }
+            _ => String::new(),
         };
         fs::write(
             root.join("Cargo.toml"),
@@ -232,6 +245,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
             "app" => create_application(root)?,
             "web" => create_web(root, name, frontend)?,
             "tui" => create_tui(root)?,
+            "profile" => create_profiles(root, name, &profiles, flags[1])?,
             _ => {
                 fs::write(
                     root.join("src/main.rs"),
@@ -401,7 +415,7 @@ fn inspection(
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--vue|--react|--tui|--package]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp mcp\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp key:generate [--force]\n  clamp env:encrypt | env:decrypt [--key=KEY] [--env=NAME] [--force]\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web (plain, Vue or React) or TUI scaffold or a package, inspect a resolved projection (also as an MCP server over stdio), run Procfile.dev concurrently, make migrations and seeders, run database commands, manage APP_KEY and encrypted .env files, reinstall clamp, or run a Cargo command."
+    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--vue|--react|--tui|--package|--profile cli,service,worker]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp mcp\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp key:generate [--force]\n  clamp env:encrypt | env:decrypt [--key=KEY] [--env=NAME] [--force]\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web (plain, Vue or React) or TUI scaffold, a package or a combination of profiles, inspect a resolved projection (also as an MCP server over stdio), run Procfile.dev concurrently, make migrations and seeders, run database commands, manage APP_KEY and encrypted .env files, reinstall clamp, or run a Cargo command."
 }
 
 fn create_application(root: &std::path::Path) -> Result<(), String> {
@@ -699,6 +713,116 @@ fn main() {
         "# Clamp TUI\n\nCreated with `clamp init --tui`. Run it with `cargo run`; type `quit` to exit.\n",
     )
     .map_err(|error| format!("cannot write TUI README: {error}"))?;
+    Ok(())
+}
+
+/// One `--profile` (ADR 0032): its name, the subcommand that runs it when it
+/// is not the first one chosen, its facade features and its `src/` file.
+type Profile = (
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+    &'static str,
+);
+
+/// Every profile, in the order `main.rs` lists them; the first one chosen
+/// runs when no subcommand is given.
+const PROFILES: &[Profile] = &[
+    ("cli", "", &[], include_str!("../templates/profiles/cli.rs")),
+    (
+        "service",
+        "serve",
+        &["web", "metrics"],
+        include_str!("../templates/profiles/service.rs"),
+    ),
+    (
+        "worker",
+        "work",
+        &["config", "log"],
+        include_str!("../templates/profiles/worker.rs"),
+    ),
+];
+
+/// The profiles named in `list`, such as `service,worker`, in [`PROFILES`] order.
+fn profiles(list: &str) -> Result<Vec<&'static Profile>, String> {
+    let names: Vec<&str> = list.split(',').map(str::trim).collect();
+    if let Some(unknown) = names
+        .iter()
+        .find(|name| !PROFILES.iter().any(|profile| profile.0 == **name))
+    {
+        return Err(format!(
+            "unknown profile {unknown:?}; choose from cli, service, worker"
+        ));
+    }
+    Ok(PROFILES
+        .iter()
+        .filter(|profile| names.contains(&profile.0))
+        .collect())
+}
+
+/// Writes each profile's file, a `main.rs` that picks one by its first
+/// argument, a Procfile running every long-lived one, and a README.
+fn create_profiles(
+    root: &std::path::Path,
+    name: &str,
+    profiles: &[&Profile],
+    list: &str,
+) -> Result<(), String> {
+    let (first, rest) = profiles.split_first().ok_or("--profile needs a profile")?;
+    let mut main = String::new();
+    let (mut procfile, mut readme) = (
+        String::new(),
+        format!(
+            "# {name}\n\nCreated with `clamp init --profile {list}`. Each profile is one file in `src/`, and `src/main.rs` runs one:\n\n"
+        ),
+    );
+    for (profile, _, _, contents) in profiles {
+        main.push_str(&format!("mod {profile};\n"));
+        fs::write(root.join(format!("src/{profile}.rs")), contents)
+            .map_err(|error| format!("cannot write src/{profile}.rs: {error}"))?;
+    }
+    main.push_str("\nuse std::process::ExitCode;\n\nuse rustclamp::prelude::*;\n\nfn main() -> ExitCode {\n    let args: Vec<String> = std::env::args().skip(1).collect();\n");
+    if rest.is_empty() {
+        main.push_str(&format!(
+            "    ExitCode::from(Clamp::run(|| {}::run(&args)))\n}}\n",
+            first.0
+        ));
+    } else {
+        main.push_str(
+            "    ExitCode::from(Clamp::run(|| match args.first().map(String::as_str) {\n",
+        );
+        for (profile, command, _, _) in rest {
+            main.push_str(&format!(
+                "        Some(\"{command}\") => {profile}::run(&args[1..]),\n"
+            ));
+        }
+        main.push_str(&format!(
+            "        _ => {}::run(&args),\n    }}))\n}}\n",
+            first.0
+        ));
+    }
+    for (index, (profile, command, _, _)) in profiles.iter().enumerate() {
+        let run = if index == 0 {
+            "cargo run".to_owned()
+        } else {
+            format!("cargo run -- {command}")
+        };
+        readme.push_str(&format!(
+            "- `{run}`: the {profile} profile, `src/{profile}.rs`\n"
+        ));
+        if *profile != "cli" {
+            procfile.push_str(&format!("{profile}: {run}\n"));
+        }
+    }
+    readme.push_str("\nWhat each profile sets up, and the runnable example behind it: https://docs.rustclamp.com/recipes\n");
+    fs::write(root.join("src/main.rs"), main)
+        .map_err(|error| format!("cannot write src/main.rs: {error}"))?;
+    fs::write(root.join("README.md"), readme)
+        .map_err(|error| format!("cannot write README.md: {error}"))?;
+    if !procfile.is_empty() {
+        fs::write(root.join("Procfile.dev"), procfile)
+            .map_err(|error| format!("cannot write Procfile.dev: {error}"))?;
+    }
     Ok(())
 }
 

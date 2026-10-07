@@ -51,6 +51,9 @@
 
 ### Added
 
+- `clamp init NAME --profile cli,service,worker` (ADR 0032, #114): flat,
+  combinable profiles in one binary. Each writes its own `src/` file and
+  facade features; `main.rs` runs the first, or `serve` / `work`.
 - Metrics and tracing (ADR 0030, #108): `Router::metrics(path, registry)`
   (`web` + `metrics`) serves a `metrics::Registry` and counts requests, `5xx`
   and time into it; `examples/09-observability` shows rustclamp-http's

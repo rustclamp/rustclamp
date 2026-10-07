@@ -32,7 +32,7 @@ Install the `clamp` tool and create a project:
 
 ```sh
 curl -fsSL https://rustclamp.com/install.sh | sh   # or: cargo install --path tooling
-clamp init my-app --web                             # also: --blank, --app, --vue, --react, --tui, --package
+clamp init my-app --web                             # also: --blank, --app, --vue, --react, --tui, --package, --profile
 cd my-app
 clamp dev
 ```
@@ -40,7 +40,9 @@ clamp dev
 `--web` creates a std-only HTTP server with a Laravel-style `app/` layout and a
 Vite+ and Tailwind 4 frontend (needs Node/npm). `--vue` and `--react` mount
 components on server-rendered pages. `--package` creates a reusable web package
-([ADR 0008](docs/adr/0008-web-packages.md)). See [tooling/README.md](tooling/README.md)
+([ADR 0008](docs/adr/0008-web-packages.md)). `--profile cli,service,worker`
+combines presets for a kind of software into one binary
+([ADR 0032](docs/adr/0032-profiles-and-recipes.md)). See [tooling/README.md](tooling/README.md)
 for every command, including `clamp make:migration`, `clamp migrate` and
 `clamp inspect`.
 
