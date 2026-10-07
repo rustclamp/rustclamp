@@ -18,6 +18,8 @@ pub struct Throttle {
     trust_forwarded: bool,
     capacity: usize,
     hits: Mutex<HashMap<String, (Instant, u32)>>,
+    #[cfg(feature = "redis")]
+    shared: Option<(crate::redis::Redis, String)>,
 }
 
 impl Throttle {
@@ -29,6 +31,8 @@ impl Throttle {
             trust_forwarded: false,
             capacity: CAPACITY,
             hits: Mutex::default(),
+            #[cfg(feature = "redis")]
+            shared: None,
         }
     }
 
@@ -73,9 +77,30 @@ impl Throttle {
         self
     }
 
+    /// Counts hits in `redis` under keys starting with `prefix` (such as
+    /// `throttle:login:`), so every app instance sharing that Redis shares
+    /// the limit. While Redis cannot be reached, each instance counts on its
+    /// own, as without this.
+    #[cfg(feature = "redis")]
+    #[must_use]
+    pub fn shared(mut self, redis: crate::redis::Redis, prefix: &str) -> Self {
+        self.shared = Some((redis, prefix.to_owned()));
+        self
+    }
+
     /// Counts one hit for `key`. Over the limit, returns how long until the
     /// window resets.
     pub fn hit(&self, key: &str) -> Result<(), Duration> {
+        #[cfg(feature = "redis")]
+        if let Some((redis, prefix)) = &self.shared
+            && let Ok((count, left)) = redis.hit(&format!("{prefix}{key}"), self.window)
+        {
+            return if count > i64::from(self.max) {
+                Err(left)
+            } else {
+                Ok(())
+            };
+        }
         let now = Instant::now();
         let mut hits = self
             .hits
@@ -144,6 +169,37 @@ pub fn throttle(
 mod tests {
     use super::*;
     use crate::web::Router;
+
+    #[cfg(feature = "redis")]
+    #[test]
+    fn shared_counts_in_redis_and_falls_back_to_its_own_count() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        // Answers each EVAL with the next count and 30 s left in the window.
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = stream;
+            for count in 1..=3 {
+                // *5 header, then five $len + value line pairs.
+                for _ in 0..11 {
+                    reader.read_line(&mut String::new()).unwrap();
+                }
+                write!(writer, "*2\r\n:{count}\r\n:30000\r\n").unwrap();
+            }
+        });
+        let redis = crate::redis::Redis::connect(&format!("redis://{address}")).unwrap();
+        let limiter = Throttle::new(2, Duration::from_secs(60)).shared(redis, "throttle:");
+        assert!(limiter.hit("a").is_ok());
+        assert!(limiter.hit("a").is_ok());
+        assert_eq!(limiter.hit("a"), Err(Duration::from_secs(30)));
+        server.join().unwrap();
+        // Redis gone: this instance counts on its own, from zero.
+        assert!(limiter.hit("a").is_ok());
+        assert!(limiter.hit("a").is_ok());
+        assert!(limiter.hit("a").is_err());
+    }
 
     #[test]
     fn limits_each_client_per_window() {
