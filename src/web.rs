@@ -860,19 +860,34 @@ pub fn asset(path: &str) -> Response {
     let Ok(body) = fs::read(&file) else {
         return error(404);
     };
-    let content_type = match file.extension().and_then(|ext| ext.to_str()) {
+    Response::new(200, content_type(&file), body)
+}
+
+/// The `Content-Type` for a file served by [`asset`], by extension. Covers
+/// every image the `image` upload rule accepts: with `nosniff` on every
+/// response, a browser will not guess a type that is missing here.
+fn content_type(file: &Path) -> &'static str {
+    let extension = file
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
         Some("html") => "text/html; charset=utf-8",
         Some("js") => "text/javascript",
         Some("css") => "text/css",
         Some("json") => "application/json",
         Some("txt") => "text/plain; charset=utf-8",
+        Some("pdf") => "application/pdf",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("avif") => "image/avif",
         Some("ico") => "image/x-icon",
         Some("woff2") => "font/woff2",
         _ => "application/octet-stream",
-    };
-    Response::new(200, content_type, body)
+    }
 }
 
 /// A web app: its config functions, its migrations and seeders, and its
@@ -1655,6 +1670,21 @@ mod tests {
         assert_eq!(asset("/../Cargo.toml").status, 404);
         assert_eq!(asset("/assets/../../Cargo.toml").status, 404);
         assert_eq!(asset("//etc/passwd").status, 404);
+    }
+
+    #[test]
+    fn asset_types_cover_every_image_upload() {
+        for (file, expected) in [
+            ("a.jpg", "image/jpeg"),
+            ("a.JPEG", "image/jpeg"),
+            ("a.png", "image/png"),
+            ("a.gif", "image/gif"),
+            ("a.webp", "image/webp"),
+            ("a.pdf", "application/pdf"),
+            ("a", "application/octet-stream"),
+        ] {
+            assert_eq!(content_type(Path::new(file)), expected, "{file}");
+        }
     }
 
     #[test]
