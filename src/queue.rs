@@ -250,6 +250,39 @@ impl Queue {
         Ok(())
     }
 
+    /// How many jobs are stored and not yet done or failed: waiting, delayed
+    /// or running.
+    ///
+    /// # Errors
+    ///
+    /// A store error.
+    pub fn waiting(&self) -> Result<u64, Error> {
+        match &self.driver {
+            Driver::Database => Ok(self
+                .db
+                .with(|sql| {
+                    sql.query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get::<_, i64>(0))
+                })?
+                .unsigned_abs()),
+            #[cfg(feature = "redis")]
+            Driver::Redis { redis, prefix, .. } => {
+                let mut total = 0;
+                for (command, key) in [
+                    ("LLEN", "jobs"),
+                    ("ZCARD", "delayed"),
+                    ("ZCARD", "reserved"),
+                ] {
+                    if let crate::redis::Value::Int(n) =
+                        redis.command(&[command, &format!("{prefix}queue:{key}")])?
+                    {
+                        total += n.unsigned_abs();
+                    }
+                }
+                Ok(total)
+            }
+        }
+    }
+
     /// Runs the next job that is due at `now` on this thread, if there is
     /// one, and returns whether there was. A failure is retried or moved to
     /// `failed_jobs`, not returned. Tests call it with their own clock.
@@ -548,10 +581,11 @@ mod tests {
     fn a_dispatched_job_runs_once() {
         let (queue, db) = queue("", vec![("record", record)]);
         queue.dispatch("record", r#"{"id":7}"#).unwrap();
+        assert_eq!(queue.waiting().unwrap(), 1);
         let now = SystemTime::now();
         assert!(queue.work_once(now).unwrap());
         assert!(!queue.work_once(now).unwrap(), "done jobs are gone");
-        assert_eq!(count(&db, "SELECT COUNT(*) FROM jobs"), 0);
+        assert_eq!(queue.waiting().unwrap(), 0);
         let done: (String, u32) = db
             .with(|c| {
                 c.query_row("SELECT payload, attempt FROM done", [], |r| {
