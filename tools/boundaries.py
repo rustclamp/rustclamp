@@ -74,6 +74,9 @@ ALLOWED = {
         "rumqttc", "fixedbitset", "flume", "futures-core", "futures-sink",
         "futures-task", "futures-util", "lock_api", "log", "scopeguard",
         "slab", "spin", "tokio-stream", "tokio-util",
+        # futures-util's default io and async-await-macro features, enabled when
+        # the coordinated workspace unifies features.
+        "futures-io", "futures-macro",
     },
     "rustclamp-scheduler": {
         "rustclamp-core",
