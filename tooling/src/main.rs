@@ -765,3 +765,36 @@ fn dev() -> Result<u8, String> {
     }
     Ok(0)
 }
+
+#[cfg(test)]
+mod tests {
+    /// The welcome page quotes `app/routes/api.rs`; a stale copy sends readers
+    /// to code the project does not have (#88).
+    #[test]
+    fn welcome_page_quotes_the_real_api_routes() {
+        let page = include_str!("../templates/web/app/resources/views/welcome.html");
+        let panel = page
+            .split_once("app/routes/api.rs</p>")
+            .and_then(|(_, rest)| rest.split_once("</pre>"))
+            .map(|(panel, _)| panel)
+            .expect("welcome page has an api.rs panel");
+        let mut code = String::new();
+        let mut in_tag = false;
+        for c in panel.chars() {
+            match c {
+                '<' => in_tag = true,
+                '>' if in_tag => in_tag = false,
+                c if !in_tag => code.push(c),
+                _ => {}
+            }
+        }
+        let code = code
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&");
+        assert_eq!(
+            code.trim(),
+            include_str!("../templates/web/app/routes/api.rs").trim()
+        );
+    }
+}
