@@ -1,6 +1,6 @@
 # ADR 0035: Scheduled tasks in web apps
 
-Status: Proposed, 2026-10-07.
+Status: Accepted, 2026-10-07.
 
 ## Context
 
@@ -153,20 +153,14 @@ idea with std threads, wall-clock times and a database lock, as the queue
   03:00 delays the others due that minute. They still run, because their
   slot is already claimed by this process.
 
-## Open questions
+## Resolved questions
 
-1. **Production runner.** Cron or systemd timer with `schedule:run`
-   (recommended: familiar, survives a web restart at 03:00, the Ansible role
-   adds one line), or the thread in every web process with
-   `SCHEDULE_THREAD=true` (no extra unit; the lock keeps it to one run per
-   slot, but a deploy restart at the due minute skips the slot)?
-2. **Dispatching jobs.** Should a task get the app's queue, for example
-   `run: fn(&Context)` with `config()`, `db()` and `queue()`, so it can
-   dispatch heavy work? Or is `fn(&Config, &Db)` enough, with the task
-   building what it needs? The first changes the signature away from
-   `Command`'s.
-3. **Frequencies.** Are the four `At` forms enough for the fleet's current
-   Laravel schedules, or is there a `->cron(...)` or a time-zone schedule
-   that must move over?
-4. **`SCHEDULE_STALE_AFTER`.** Is one hour right for the fleet, or should
-   the timeout be per task?
+1. **Production runner:** cron or a systemd timer running `schedule:run`
+   every minute. The thread stays off in production unless
+   `SCHEDULE_THREAD=true`.
+2. **Task signature:** `fn(&Config, &Db)`, the same as a console command's
+   arguments without `args`. A task that dispatches jobs builds the queue
+   itself.
+3. **Frequencies:** the four `At` forms, UTC only. `At::Cron` waits until an
+   app needs it.
+4. **`SCHEDULE_STALE_AFTER`:** one global setting, 1 hour by default.

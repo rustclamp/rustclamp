@@ -84,6 +84,34 @@ pub fn add_days(time: SystemTime, days: i64) -> SystemTime {
     if days < 0 { time - shift } else { time + shift }
 }
 
+/// A day of the week.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum Weekday {
+    Monday,
+    Tuesday,
+    Wednesday,
+    Thursday,
+    Friday,
+    Saturday,
+    Sunday,
+}
+
+/// The UTC hour (0 to 23) and minute (0 to 59) of `time`.
+pub fn hour_minute(time: SystemTime) -> (u32, u32) {
+    let of_day = seconds(time).rem_euclid(DAY) as u32;
+    (of_day / 3600, of_day % 3600 / 60)
+}
+
+/// The UTC day of the week of `time`.
+pub fn weekday(time: SystemTime) -> Weekday {
+    use Weekday::{Friday, Monday, Saturday, Sunday, Thursday, Tuesday, Wednesday};
+    // 1970-01-01 was a Thursday.
+    [
+        Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday,
+    ][(seconds(time).div_euclid(DAY) + 3).rem_euclid(7) as usize]
+}
+
 /// `YYYY-MM-DD HH:MM:SS` in UTC for Unix `seconds`, the form SQLite's
 /// `CURRENT_TIMESTAMP` writes.
 #[cfg(any(feature = "log", feature = "db"))]
@@ -175,6 +203,19 @@ fn number(text: &str, min: i64, max: i64) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hours_minutes_and_weekdays_are_utc() {
+        let at = parse_rfc3339("2026-10-07T03:05:59+02:00").unwrap();
+        assert_eq!(hour_minute(at), (1, 5));
+        assert_eq!(weekday(at), Weekday::Wednesday);
+        assert_eq!(weekday(UNIX_EPOCH), Weekday::Thursday);
+        assert_eq!(
+            weekday(UNIX_EPOCH - Duration::from_secs(1)),
+            Weekday::Wednesday
+        );
+        assert_eq!(hour_minute(UNIX_EPOCH - Duration::from_secs(1)), (23, 59));
+    }
 
     #[test]
     #[cfg(any(feature = "log", feature = "db"))]

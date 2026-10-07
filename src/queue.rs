@@ -24,7 +24,6 @@
 //!   them as their own service.
 
 use std::collections::HashMap;
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -546,14 +545,7 @@ pub fn workers(config: &Config) -> usize {
 
 /// Runs `handler`, turning a panic into a failure.
 fn run(handler: Handler, job: &Job<'_>) -> Result<(), String> {
-    std::panic::catch_unwind(AssertUnwindSafe(|| handler(job))).unwrap_or_else(|panic| {
-        let message = panic
-            .downcast_ref::<&str>()
-            .map(|text| (*text).to_owned())
-            .or_else(|| panic.downcast_ref::<String>().cloned())
-            .unwrap_or_default();
-        Err(format!("panicked: {message}"))
-    })
+    crate::web::catch_panic(|| handler(job))
 }
 
 fn row_id(job: &Reserved) -> i64 {
@@ -677,6 +669,8 @@ mod tests {
             #[cfg(feature = "mail")]
             mail: crate::mail::Settings::from_config,
             jobs: || vec![("record", record)],
+            #[cfg(feature = "schedule")]
+            schedule: &[],
         };
         let (router, db) = app.test("");
         assert_eq!(Client::new(&router).get("/").status, 202);

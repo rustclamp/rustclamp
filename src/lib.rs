@@ -31,6 +31,8 @@ pub mod metrics;
 pub mod queue;
 #[cfg(feature = "redis")]
 pub mod redis;
+#[cfg(feature = "schedule")]
+pub mod schedule;
 #[cfg(feature = "storage")]
 pub mod storage;
 #[cfg(feature = "time")]
