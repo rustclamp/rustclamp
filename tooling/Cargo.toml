@@ -26,3 +26,7 @@ missing_docs = "deny"
 
 [lints.rustdoc]
 broken_intra_doc_links = "deny"
+
+# rustclamp's core dependency is a git dependency (#86); in the side-by-side checkout use the sibling.
+[patch."https://github.com/rustclamp/core"]
+rustclamp-core = { path = "../../core" }
