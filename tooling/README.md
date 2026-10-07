@@ -62,7 +62,10 @@ server-rendered pages (`<div data-component="Counter" data-props='{…}'>` loads
 `resources/js/components/Counter.vue` or `.tsx`), or `--tui` for an
 interactive terminal loop. `--package` creates a self-contained web package
 instead: a library with its own routes, views, static files, settings and tests,
-which an app adds with `Router::package` (ADR 0008). Every other project gets
+which an app adds with `Router::package` (ADR 0008). `--profile cli,service,worker`
+combines profiles (ADR 0032): one file per profile in `src/`, the union of their
+facade features, and a `main.rs` that runs the first one, or another by its
+subcommand (`serve`, `work`). Every other project gets
 `Procfile.dev` (`app: cargo run`) and a `cargo dev` alias for `cargo run`. `clamp dev` runs each `name: command`
 line of `Procfile.dev` at once with `[name]`-prefixed output; a command that
 fails stops the rest. All manifests use the RustClamp facade from its public Git repository so a

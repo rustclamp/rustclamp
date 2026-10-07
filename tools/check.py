@@ -300,17 +300,21 @@ def check_tooling_generator(root):
     facade = root / "rustclamp"
     git_dependency = 'git = "https://github.com/rustclamp/rustclamp", branch = "main"'
     with tempfile.TemporaryDirectory(prefix="clamp-init-") as temporary:
-        for template, expected in (
-            ("blank", "Hello from Clamp!"),
-            ("app", "Health check: ready"),
-            ("tui", "Clamp TUI"),
-            ("web", None),  # ponytail: long-running server, checked and tested only
-            ("package", None),  # a library: nothing to run
+        for template, flags, expected, run_args in (
+            ("blank", ["--blank"], "Hello from Clamp!", []),
+            ("app", ["--app"], "Health check: ready", []),
+            ("tui", ["--tui"], "Clamp TUI", []),
+            ("web", ["--web"], None, []),  # ponytail: long-running server, checked and tested only
+            ("package", ["--package"], None, []),  # a library: nothing to run
+            # Profiles (ADR 0032); the service runs only its in-process route test.
+            ("cli", ["--profile", "cli"], "Hello from Clamp!", []),
+            ("worker", ["--profile", "worker"], "worker idle", ["--once"]),
+            ("combined", ["--profile", "cli,service,worker"], "worker idle", ["work", "--once"]),
         ):
             project = Path(temporary) / template
             command = [
                 "cargo", "run", "--offline", "--locked", "--manifest-path",
-                str(tooling_manifest), "--", "init", str(project), f"--{template}",
+                str(tooling_manifest), "--", "init", str(project), *flags,
             ]
             run(*command, cwd=root)
 
@@ -333,7 +337,7 @@ def check_tooling_generator(root):
                     assert (project / name).exists(), f"web template omitted {name}"
             if expected:
                 output = subprocess.check_output(
-                    ["cargo", "run", "--offline", "--manifest-path", str(manifest)],
+                    ["cargo", "run", "--offline", "--manifest-path", str(manifest), "--", *run_args],
                     cwd=root, text=True, input="",
                 )
                 assert expected in output, f"{template} output omitted {expected!r}: {output}"
