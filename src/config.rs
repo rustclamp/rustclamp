@@ -124,6 +124,13 @@ impl Config {
         self.get(key)
             .ok_or_else(|| ConfigError::Missing(key.to_owned()))
     }
+
+    /// The keys that are set, sorted. Safe to show: values may be secrets.
+    pub fn keys(&self) -> Vec<&str> {
+        let mut keys: Vec<_> = self.values.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        keys
+    }
 }
 
 /// A config value that is missing or does not parse. Its message names the
@@ -156,10 +163,8 @@ impl std::error::Error for ConfigError {}
 
 impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut keys: Vec<_> = self.values.keys().collect();
-        keys.sort();
         f.debug_struct("Config")
-            .field("keys", &keys)
+            .field("keys", &self.keys())
             .finish_non_exhaustive()
     }
 }

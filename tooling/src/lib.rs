@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use rustclamp::config::Config;
 use rustclamp_core::ApplicationId;
 use rustclamp_kernel::{
     ExclusionReason, InclusionReason, ProcessProjection, ProjectionError, ProviderSelection,
@@ -38,6 +39,14 @@ pub fn inspection_document(projections: &[&ProcessProjection]) -> Result<Value, 
         "application": application.as_str(),
         "processes": processes,
     }))
+}
+
+/// Adds the keys of `config` to a document as `config_keys`, so inspection
+/// shows which settings an app has. Values are never included: they may be
+/// secrets.
+pub fn with_config_keys(mut document: Value, config: &Config) -> Value {
+    document["config_keys"] = json!(config.keys());
+    document
 }
 
 /// Serializes a projection failure as a machine-readable diagnostic document.
