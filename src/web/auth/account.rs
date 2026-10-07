@@ -102,7 +102,7 @@ impl Auth {
             .db()
             .table("users")
             .where_eq(column, &value)
-            .first(|row| Ok((User::from_row(row)?, row.get::<_, String>("password")?)))?)
+            .first(|row| Ok((User::from_row(row)?, row.get::<String>("password")?)))?)
     }
 
     fn mail(&self, request: &Request, user: &User, subject: &str, text: String) -> Outcome<()> {
@@ -445,7 +445,7 @@ mod tests {
             .with(|sql| {
                 sql.query_row(
                     "SELECT body FROM mail_outbox WHERE to_address = ?1 ORDER BY id DESC LIMIT 1",
-                    [to],
+                    &[&to],
                     |row| row.get(0),
                 )
             })
@@ -458,7 +458,7 @@ mod tests {
     }
 
     fn mails(db: &Db) -> i64 {
-        db.with(|sql| sql.query_row("SELECT COUNT(*) FROM mail_outbox", [], |row| row.get(0)))
+        db.with(|sql| sql.query_row("SELECT COUNT(*) FROM mail_outbox", &[], |row| row.get(0)))
             .unwrap_or(0)
     }
 
@@ -661,7 +661,7 @@ mod tests {
             ],
         );
         let body: String = db
-            .with(|sql| sql.query_row("SELECT body FROM mail_outbox", [], |row| row.get(0)))
+            .with(|sql| sql.query_row("SELECT body FROM mail_outbox", &[], |row| row.get(0)))
             .unwrap();
         assert!(
             body.contains("https://blog.example/email/verify/") && !body.contains("evil.example")

@@ -72,8 +72,8 @@ tests; add one with `.package(...)` in `app/lib.rs`, and override its views in
 The database is `rustclamp::db`, the `db` feature: SQLite compiled in, opened
 from `DB_CONNECTION` and `DB_DATABASE`. Handlers reach it with `request.db()`;
 `#[derive(Model)]` with `#[model(table = "posts")]` maps a table to a struct, `request.db().table("posts")` builds queries and
-`Db::with` lends the connection for anything else; use `rustclamp::db::sqlite`
-(rusqlite) for its types rather than adding `rusqlite`.
+`Db::with` lends a `db::Connection` for raw SQL (`?`/`?N` marks, values from
+`db::params!`, rows read with `row.get::<T>("column")`).
 
 A migration is a file in `app/database/migrations/`; `build.rs` finds it, so
 there is nothing to register. The file name is its recorded name, and the
@@ -105,7 +105,7 @@ impl Migration for CreatePosts {
 A seeder is a file in `app/database/seeders/`, such as `posts_seeder.rs`:
 
 ```rust
-use rustclamp::db::{Db, SeedError, Seeder, sqlite::params};
+use rustclamp::db::{Db, SeedError, Seeder, params};
 
 pub struct PostsSeeder;
 

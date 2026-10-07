@@ -4,9 +4,7 @@
 use std::fmt;
 use std::time::SystemTime;
 
-use rusqlite::{OptionalExtension, ToSql, params};
-
-use super::{Db, Tx, query::name, savepoint, timestamp};
+use super::{Connection, Db, Error, Param, Result, Tx, params, query::name, savepoint, timestamp};
 
 /// The states a column may hold and the moves allowed between them. With
 /// [`States::with_history`], every move is also recorded in the
@@ -78,7 +76,7 @@ pub enum Transition {
         to: String,
     },
     /// The database failed.
-    Database(rusqlite::Error),
+    Database(Error),
 }
 
 impl fmt::Display for Transition {
@@ -93,8 +91,8 @@ impl fmt::Display for Transition {
 
 impl std::error::Error for Transition {}
 
-impl From<rusqlite::Error> for Transition {
-    fn from(error: rusqlite::Error) -> Self {
+impl From<Error> for Transition {
+    fn from(error: Error) -> Self {
         Self::Database(error)
     }
 }
@@ -162,17 +160,17 @@ impl States {
         to: &str,
         by: Option<&str>,
         at: SystemTime,
-        set: &[(&str, &dyn ToSql)],
+        set: &[(&str, &dyn Param)],
     ) -> Result<(), Transition> {
         let (table, column) = (self.table, self.column);
         savepoint(tx, |connection| {
             let from: String = connection
-                .query_row(
+                .query(
                     &format!("SELECT {column} FROM {table} WHERE id = ?1"),
-                    [id],
+                    &[&id],
                     |row| row.get(0),
-                )
-                .optional()?
+                )?
+                .pop()
                 .ok_or(Transition::NotFound)?;
             if !self.can(&from, to) {
                 return Err(Transition::NotAllowed {
@@ -184,13 +182,14 @@ impl States {
                 .iter()
                 .map(|(extra, _)| format!(", {} = ?", name(extra)))
                 .collect();
-            let values = [&to as &dyn ToSql]
+            let values: Vec<&dyn Param> = [&to as &dyn Param]
                 .into_iter()
                 .chain(set.iter().map(|(_, value)| *value))
-                .chain([&id as &dyn ToSql]);
+                .chain([&id as &dyn Param])
+                .collect();
             connection.execute(
                 &format!("UPDATE {table} SET {column} = ?{columns} WHERE id = ?"),
-                rusqlite::params_from_iter(values),
+                &values,
             )?;
             if self.history {
                 create_history(connection)?;
@@ -206,31 +205,30 @@ impl States {
 
     /// Every recorded move of row `id`, oldest first; none without
     /// [`States::with_history`].
-    pub fn history(&self, db: &Db, id: i64) -> rusqlite::Result<Vec<Change>> {
+    pub fn history(&self, db: &Db, id: i64) -> Result<Vec<Change>> {
         if !self.history {
             return Ok(Vec::new());
         }
         db.with(|connection| {
             create_history(connection)?;
-            connection
-                .prepare(
-                    "SELECT from_state, to_state, by, at FROM state_history
-                     WHERE model = ?1 AND model_id = ?2 AND field = ?3 ORDER BY id",
-                )?
-                .query_map(params![self.table, id, self.column], |row| {
+            connection.query(
+                "SELECT from_state, to_state, by, at FROM state_history
+                 WHERE model = ?1 AND model_id = ?2 AND field = ?3 ORDER BY id",
+                params![self.table, id, self.column],
+                |row| {
                     Ok(Change {
                         from: row.get(0)?,
                         to: row.get(1)?,
                         by: row.get(2)?,
                         at: row.get(3)?,
                     })
-                })?
-                .collect()
+                },
+            )
         })
     }
 }
 
-fn create_history(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
+fn create_history(connection: &Connection<'_>) -> Result<()> {
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS state_history (
             id INTEGER PRIMARY KEY,
@@ -284,7 +282,7 @@ mod tests {
         );
         assert!(POST.history(&db, 1).unwrap().is_empty());
         let status: String = db
-            .with(|sql| sql.query_row("SELECT status FROM posts", [], |row| row.get(0)))
+            .with(|sql| sql.query_row("SELECT status FROM posts", &[], |row| row.get(0)))
             .unwrap();
         assert_eq!(status, "draft");
     }
@@ -342,7 +340,7 @@ mod tests {
         .unwrap();
         assert_eq!(POST.history(&db, 1).unwrap()[0].at, "2001-09-09 01:46:40");
         let published: String = db
-            .with(|sql| sql.query_row("SELECT published_at FROM posts", [], |row| row.get(0)))
+            .with(|sql| sql.query_row("SELECT published_at FROM posts", &[], |row| row.get(0)))
             .unwrap();
         assert_eq!(published, "2001-09-09 01:46:40");
     }
@@ -357,7 +355,7 @@ mod tests {
             .with(|sql| {
                 sql.query_row(
                     "SELECT count(*) FROM sqlite_master WHERE name = 'state_history'",
-                    [],
+                    &[],
                     |row| row.get(0),
                 )
             })

@@ -66,9 +66,7 @@ fn model(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         impl #impl_generics ::rustclamp::db::Model for #ident #type_generics #where_clause {
             const TABLE: &'static str = #table;
 
-            fn from_row(
-                row: &::rustclamp::db::sqlite::Row<'_>,
-            ) -> ::rustclamp::db::sqlite::Result<Self> {
+            fn from_row(row: &::rustclamp::db::Row) -> ::rustclamp::db::Result<Self> {
                 ::core::result::Result::Ok(Self { #(#fields,)* })
             }
         }

@@ -4,9 +4,7 @@
 //! into the SQL, so they must come from the app's code; a name that is not
 //! `letters, digits, _ or .` panics rather than reach SQLite.
 
-use rusqlite::{Connection, Params, Result, Row, ToSql, params_from_iter};
-
-use super::Db;
+use super::{Connection, Db, Param, Result, Row};
 
 /// A query on one table, from [`Db::table`]. Chain conditions, then finish
 /// with [`get`](Self::get), [`first`](Self::first), [`count`](Self::count),
@@ -15,7 +13,7 @@ use super::Db;
 ///
 /// ```
 /// use rustclamp::config::Config;
-/// use rustclamp::db::{Db, sqlite::params};
+/// use rustclamp::db::{Db, params};
 ///
 /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
 /// db.with(|sql| sql.execute_batch("CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT, views INTEGER)"))
@@ -28,12 +26,12 @@ use super::Db;
 ///     .table("posts")
 ///     .where_op("views", ">", &5)
 ///     .order_by_desc("id")
-///     .get(|row| row.get::<_, String>("title"))
+///     .get(|row| row.get::<String>("title"))
 ///     .unwrap();
 /// assert_eq!(popular, ["Again"]);
 ///
 /// db.table("posts").where_eq("id", &id).update(&["views"], params![4]).unwrap();
-/// let views = db.table("posts").where_eq("id", &id).first(|row| row.get::<_, i64>("views"));
+/// let views = db.table("posts").where_eq("id", &id).first(|row| row.get::<i64>("views"));
 /// assert_eq!(views.unwrap(), Some(4));
 /// assert_eq!(db.table("posts").where_eq("id", &id).delete().unwrap(), 1);
 /// assert_eq!(db.table("posts").count().unwrap(), 1);
@@ -43,7 +41,7 @@ pub struct Query<'a> {
     table: String,
     joins: Vec<String>,
     conditions: Vec<String>,
-    values: Vec<&'a dyn ToSql>,
+    values: Vec<&'a dyn Param>,
     order: Vec<String>,
     limit: Option<u64>,
     offset: Option<u64>,
@@ -54,7 +52,7 @@ pub struct Query<'a> {
 #[derive(Clone, Copy)]
 enum Source<'a> {
     Db(&'a Db),
-    Transaction(&'a Connection),
+    Transaction(Connection<'a>),
 }
 
 impl<'a> Query<'a> {
@@ -63,7 +61,7 @@ impl<'a> Query<'a> {
     }
 
     /// A query that runs on `connection`, which the caller already holds.
-    pub(super) fn in_transaction(connection: &'a Connection, table: &str) -> Self {
+    pub(super) fn in_transaction(connection: Connection<'a>, table: &str) -> Self {
         Self::on(Source::Transaction(connection), table)
     }
 
@@ -81,7 +79,7 @@ impl<'a> Query<'a> {
     }
 
     /// Keeps rows where `column` equals `value`.
-    pub fn where_eq(self, column: &str, value: &'a dyn ToSql) -> Self {
+    pub fn where_eq(self, column: &str, value: &'a dyn Param) -> Self {
         self.where_op(column, "=", value)
     }
 
@@ -91,7 +89,7 @@ impl<'a> Query<'a> {
     /// # Panics
     ///
     /// On any other operator.
-    pub fn where_op(mut self, column: &str, operator: &str, value: &'a dyn ToSql) -> Self {
+    pub fn where_op(mut self, column: &str, operator: &str, value: &'a dyn Param) -> Self {
         assert!(
             ["=", "!=", "<", "<=", ">", ">=", "LIKE"].contains(&operator),
             "unsupported operator {operator:?}"
@@ -104,7 +102,7 @@ impl<'a> Query<'a> {
 
     /// Keeps rows where `column` is one of `values`. An empty list keeps
     /// nothing.
-    pub fn where_in(mut self, column: &str, values: &[&'a dyn ToSql]) -> Self {
+    pub fn where_in(mut self, column: &str, values: &[&'a dyn Param]) -> Self {
         if values.is_empty() {
             self.conditions.push("0".to_owned());
         } else {
@@ -123,14 +121,14 @@ impl<'a> Query<'a> {
     /// `select` is written into the SQL as is, so it is a `&'static str`: it
     /// must come from the app's code, and anything from a request goes in
     /// `params`.
-    pub fn where_exists(mut self, select: &'static str, params: &[&'a dyn ToSql]) -> Self {
+    pub fn where_exists(mut self, select: &'static str, params: &[&'a dyn Param]) -> Self {
         self.conditions.push(format!("EXISTS ({select})"));
         self.values.extend_from_slice(params);
         self
     }
 
     /// [`where_exists`](Self::where_exists), negated.
-    pub fn where_not_exists(mut self, select: &'static str, params: &[&'a dyn ToSql]) -> Self {
+    pub fn where_not_exists(mut self, select: &'static str, params: &[&'a dyn Param]) -> Self {
         self.conditions.push(format!("NOT EXISTS ({select})"));
         self.values.extend_from_slice(params);
         self
@@ -212,7 +210,7 @@ impl<'a> Query<'a> {
     /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
     /// db.with(|sql| sql.execute_batch("CREATE TABLE posts (id INTEGER PRIMARY KEY);
     ///     INSERT INTO posts VALUES (1), (2), (3), (4), (5)")).unwrap();
-    /// let page = db.table("posts").order_by("id").paginate(2, 2, |row| row.get::<_, i64>("id")).unwrap();
+    /// let page = db.table("posts").order_by("id").paginate(2, 2, |row| row.get::<i64>("id")).unwrap();
     /// assert_eq!(page.items, [3, 4]);
     /// assert_eq!((page.total, page.last_page(), page.previous(), page.next()), (5, 3, Some(1), Some(3)));
     /// ```
@@ -220,7 +218,7 @@ impl<'a> Query<'a> {
         self,
         page: u64,
         per_page: u64,
-        map: impl FnMut(&Row<'_>) -> Result<T>,
+        map: impl FnMut(&Row) -> Result<T>,
     ) -> Result<Page<T>> {
         let (page, per_page) = (page.max(1), per_page.max(1));
         let total = self.count()?.try_into().unwrap_or(0);
@@ -238,7 +236,7 @@ impl<'a> Query<'a> {
 
     /// Every matching row, each turned into a `T` by `map`. Read columns by
     /// name: `row.get("title")`.
-    pub fn get<T>(&self, map: impl FnMut(&Row<'_>) -> Result<T>) -> Result<Vec<T>> {
+    pub fn get<T>(&self, map: impl FnMut(&Row) -> Result<T>) -> Result<Vec<T>> {
         let sql = format!(
             "SELECT {} FROM {}{}{}{}{}",
             if self.joins.is_empty() {
@@ -258,16 +256,11 @@ impl<'a> Query<'a> {
                     format!(" LIMIT {} OFFSET {skip}", rows.map_or(-1, i128::from)),
             }
         );
-        self.read(|connection| {
-            connection
-                .prepare(&sql)?
-                .query_map(params_from_iter(&self.values), map)?
-                .collect()
-        })
+        self.read(|connection| connection.query(&sql, &self.values, map))
     }
 
     /// The first matching row, if any.
-    pub fn first<T>(self, map: impl FnMut(&Row<'_>) -> Result<T>) -> Result<Option<T>> {
+    pub fn first<T>(self, map: impl FnMut(&Row) -> Result<T>) -> Result<Option<T>> {
         Ok(self.limit(1).get(map)?.pop())
     }
 
@@ -279,14 +272,12 @@ impl<'a> Query<'a> {
             self.joins.concat(),
             self.where_sql()
         );
-        self.read(|connection| {
-            connection.query_row(&sql, params_from_iter(&self.values), |row| row.get(0))
-        })
+        self.read(|connection| connection.query_row(&sql, &self.values, |row| row.get(0)))
     }
 
     /// Inserts one row with `values` for `columns` and returns its `id`.
     /// Conditions are ignored.
-    pub fn insert(&self, columns: &[&str], values: impl Params) -> Result<i64> {
+    pub fn insert(&self, columns: &[&str], values: &[&dyn Param]) -> Result<i64> {
         let names: Vec<String> = columns.iter().map(|column| name(column)).collect();
         let sql = format!(
             "INSERT INTO {} ({}) VALUES ({})",
@@ -296,13 +287,13 @@ impl<'a> Query<'a> {
         );
         self.with(|connection| {
             connection.execute(&sql, values)?;
-            Ok(connection.last_insert_rowid())
+            Ok(connection.0.last_insert_rowid())
         })
     }
 
     /// Sets `columns` to `values` on every matching row, and returns how many
     /// changed. Without a condition that is every row.
-    pub fn update(&self, columns: &[&str], values: &[&dyn ToSql]) -> Result<usize> {
+    pub fn update(&self, columns: &[&str], values: &[&dyn Param]) -> Result<usize> {
         let sets: Vec<String> = columns
             .iter()
             .map(|column| format!("{} = ?", name(column)))
@@ -313,15 +304,15 @@ impl<'a> Query<'a> {
             sets.join(", "),
             self.where_sql()
         );
-        let all = values.iter().copied().chain(self.values.iter().copied());
-        self.with(|connection| connection.execute(&sql, params_from_iter(all)))
+        let all: Vec<&dyn Param> = values.iter().chain(&self.values).copied().collect();
+        self.with(|connection| connection.execute(&sql, &all))
     }
 
     /// [`update`](Self::update) with `(column, value)` pairs, so a column and
     /// its value cannot get out of step.
-    pub fn update_values(&self, set: &[(&str, &dyn ToSql)]) -> Result<usize> {
+    pub fn update_values(&self, set: &[(&str, &dyn Param)]) -> Result<usize> {
         let columns: Vec<&str> = set.iter().map(|(column, _)| *column).collect();
-        let values: Vec<&dyn ToSql> = set.iter().map(|(_, value)| *value).collect();
+        let values: Vec<&dyn Param> = set.iter().map(|(_, value)| *value).collect();
         self.update(&columns, &values)
     }
 
@@ -329,20 +320,20 @@ impl<'a> Query<'a> {
     /// that is every row.
     pub fn delete(&self) -> Result<usize> {
         let sql = format!("DELETE FROM {}{}", self.table, self.where_sql());
-        self.with(|connection| connection.execute(&sql, params_from_iter(&self.values)))
+        self.with(|connection| connection.execute(&sql, &self.values))
     }
 
-    fn read<T>(&self, work: impl FnOnce(&Connection) -> T) -> T {
+    fn read<T>(&self, work: impl FnOnce(&Connection<'_>) -> T) -> T {
         match self.source {
             Source::Db(db) => db.read(work),
-            Source::Transaction(connection) => work(connection),
+            Source::Transaction(connection) => work(&connection),
         }
     }
 
-    fn with<T>(&self, work: impl FnOnce(&Connection) -> T) -> T {
+    fn with<T>(&self, work: impl FnOnce(&Connection<'_>) -> T) -> T {
         match self.source {
             Source::Db(db) => db.with(work),
-            Source::Transaction(connection) => work(connection),
+            Source::Transaction(connection) => work(&connection),
         }
     }
 
@@ -454,7 +445,7 @@ mod tests {
     #[test]
     fn where_in_binds_and_empty_matches_nothing() {
         let db = blog();
-        let ids: [&dyn rusqlite::ToSql; 2] = [&1, &3];
+        let ids: [&dyn crate::db::Param; 2] = [&1, &3];
         assert_eq!(titles(db.table("posts").where_in("id", &ids)), ["a", "c"]);
         assert_eq!(db.table("posts").where_in("id", &[]).count().unwrap(), 0);
         let quote = "1) OR (1=1";
@@ -531,7 +522,7 @@ mod tests {
         let row = db
             .table("posts")
             .where_eq("id", &2)
-            .first(|r| Ok((r.get::<_, String>("title")?, r.get::<_, i64>("views")?)));
+            .first(|r| Ok((r.get::<String>("title")?, r.get::<i64>("views")?)));
         assert_eq!(row.unwrap(), Some(("z".to_owned(), 99)));
     }
 
@@ -541,7 +532,7 @@ mod tests {
         let page = |n, per| {
             db.table("posts")
                 .order_by("id")
-                .paginate(n, per, |row| row.get::<_, String>("title"))
+                .paginate(n, per, |row| row.get::<String>("title"))
                 .unwrap()
         };
         let first = page(0, 2);
@@ -563,14 +554,14 @@ mod tests {
         let popular = db
             .table("posts")
             .where_op("views", ">", &6)
-            .paginate(1, 1, |row| row.get::<_, i64>("id"))
+            .paginate(1, 1, |row| row.get::<i64>("id"))
             .unwrap();
         assert_eq!((popular.total, popular.last_page()), (2, 2));
         assert_eq!(
             db.table("posts")
                 .order_by("id")
                 .offset(2)
-                .get(|r| r.get::<_, i64>("id"))
+                .get(|r| r.get::<i64>("id"))
                 .unwrap(),
             [3]
         );
@@ -589,7 +580,7 @@ mod tests {
         db.with(|sql| sql.execute_batch("CREATE TABLE posts (title TEXT)"))
             .unwrap();
         let sneaky = "x' OR '1'='1";
-        db.table("posts").insert(&["title"], [&"real"]).unwrap();
+        db.table("posts").insert(&["title"], &[&"real"]).unwrap();
         assert_eq!(
             db.table("posts")
                 .where_eq("title", &sneaky)
