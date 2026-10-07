@@ -1068,8 +1068,21 @@ impl App {
         // ponytail: nothing stops the workers; a killed job runs again after
         // QUEUE_RETRY_AFTER. Stop this Shutdown from a signal hook if one lands.
         #[cfg(feature = "queue")]
-        self.queue(&config, db.clone())
-            .start(crate::queue::workers(&config), &Shutdown::new());
+        {
+            let (queue, workers) = (
+                self.queue(&config, db.clone()),
+                crate::queue::workers(&config),
+            );
+            // Jobs left over with no worker here: a deploy may be missing its `queue:work` process.
+            if workers == 0
+                && let Ok(waiting @ 1..) = queue.waiting()
+            {
+                Log::warning(format_args!(
+                    "{waiting} queued jobs and QUEUE_WORKERS=0: run the app with queue:work, or nothing runs them"
+                ));
+            }
+            queue.start(workers, &Shutdown::new());
+        }
         serve(self.router(&config, db));
     }
 
