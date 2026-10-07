@@ -28,6 +28,7 @@ app/                             everything the app is made of; replace it to de
   routes/web.rs, routes/api.rs   pages, JSON (the api group throttles)
   http/controllers/              home.rs answers GET /; controller.rs is the base: `use super::controller::*;`
   http/middleware/               your middleware, added in http/kernel.rs
+  console/                       your commands, listed in `commands` in lib.rs
   http/requests/                 form input and its validation
   models/                        data the app works with
   resources/views/               pages (Vite entries); errors/4xx.html and 5xx.html are the error pages
@@ -44,7 +45,7 @@ tests/                           cargo test
 A request goes HTTP request → `http/kernel.rs` (global middleware, then the
 route's group) → route (`routes/`) → controller (`http/controllers/`) → response.
 `clamp make:controller posts`, `make:middleware EnsureAdmin`, `make:request contact`
-and `make:model Post` write the file from a stub, add it to the map in
+`make:model Post` and `make:command SendReport` write the file from a stub, add it to the map in
 `app/lib.rs` and print the line that routes or registers it. They never
 overwrite a file.
 
@@ -124,6 +125,8 @@ writes `.env.production.encrypted`, safe to commit; the server runs
 
 Migrations run when the server starts. From the console:
 `cargo run -- migrate`, `cargo run -- migrate:rollback` (the last batch) and
-`cargo run -- db:seed` (migrates first).
+`cargo run -- db:seed` (migrates first). `cargo run -- list` shows every
+command, the app's own from `app/console/` included; `cargo run -- send-report
+ARGS` runs one.
 `cargo dev` starts only the Rust server; run `npm run build` first so
 `public/build/` exists.

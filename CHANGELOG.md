@@ -4,6 +4,9 @@
 
 ### Changed (breaking)
 
+- `web::App` has a `commands` field (#122). Add `commands: &[]` to an
+  `App { .. }` literal that predates it.
+
 - Views use templates instead of `<!--key-->` markers (ADR 0012). Old callers
   still compile but render wrong: markers are left as invisible comments, and
   values passed through `escape` are escaped twice. To migrate:
@@ -56,6 +59,11 @@
   are registered with `web::Patterns::new(&[(name, pattern)])` in
   `Router::state` and compiled once, so `|` in a pattern is safe; a pattern
   that doesn't compile panics at startup. Matching is linear-time.
+- App console commands (#122, ADR 0024): `web::Command` (name, description,
+  `fn(&[String], &Config, &Db) -> i32`) listed in `App::commands`, run with
+  `cargo run -- NAME ARGS`; `cargo run -- list` shows built-in and app
+  commands. The web template keeps them in `app/console/`, and
+  `clamp make:command NAME` writes one.
 - The web template has an HTTP kernel (#122): `app/http/kernel.rs` holds all
   middleware (`global`, and the `web` and `api` groups that `routes/` use),
   and `GET /` goes to a real controller, `http/controllers/home.rs`.

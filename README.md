@@ -86,7 +86,7 @@ All modules are opt-in Cargo features. Unsafe code is forbidden.
 Some ADRs are still proposed. Bearer API tokens (`Auth::issue_token`,
 the `bearer` middleware) are implemented, but
 [ADR 0023](docs/adr/0023-bearer-api-tokens.md) is not yet accepted, and neither are
-ADRs 0021, 0022, 0024 and 0026. The [CHANGELOG](CHANGELOG.md) lists what has landed,
+ADRs 0021, 0022 and 0026. The [CHANGELOG](CHANGELOG.md) lists what has landed,
 including breaking changes to views and `Db::transaction`.
 
 ## Components

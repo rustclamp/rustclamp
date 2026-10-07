@@ -1,6 +1,6 @@
 //! `clamp make:*`: new files from stubs in a `clamp init --web` project.
 //! Migrations and seeders are picked up by `build.rs`; controllers,
-//! middleware, form requests and models are added to the module map in
+//! middleware, form requests, models and console commands are added to the module map in
 //! `app/lib.rs`.
 
 use std::fs;
@@ -101,9 +101,18 @@ pub fn make(root: &Path, kind: &str, name: Option<&String>) -> Result<String, St
                     plural(name)
                 ),
             ),
+            "command" => (
+                "app/console",
+                format!("{name}.rs"),
+                command(&name.replace('_', "-")),
+                Some(("console", vec![format!("pub mod {name};")])),
+                format!(
+                    "Register it in app/lib.rs: commands: &[console::{name}::COMMAND], then `cargo run -- list`"
+                ),
+            ),
             _ => {
                 return Err(format!(
-                    "unknown make:{kind}; try make:migration, make:seeder, make:controller, make:middleware, make:request or make:model"
+                    "unknown make:{kind}; try make:migration, make:seeder, make:controller, make:middleware, make:request, make:model or make:command"
                 ));
             }
         };
@@ -334,6 +343,13 @@ fn model(title: &str, name: &str) -> String {
     )
 }
 
+/// A console command that says it ran until filled in.
+fn command(name: &str) -> String {
+    format!(
+        "use rustclamp::config::Config;\nuse rustclamp::db::Db;\nuse rustclamp::web::Command;\n\n/// `cargo run -- {name} [ARGS]`, once it is in `commands` in `app/lib.rs`.\npub const COMMAND: Command = Command {{\n    name: \"{name}\",\n    description: \"What {name} does, for `cargo run -- list`\",\n    run,\n}};\n\n/// The arguments after the name; returns the exit status (0 for success).\nfn run(args: &[String], config: &Config, db: &Db) -> i32 {{\n    let _ = (args, config, db);\n    println!(\"{name} ran\");\n    0\n}}\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,6 +450,12 @@ mod tests {
         make("middleware", "EnsureAdmin").unwrap();
         make("request", "contact").unwrap();
         make("model", "Post").unwrap();
+        let made = make("command", "SendReport").unwrap();
+        assert!(
+            made.contains("commands: &[console::send_report::COMMAND]"),
+            "{made}"
+        );
+        assert!(make("command", "send_report").is_err(), "never overwrites");
         assert!(make("widget", "thing").is_err());
         assert!(make("model", "fn").is_err());
         let read = |path: &str| fs::read_to_string(root.join(path)).unwrap();
@@ -443,11 +465,14 @@ mod tests {
             "mod ensure_admin;\n        pub use ensure_admin::ensure_admin;",
             "mod contact;\n        pub use contact::ContactRequest;",
             "pub mod models {\n    mod post;\n    pub use post::Post;\n}",
+            "pub mod console {\n    pub mod send_report;\n}",
         ] {
             assert!(map.contains(line), "{line} in\n{map}");
         }
         assert!(read("app/http/middleware/ensure_admin.rs").contains("pub fn ensure_admin("));
         assert!(read("app/http/requests/contact.rs").contains("pub struct ContactRequest {"));
+        let command = read("app/console/send_report.rs");
+        assert!(command.contains("name: \"send-report\","), "{command}");
         let model = read("app/models/post.rs");
         assert!(model.contains("#[model(table = \"posts\")]\npub struct Post {"));
         for (name, table) in [
