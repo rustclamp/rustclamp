@@ -7,20 +7,24 @@
 
 use rustclamp::web::App;
 
-/// Everything that handles HTTP.
+/// Everything that handles HTTP: a request goes through the kernel's
+/// middleware to a route, and the route's controller makes the response.
 pub mod http {
-    /// Turn requests into responses.
+    /// Middleware: global, and the `web` and `api` groups.
+    pub mod kernel;
+    /// Turn requests into responses (`clamp make:controller NAME`).
     pub mod controllers {
         pub mod controller;
+        pub mod home;
     }
-    // Middleware goes in `middleware/`: `Fn(&Request, Next) -> Response`, e.g.
-    // `pub mod middleware { mod admin; pub use admin::admin; }`
-    // Form input and its validation goes in `requests/`, e.g.
-    // `pub mod requests { mod contact; pub use contact::ContactRequest; }`
+    /// `Fn(&Request, Next) -> Response`, added in `kernel` (`clamp make:middleware NAME`).
+    pub mod middleware {}
+    /// Form input and its validation (`clamp make:request NAME`).
+    pub mod requests {}
 }
 
-// Data the app works with goes in `models/`, e.g.
-// `pub mod models { mod post; pub use post::Post; }`
+/// Data the app works with (`clamp make:model NAME`).
+pub mod models {}
 
 /// The database: every file in `database/migrations/` (the schema, oldest
 /// first), `database/seeders/` (data for `cargo run -- db:seed`) and
@@ -51,7 +55,7 @@ pub mod routes {
 /// The app: its config, database and routes. `main.rs` runs it; tests build
 /// it with `app().test("")`. The framework opens and migrates the database
 /// and shares it (`request.db()`) and the disks (`request.storage()`) with
-/// handlers, behind security headers.
+/// handlers, behind security headers and the kernel's global middleware.
 pub fn app() -> App {
     App {
         logging: config::logging,
@@ -61,7 +65,7 @@ pub fn app() -> App {
         seeders: database::seeders,
         routes: |router, config, _db| {
             let settings = config::Settings::from(config);
-            let router = router.middleware(rustclamp::log::request_log);
+            let router = http::kernel::global(router);
             // Packages (`clamp init --package`) add their routes here, e.g.
             // `let router = router.package(blog::Blog::from(config));`
             routes::api::routes(routes::web::routes(router), &settings)

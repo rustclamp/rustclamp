@@ -70,6 +70,13 @@ subcommand (`serve`, `work`). Every other project gets
 line of `Procfile.dev` at once with `[name]`-prefixed output; a command that
 fails stops the rest. All manifests use the RustClamp facade from its public Git repository so a
 starter app can build before the crates.io publication gate is cleared.
+In a `--web` project, `clamp make:migration NAME` and `make:seeder NAME` add
+files that `build.rs` picks up; `make:controller`, `make:middleware`,
+`make:request` (a validated form struct) and `make:model` (a
+`#[derive(Model)]` struct) write `app/http/...` or `app/models/...`, add the
+module to the map in `app/lib.rs` and print the route or kernel line to add.
+`NAME` is snake_case or UpperCamelCase (`PostController` becomes
+`post_controller.rs`); an existing file is never overwritten.
 Frontend starter kits are separate under `starter-kits/`. `clamp --version` prints
 the installed version, which matches the `clamp-v*` release tag.
 

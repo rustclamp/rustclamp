@@ -332,7 +332,7 @@ def check_tooling_generator(root):
                     assert (project / name).exists(), f"package template omitted {name}"
                 assert not (project / "Procfile.dev").exists(), "package template wrote a Procfile"
             if template == "web":
-                for name in ("package.json", "vite.config.ts", "app/routes/web.rs", "app/routes/api.rs", "tests/routes.rs",
+                for name in ("package.json", "vite.config.ts", "app/routes/web.rs", "app/routes/api.rs", "app/http/kernel.rs", "tests/routes.rs",
                              "app/resources/views/welcome.html", "public/robots.txt", ".env.example"):
                     assert (project / name).exists(), f"web template omitted {name}"
             if expected:

@@ -145,8 +145,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     }
     if let Some(kind) = command.strip_prefix("make:") {
         let root = env::current_dir().map_err(|error| format!("cannot read folder: {error}"))?;
-        let path = make::make(&root, kind, args.get(1))?;
-        println!("Created {path}");
+        println!("{}", make::make(&root, kind, args.get(1))?);
         return Ok(0);
     }
     if matches!(
@@ -430,7 +429,7 @@ fn inspection(
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--vue|--react|--tui|--package|--profile cli,service,worker]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp mcp\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp key:generate [--force]\n  clamp env:encrypt | env:decrypt [--key=KEY] [--env=NAME] [--force]\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web (plain, Vue or React) or TUI scaffold, a package or a combination of profiles, inspect a resolved projection (also as an MCP server over stdio), run Procfile.dev concurrently, make migrations and seeders, run database commands, manage APP_KEY and encrypted .env files, reinstall clamp, or run a Cargo command."
+    "Usage:\n  clamp init <project-name> [--blank|--app|--web|--vue|--react|--tui|--package|--profile cli,service,worker]\n  clamp <inspect|tree|graph|why|doctor> FILE [MODULE] [--process ID] [--json]\n  clamp mcp\n  clamp dev\n  clamp make:migration NAME | make:seeder NAME | make:controller NAME | make:middleware NAME | make:request NAME | make:model NAME\n  clamp migrate | migrate:rollback | migrate:status | db:seed\n  clamp key:generate [--force]\n  clamp env:encrypt | env:decrypt [--key=KEY] [--env=NAME] [--force]\n  clamp self-update\n  clamp --version\n  clamp <check|test|build|run> [Cargo arguments]\n\nCreate a RustClamp blank, app, web (plain, Vue or React) or TUI scaffold, a package or a combination of profiles, inspect a resolved projection (also as an MCP server over stdio), run Procfile.dev concurrently, make migrations, seeders, controllers, middleware, form requests and models, run database commands, manage APP_KEY and encrypted .env files, reinstall clamp, or run a Cargo command."
 }
 
 fn create_application(root: &std::path::Path) -> Result<(), String> {
@@ -483,6 +482,14 @@ const WEB_TEMPLATE: &[(&str, &str)] = &[
     (
         "app/http/controllers/controller.rs",
         include_str!("../templates/web/app/http/controllers/controller.rs"),
+    ),
+    (
+        "app/http/controllers/home.rs",
+        include_str!("../templates/web/app/http/controllers/home.rs"),
+    ),
+    (
+        "app/http/kernel.rs",
+        include_str!("../templates/web/app/http/kernel.rs"),
     ),
     (
         "app/http/middleware/.gitkeep",

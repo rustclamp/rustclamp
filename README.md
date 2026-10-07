@@ -43,7 +43,7 @@ components on server-rendered pages. `--package` creates a reusable web package
 ([ADR 0008](docs/adr/0008-web-packages.md)). `--profile cli,service,worker`
 combines presets for a kind of software into one binary
 ([ADR 0032](docs/adr/0032-profiles-and-recipes.md)). See [tooling/README.md](tooling/README.md)
-for every command, including `clamp make:migration`, `clamp migrate` and
+for every command, including `clamp make:controller`, `clamp make:migration`, `clamp migrate` and
 `clamp inspect`.
 
 To use the facade directly, depend on it from Git (publishing to crates.io is
