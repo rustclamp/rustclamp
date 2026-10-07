@@ -8,11 +8,11 @@ There is no CLI target in the framework. Two apps built on RustClamp wrote
 their own:
 
 - Level 07 (todo CLI) copied `CommandDeclaration` and `CliCommandTarget` out
-  of `examples/03-contribution`.
+  of `examples/a3-contribution`.
 - Level 08 (system monitor) turned two process roots into a `clap` `match` by
   hand, so the process projection selected the modules but not the commands.
 
-`examples/03-contribution` already proves the shape: a module contributes a
+`examples/a3-contribution` already proves the shape: a module contributes a
 command declaration under a qualifier, and a target validates the declarations
 (duplicate names), sorts them and compiles them into a `CommandTree`. What it
 is not: a package. Its handler is `fn(Option<&dyn Clock>)`, which only fits

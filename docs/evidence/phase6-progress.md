@@ -1,7 +1,7 @@
 # Phase 6 Evidence: HTTP, Console, and PostgreSQL
 
 Phase 6 adds the `rustclamp-http` and `rustclamp-postgres` integration packages
-and the `06-users` consumer. The architecture choice and dependency boundaries
+and the `01-users` consumer. The architecture choice and dependency boundaries
 are recorded in [ADR 0005](../adr/0005-phase6-integration-boundaries.md).
 
 ## Verified behavior
@@ -31,7 +31,7 @@ For this evidence run, an ephemeral PostgreSQL 18.6 instance was initialized in
 ```sh
 python3 rustclamp/tools/check.py
 RUSTCLAMP_TEST_DATABASE_URL=postgres://... cargo test --offline --locked --manifest-path postgres/Cargo.toml --test postgres -- --ignored
-RUSTCLAMP_TEST_DATABASE_URL=postgres://... cargo test --offline --locked --manifest-path rustclamp/examples/06-users/Cargo.toml --features postgres --test postgres -- --ignored
+RUSTCLAMP_TEST_DATABASE_URL=postgres://... cargo test --offline --locked --manifest-path rustclamp/examples/01-users/Cargo.toml --features postgres --test postgres -- --ignored
 ```
 
 HTTP listener tests require local socket access. The database integration tests
