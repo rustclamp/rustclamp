@@ -16,7 +16,7 @@ Stage 9 lists "profiles and recipes for each kind of software". The docs already
   - `cli`: one command per run; stdout for results, stderr for usage errors, exit code 2 for bad usage. No features beyond the default.
   - `service`: `web` + `metrics`. HTTP on `PORT` (`web::serve`), `/up`, `/metrics` through `Router::metrics` (ADR 0030), the request log and `security_headers`. One in-process route test.
   - `worker`: `config` + `log`. One job at a time, polling every `WORKER_POLL_MS` (1000) when idle, and `--once` for cron and tests. Where jobs come from is left to the app: a comment points at `rustclamp-worker`'s `WorkerService` (ADR 0020) for retries, dead letters and drain.
-- **A recipe is a docs page section** that links a kind of software to its profile and to the runnable example that goes further. docs.rustclamp.com `recipes.html` has cli, service, worker and device. Device has an example (`07-device-loop`) but no profile yet.
+- **A recipe is a docs page section** that links a kind of software to its profile and to the runnable example that goes further. docs.rustclamp.com/recipes has cli, service, worker and device. Device has an example (`07-device-loop`) but no profile yet.
 - **Precedence stays explicit** (Phase 4's question): a profile writes code once and changes no resolution rule. Kernel precedence is not profile-scoped.
 - **Rejected:**
   - A Kernel-level preset (a bundle of modules plus config defaults added in one line). It needs a new runtime concept and a precedence rule for preset against app defaults. Facade apps don't compose Kernel modules today, and the modules a worker or device preset would bundle can't be reached from a generated project until crates.io.

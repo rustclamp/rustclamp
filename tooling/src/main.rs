@@ -814,7 +814,7 @@ fn create_profiles(
             procfile.push_str(&format!("{profile}: {run}\n"));
         }
     }
-    readme.push_str("\nWhat each profile sets up, and the runnable example behind it: https://docs.rustclamp.com/recipes.html\n");
+    readme.push_str("\nWhat each profile sets up, and the runnable example behind it: https://docs.rustclamp.com/recipes\n");
     fs::write(root.join("src/main.rs"), main)
         .map_err(|error| format!("cannot write src/main.rs: {error}"))?;
     fs::write(root.join("README.md"), readme)
