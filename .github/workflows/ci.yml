@@ -65,7 +65,13 @@ jobs:
   # (examples, isolated packages, external consumers). check.py runs offline, so fetch first.
   examples:
     runs-on: ubuntu-24.04
+    env:
+      RUSTCLAMP_TEST_MQTT_URL: mqtt://127.0.0.1:1883
     steps:
+      # A real broker for rustclamp-worker's live MQTT test. A step, not a service:
+      # Mosquitto 2 needs its bundled anonymous-listener config passed as the command.
+      - name: Mosquitto
+        run: docker run -d -p 1883:1883 eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
       - uses: actions/checkout@v7
         with:
           path: rustclamp
