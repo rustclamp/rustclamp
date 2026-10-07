@@ -1,6 +1,6 @@
 # ADR 0034: Postgres behind `Db`
 
-Status: Proposed, 2026-10-07.
+Status: Accepted, 2026-10-07.
 
 ## Context
 
@@ -77,14 +77,14 @@ The repository does not say which engines the fleet's apps use in production.
 
 MySQL, read replicas, `LISTEN`/`NOTIFY`, `COPY`, binary format, native `timestamptz`/`uuid`/`jsonb` columns, client certificates, Unix-socket peer auth, prepared-statement caching, and query cancellation (`BackendKeyData` is read but unused). Each waits until an app needs it.
 
-## Open questions
+## Resolved questions (2026-10-07)
 
-1. **Breaking the API.** Facade types replace rusqlite in `Db`, `Query`, `Model` and `Migration` in one release. Is that acceptable, or should there be a deprecation release that adds the new types next to the rusqlite ones first? Which apps outside this repo use `sqlite::` types today?
-2. **Feature shape.** Should `postgres` imply `db` and keep SQLite compiled in (proposed; tests and local dev use it), or should `db` split into `sqlite` and `postgres` so a Postgres-only build drops the C compile?
-3. **Unify with `rustclamp-postgres`.** Same env keys only (proposed), or also one migrations table? Today the facade uses `migrations (name, batch, ran_at)` and the crate uses `rustclamp_migrations (version, description)`. Should `examples/01-users` move to the facade driver?
-4. **Timestamps and booleans.** Text timestamps on Postgres keep both engines identical but give up `timestamptz` and date arithmetic in SQL. Native types would mean `Value` grows a timestamp variant. Also: `boolean` as `BOOLEAN` (proposed) or `SMALLINT`, which is closer to SQLite?
-5. **Default `DB_SSLMODE`.** `verify-full` off localhost (proposed) may fail against a provider whose certificate isn't in `webpki-roots` (RDS uses its own CA). Allow a CA file (`DB_SSLROOTCERT`) from the start?
-6. **Fleet target.** Which production apps would move, and to which Postgres version (the CI image is 17)? The repository doesn't record the fleet's engines.
+1. **Breaking the API:** in one release. Nothing is published on crates.io yet (#84), so there is no outside user to migrate; the CHANGELOG lists it as breaking.
+2. **Feature shape:** `postgres` implies `db`, and SQLite stays compiled in. Tests and local development keep using SQLite `:memory:`.
+3. **`rustclamp-postgres`:** shared env keys only. Each keeps its own migrations table; `examples/01-users` stays on the crate.
+4. **Types:** text timestamps in the same UTC format on both engines, and `BOOLEAN` for booleans.
+5. **TLS:** `DB_SSLMODE` defaults to `verify-full` off localhost, and `DB_SSLROOTCERT` (a CA file) ships from the start for providers with their own CA.
+6. **Fleet target:** still open. No app is committed to moving yet; CI tests against Postgres 17.
 
 ## Consequences
 
