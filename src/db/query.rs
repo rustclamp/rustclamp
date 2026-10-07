@@ -10,7 +10,7 @@ use super::Db;
 
 /// A query on one table, from [`Db::table`]. Chain conditions, then finish
 /// with [`get`](Self::get), [`first`](Self::first), [`count`](Self::count),
-/// [`insert`](Self::insert), [`update`](Self::update) or
+/// [`paginate`](Self::paginate), [`insert`](Self::insert), [`update`](Self::update) or
 /// [`delete`](Self::delete).
 ///
 /// ```
@@ -46,6 +46,7 @@ pub struct Query<'a> {
     values: Vec<&'a dyn ToSql>,
     order: Vec<String>,
     limit: Option<u64>,
+    offset: Option<u64>,
 }
 
 /// Where a query gets its connection: the shared one, locked per call, or the
@@ -75,6 +76,7 @@ impl<'a> Query<'a> {
             values: Vec::new(),
             order: Vec::new(),
             limit: None,
+            offset: None,
         }
     }
 
@@ -193,6 +195,47 @@ impl<'a> Query<'a> {
         self
     }
 
+    /// Skips the first `rows` rows; pair it with an order so pages are stable.
+    pub fn offset(mut self, rows: u64) -> Self {
+        self.offset = Some(rows);
+        self
+    }
+
+    /// Page `page` (from 1; 0 reads as 1) of `per_page` rows, with the total
+    /// count for page links. Order the query first, or rows can move between
+    /// pages.
+    ///
+    /// ```
+    /// use rustclamp::config::Config;
+    /// use rustclamp::db::Db;
+    ///
+    /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    /// db.with(|sql| sql.execute_batch("CREATE TABLE posts (id INTEGER PRIMARY KEY);
+    ///     INSERT INTO posts VALUES (1), (2), (3), (4), (5)")).unwrap();
+    /// let page = db.table("posts").order_by("id").paginate(2, 2, |row| row.get::<_, i64>("id")).unwrap();
+    /// assert_eq!(page.items, [3, 4]);
+    /// assert_eq!((page.total, page.last_page(), page.previous(), page.next()), (5, 3, Some(1), Some(3)));
+    /// ```
+    pub fn paginate<T>(
+        self,
+        page: u64,
+        per_page: u64,
+        map: impl FnMut(&Row<'_>) -> Result<T>,
+    ) -> Result<Page<T>> {
+        let (page, per_page) = (page.max(1), per_page.max(1));
+        let total = self.count()?.try_into().unwrap_or(0);
+        let items = self
+            .limit(per_page)
+            .offset((page - 1).saturating_mul(per_page))
+            .get(map)?;
+        Ok(Page {
+            items,
+            page,
+            per_page,
+            total,
+        })
+    }
+
     /// Every matching row, each turned into a `T` by `map`. Read columns by
     /// name: `row.get("title")`.
     pub fn get<T>(&self, map: impl FnMut(&Row<'_>) -> Result<T>) -> Result<Vec<T>> {
@@ -207,9 +250,13 @@ impl<'a> Query<'a> {
             self.joins.concat(),
             self.where_sql(),
             self.order_sql(),
-            self.limit
-                .map(|rows| format!(" LIMIT {rows}"))
-                .unwrap_or_default()
+            match (self.limit, self.offset) {
+                (None, None) => String::new(),
+                (Some(rows), None) => format!(" LIMIT {rows}"),
+                // SQLite needs a LIMIT before OFFSET; -1 means none.
+                (rows, Some(skip)) =>
+                    format!(" LIMIT {} OFFSET {skip}", rows.map_or(-1, i128::from)),
+            }
         );
         self.read(|connection| {
             connection
@@ -313,6 +360,52 @@ impl<'a> Query<'a> {
         } else {
             format!(" ORDER BY {}", self.order.join(", "))
         }
+    }
+}
+
+/// One page of rows from [`Query::paginate`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Page<T> {
+    /// The rows on this page.
+    pub items: Vec<T>,
+    /// This page's number, from 1.
+    pub page: u64,
+    /// Rows per page.
+    pub per_page: u64,
+    /// Matching rows across all pages.
+    pub total: u64,
+}
+
+impl<T> Page<T> {
+    /// The last page's number; 1 when there are no rows.
+    pub fn last_page(&self) -> u64 {
+        self.total.div_ceil(self.per_page).max(1)
+    }
+
+    /// The page before this one, if any.
+    pub fn previous(&self) -> Option<u64> {
+        (self.page > 1).then(|| (self.page - 1).min(self.last_page()))
+    }
+
+    /// The page after this one, if any.
+    pub fn next(&self) -> Option<u64> {
+        (self.page < self.last_page()).then_some(self.page + 1)
+    }
+}
+
+/// In a view: `items` for `@foreach`, plus `page`, `last_page`, `total`,
+/// `previous` and `next` (each `false` when there is none) for links.
+#[cfg(feature = "web")]
+impl<T: crate::web::ToValue> crate::web::ToValue for Page<T> {
+    fn to_value(&self) -> crate::web::Value {
+        crate::web::Value::map(&[
+            ("items", &self.items as &dyn crate::web::ToValue),
+            ("page", &self.page),
+            ("last_page", &self.last_page()),
+            ("total", &self.total),
+            ("previous", &self.previous()),
+            ("next", &self.next()),
+        ])
     }
 }
 
@@ -440,6 +533,47 @@ mod tests {
             .where_eq("id", &2)
             .first(|r| Ok((r.get::<_, String>("title")?, r.get::<_, i64>("views")?)));
         assert_eq!(row.unwrap(), Some(("z".to_owned(), 99)));
+    }
+
+    #[test]
+    fn paginate_counts_and_clamps() {
+        let db = blog();
+        let page = |n, per| {
+            db.table("posts")
+                .order_by("id")
+                .paginate(n, per, |row| row.get::<_, String>("title"))
+                .unwrap()
+        };
+        let first = page(0, 2);
+        assert_eq!(
+            (first.items.as_slice(), first.page),
+            (&["a".to_owned(), "B".to_owned()][..], 1)
+        );
+        assert_eq!(
+            (first.previous(), first.next(), first.last_page()),
+            (None, Some(2), 2)
+        );
+        let last = page(2, 2);
+        assert_eq!((last.next(), last.items), (None, vec!["c".to_owned()]));
+        // Past the end: no rows, and "previous" points at the real last page.
+        let beyond = page(9, 2);
+        assert!(beyond.items.is_empty());
+        assert_eq!((beyond.previous(), beyond.total), (Some(2), 3));
+        // The count keeps the query's conditions.
+        let popular = db
+            .table("posts")
+            .where_op("views", ">", &6)
+            .paginate(1, 1, |row| row.get::<_, i64>("id"))
+            .unwrap();
+        assert_eq!((popular.total, popular.last_page()), (2, 2));
+        assert_eq!(
+            db.table("posts")
+                .order_by("id")
+                .offset(2)
+                .get(|r| r.get::<_, i64>("id"))
+                .unwrap(),
+            [3]
+        );
     }
 
     #[test]
