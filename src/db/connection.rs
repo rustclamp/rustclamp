@@ -4,6 +4,8 @@
 
 use std::rc::Rc;
 
+use super::Dialect;
+
 /// A database value, as bound to a statement or read from a column.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -18,24 +20,56 @@ pub enum Value {
     Text(String),
     /// Bytes.
     Blob(Vec<u8>),
+    /// A boolean. SQLite binds it as the integer `0` or `1`.
+    Bool(bool),
 }
 
 /// A database error: the engine's message, or why a column could not be read
 /// as the type asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Error(String);
+pub struct Error {
+    message: String,
+    /// Postgres's five-character SQLSTATE; `None` for SQLite and local errors.
+    sqlstate: Option<String>,
+    /// SQLite's extended result code; `None` for Postgres and local errors.
+    sqlite_code: Option<i32>,
+}
 
 impl Error {
     /// An error with `message`, for a [`FromColumn`] or [`Model`](super::Model)
     /// that rejects what it read.
     pub fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
+        Self {
+            message: message.into(),
+            sqlstate: None,
+            sqlite_code: None,
+        }
+    }
+
+    /// The SQLSTATE (`23505` for a unique violation) when Postgres raised
+    /// this error; `None` for SQLite, which has result codes instead.
+    pub fn sqlstate(&self) -> Option<&str> {
+        self.sqlstate.as_deref()
+    }
+
+    /// Whether a unique or primary key constraint refused the statement, on
+    /// either engine: SQLite's `SQLITE_CONSTRAINT_UNIQUE` and `_PRIMARYKEY`,
+    /// Postgres's `23505`.
+    pub fn is_unique_violation(&self) -> bool {
+        self.sqlstate() == Some("23505")
+            || matches!(
+                self.sqlite_code,
+                Some(
+                    rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+                        | rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY
+                )
+            )
     }
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
@@ -43,7 +77,14 @@ impl std::error::Error for Error {}
 
 impl From<rusqlite::Error> for Error {
     fn from(error: rusqlite::Error) -> Self {
-        Self(error.to_string())
+        let sqlite_code = match &error {
+            rusqlite::Error::SqliteFailure(failure, _) => Some(failure.extended_code),
+            _ => None,
+        };
+        Self {
+            sqlite_code,
+            ..Self::new(error.to_string())
+        }
     }
 }
 
@@ -93,7 +134,7 @@ macro_rules! small_integers {
             fn from_value(value: Value) -> Result<Self> {
                 let n = i64::from_value(value)?;
                 n.try_into()
-                    .map_err(|_| Error(format!("{n} does not fit in {}", stringify!($type))))
+                    .map_err(|_| Error::new(format!("{n} does not fit in {}", stringify!($type))))
             }
         }
     )*};
@@ -103,7 +144,7 @@ small_integers!(i32, u32);
 
 impl Param for bool {
     fn to_value(&self) -> Value {
-        Value::Integer((*self).into())
+        Value::Bool(*self)
     }
 }
 
@@ -150,7 +191,7 @@ pub trait FromColumn: Sized {
 }
 
 fn mismatch<T>(value: &Value, wanted: &str) -> Result<T> {
-    Err(Error(format!("expected {wanted}, found {value:?}")))
+    Err(Error::new(format!("expected {wanted}, found {value:?}")))
 }
 
 impl FromColumn for Value {
@@ -177,10 +218,13 @@ impl FromColumn for i64 {
     }
 }
 
-/// `0` is false, any other integer true.
+/// A boolean, or an integer: `0` is false, any other integer true.
 impl FromColumn for bool {
     fn from_value(value: Value) -> Result<Self> {
-        i64::from_value(value).map(|n| n != 0)
+        match value {
+            Value::Bool(flag) => Ok(flag),
+            value => i64::from_value(value).map(|n| n != 0),
+        }
     }
 }
 
@@ -217,7 +261,7 @@ impl FromColumn for Vec<u8> {
 impl FromColumn for crate::uuid::Uuid {
     fn from_value(value: Value) -> Result<Self> {
         let text = String::from_value(value)?;
-        Self::parse(&text).ok_or_else(|| Error(format!("not a UUID: {text}")))
+        Self::parse(&text).ok_or_else(|| Error::new(format!("not a UUID: {text}")))
     }
 }
 
@@ -257,10 +301,10 @@ impl Row {
     /// When there is no such column, or its value is not a `T`.
     pub fn get<T: FromColumn>(&self, column: impl ColumnIndex) -> Result<T> {
         let Some(at) = column.position(&self.columns) else {
-            return Err(Error(format!("no such column in {:?}", self.columns)));
+            return Err(Error::new(format!("no such column in {:?}", self.columns)));
         };
         T::from_value(self.values[at].clone())
-            .map_err(|Error(problem)| Error(format!("column {}: {problem}", self.columns[at])))
+            .map_err(|problem| Error::new(format!("column {}: {problem}", self.columns[at])))
     }
 }
 
@@ -268,8 +312,8 @@ impl Row {
 /// and a [`Tx`](super::Tx) lend. SQL marks are `?` (in order) or `?N` (the
 /// `N`th value, from 1).
 #[derive(Clone, Copy)]
-// ponytail: SQLite only; step 2 of ADR 0034 makes this an enum with a
-// Postgres arm, rewriting `?`/`?N` to `$N`.
+// ponytail: SQLite only; step 2c of ADR 0034 makes this an enum with a
+// Postgres arm that runs `to_postgres_placeholders` over the SQL.
 pub struct Connection<'a>(pub(super) &'a rusqlite::Connection);
 
 impl std::fmt::Debug for Connection<'_> {
@@ -287,6 +331,7 @@ impl rusqlite::ToSql for Value {
             Self::Real(n) => ValueRef::Real(*n),
             Self::Text(text) => ValueRef::Text(text.as_bytes()),
             Self::Blob(bytes) => ValueRef::Blob(bytes),
+            Self::Bool(flag) => ValueRef::Integer((*flag).into()),
         }))
     }
 }
@@ -296,6 +341,11 @@ fn bind(params: &[&dyn Param]) -> impl rusqlite::Params {
 }
 
 impl Connection<'_> {
+    /// The engine this connection talks to.
+    pub fn dialect(&self) -> Dialect {
+        Dialect::Sqlite
+    }
+
     /// Runs one statement and returns how many rows it changed.
     ///
     /// # Errors
@@ -351,7 +401,7 @@ impl Connection<'_> {
             first = Some(row);
             Ok(false)
         })?;
-        map(&first.ok_or_else(|| Error("the query returned no rows".into()))?)
+        map(&first.ok_or_else(|| Error::new("the query returned no rows"))?)
     }
 
     /// Hands each row to `visit` while it returns `true`.
@@ -406,7 +456,7 @@ macro_rules! __db_params {
 #[cfg(test)]
 mod tests {
     use crate::config::Config;
-    use crate::db::{Db, Value, params};
+    use crate::db::{Db, Error, FromColumn, Value, params};
 
     #[test]
     fn values_round_trip_and_mismatches_name_the_column() {
@@ -448,5 +498,53 @@ mod tests {
             Ok::<_, crate::db::Error>(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn bools_bind_as_integers_and_read_back_from_either() {
+        use crate::db::Param;
+        assert_eq!(true.to_value(), Value::Bool(true));
+        assert_eq!(Option::<bool>::None.to_value(), Value::Null);
+        assert!(bool::from_value(Value::Bool(true)).unwrap());
+        assert!(!bool::from_value(Value::Integer(0)).unwrap());
+        assert!(bool::from_value(Value::Integer(2)).unwrap());
+        assert!(bool::from_value(Value::Text("t".into())).is_err());
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let stored: i64 = db
+            .with(|sql| sql.query_row("SELECT ?1", params![true], |row| row.get(0)))
+            .unwrap();
+        assert_eq!(stored, 1);
+    }
+
+    #[test]
+    fn unique_violations_are_told_apart_on_both_engines() {
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        db.with(|sql| {
+            sql.execute_batch(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY, n INTEGER UNIQUE, m INTEGER NOT NULL)",
+            )?;
+            sql.execute("INSERT INTO t VALUES (1, 1, 1)", &[])
+        })
+        .unwrap();
+        let fail = |sql: &str| db.with(|c| c.execute(sql, &[])).unwrap_err();
+        let unique = fail("INSERT INTO t VALUES (2, 1, 1)");
+        assert!(unique.is_unique_violation(), "{unique}");
+        assert!(fail("INSERT INTO t VALUES (1, 2, 1)").is_unique_violation());
+        assert!(!fail("INSERT INTO t VALUES (3, 3, NULL)").is_unique_violation());
+        assert!(!fail("NOT SQL").is_unique_violation());
+        assert_eq!(unique.sqlstate(), None);
+        let pg = Error {
+            message: "duplicate key".into(),
+            sqlstate: Some("23505".into()),
+            sqlite_code: None,
+        };
+        assert!(pg.is_unique_violation());
+        assert_eq!(pg.sqlstate(), Some("23505"));
+        let other = Error {
+            sqlstate: Some("23503".into()),
+            ..pg
+        };
+        assert!(!other.is_unique_violation());
+        assert!(!Error::new("local").is_unique_violation());
     }
 }

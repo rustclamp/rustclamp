@@ -267,13 +267,13 @@ fn struct_name(stem: &str) -> String {
 fn migration(name: &str) -> String {
     let name_struct = struct_name(name);
     let head = format!(
-        "use rustclamp::db::{{Migration, Schema, migration_name}};\n\npub struct {name_struct};\n\nimpl Migration for {name_struct} {{\n    fn name(&self) -> &'static str {{\n        migration_name(file!())\n    }}\n\n"
+        "use rustclamp::db::{{Migration, Schema, Sql, migration_name}};\n\npub struct {name_struct};\n\nimpl Migration for {name_struct} {{\n    fn name(&self) -> &'static str {{\n        migration_name(file!())\n    }}\n\n"
     );
     let body = match name.strip_prefix("create_") {
         Some(table) => {
             let table = table.strip_suffix("_table").unwrap_or(table);
             format!(
-                "    fn up(&self) -> String {{\n        Schema::create(\"{table}\", |table| {{\n            table.id();\n            table.timestamps();\n        }})\n    }}\n\n    fn down(&self) -> String {{\n        Schema::drop(\"{table}\")\n    }}\n}}\n"
+                "    fn up(&self) -> Sql {{\n        Schema::create(\"{table}\", |table| {{\n            table.id();\n            table.timestamps();\n        }})\n    }}\n\n    fn down(&self) -> Sql {{\n        Schema::drop(\"{table}\")\n    }}\n}}\n"
             )
         }
         None => {
@@ -282,7 +282,7 @@ fn migration(name: &str) -> String {
                 .and_then(|rest| rest.rsplit_once("_to_"))
                 .unwrap_or(("COLUMN", "TABLE"));
             format!(
-                "    fn up(&self) -> String {{\n        Schema::table(\"{table}\", |table| {{\n            table.string(\"{column}\").nullable();\n        }})\n    }}\n\n    fn down(&self) -> String {{\n        \"ALTER TABLE {table} DROP COLUMN {column};\".into()\n    }}\n}}\n"
+                "    fn up(&self) -> Sql {{\n        Schema::table(\"{table}\", |table| {{\n            table.string(\"{column}\").nullable();\n        }})\n    }}\n\n    fn down(&self) -> Sql {{\n        \"ALTER TABLE {table} DROP COLUMN {column};\".into()\n    }}\n}}\n"
             )
         }
     };
