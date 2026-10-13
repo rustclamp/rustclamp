@@ -19,6 +19,10 @@
   - `db::Error::sqlstate()` and `is_unique_violation()` (SQLite
     `SQLITE_CONSTRAINT_UNIQUE`/`_PRIMARYKEY`, Postgres `23505`).
   - Empty `where_in` writes `1 = 0` instead of `0`, which Postgres rejects.
+- `postgres` feature: a std-only Postgres wire client in `db` (protocol 3.0,
+  SCRAM-SHA-256, TLS with `require` or `verify-full`, extended queries in text
+  format), ADR 0034 step 2b of #121. Not yet usable from `Db`; it adds no
+  crates beyond those `crypto` and `mail` already use.
 
 ### Changed (breaking)
 
