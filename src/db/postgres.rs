@@ -40,9 +40,7 @@ impl SslMode {
             "disable" => Ok(Self::Disable),
             "require" => Ok(Self::Require),
             "verify-full" => Ok(Self::VerifyFull),
-            other => Err(format!(
-                "sslmode must be disable, require or verify-full, not {other}"
-            )),
+            _ => Err("sslmode must be disable, require or verify-full".into()),
         }
     }
 
@@ -57,7 +55,7 @@ impl SslMode {
 }
 
 /// Where and how to connect.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct Config {
     pub(crate) host: String,
     pub(crate) port: u16,
@@ -74,6 +72,21 @@ pub(crate) struct Config {
     pub(crate) timeout: Duration,
 }
 
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("database", &self.database)
+            .field("user", &self.user)
+            .field("password", &"***")
+            .field("sslmode", &self.sslmode)
+            .field("root_cert", &self.root_cert)
+            .field("application_name", &self.application_name)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Config {
     /// Reads `postgres://user:pass@host:port/db?sslmode=..&sslrootcert=..&application_name=..&options=..`.
     /// User and password are percent-decoded. Unknown parameters are an error.
@@ -82,9 +95,12 @@ impl Config {
             .strip_prefix("postgres://")
             .or_else(|| url.strip_prefix("postgresql://"))
             .ok_or("the database URL must start with postgres://")?;
+        // The userinfo ends at the LAST `@`, so an unencoded `/` or `?` in a password
+        // can't send password text into the host, port or parameter errors below.
+        // ponytail: an `@` inside a query value is read as the end of the userinfo.
+        let (userinfo, rest) = rest.rsplit_once('@').unwrap_or(("", rest));
         let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
-        let (authority, database) = rest.split_once('/').unwrap_or((rest, ""));
-        let (userinfo, hostport) = authority.rsplit_once('@').unwrap_or(("", authority));
+        let (hostport, database) = rest.split_once('/').unwrap_or((rest, ""));
         let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
         let (host, port) = if let Some(v6) = hostport.strip_prefix('[') {
             let (host, after) = v6.split_once(']').ok_or("unterminated [ in the host")?;
@@ -100,7 +116,9 @@ impl Config {
         }
         let port = match port {
             None | Some("") => 5432,
-            Some(port) => port.parse().map_err(|_| format!("bad port {port:?}"))?,
+            Some(port) => port
+                .parse()
+                .map_err(|_| "the database URL has a bad port")?,
         };
         let mut config = Self {
             host: host.to_owned(),
@@ -125,7 +143,7 @@ impl Config {
                 "sslrootcert" => config.root_cert = Some(value),
                 "application_name" => config.application_name = Some(value),
                 "options" => config.options = Some(value),
-                other => return Err(format!("unsupported database URL parameter {other}")),
+                _ => return Err("the database URL has an unsupported parameter".into()),
             }
         }
         Ok(config)
@@ -139,7 +157,7 @@ fn percent_decode(text: &str) -> Result<String, String> {
     while i < bytes.len() {
         if bytes[i] == b'%' {
             let hex = text.get(i + 1..i + 3).ok_or("truncated %-escape")?;
-            out.push(u8::from_str_radix(hex, 16).map_err(|_| format!("bad %-escape %{hex}"))?);
+            out.push(u8::from_str_radix(hex, 16).map_err(|_| "bad %-escape")?);
             i += 3;
         } else {
             out.push(bytes[i]);
@@ -181,7 +199,11 @@ impl Datum {
         Ok(match oid {
             20 | 21 | 23 => Self::Integer(text.parse().map_err(|_| bad("integer"))?),
             700 | 701 => Self::Real(text.parse().map_err(|_| bad("float"))?),
-            16 => Self::Bool(text == "t"),
+            16 => Self::Bool(match text {
+                "t" => true,
+                "f" => false,
+                _ => return Err(bad("bool")),
+            }),
             17 => Self::Bytes(
                 text.strip_prefix("\\x")
                     .and_then(unhex)
@@ -349,7 +371,7 @@ impl Client {
             broken: false,
             in_transaction: false,
         };
-        if let Err(e) = client.startup(config, encrypted, nonce) {
+        if let Err(e) = client.startup(config, nonce) {
             client.broken = true; // no Terminate to a server that never finished the handshake
             return Err(e);
         }
@@ -428,6 +450,9 @@ impl Client {
             let mut r = Reader(&body);
             match tag {
                 b'T' => {
+                    // Each result set of a simple query starts with its own description.
+                    result.columns.clear();
+                    types.clear();
                     for _ in 0..r.i16().map_err(|e| self.fail(e))? {
                         let name = r.cstr().map_err(|e| self.fail(e))?;
                         r.take(6).map_err(|e| self.fail(e))?; // table oid, column number
@@ -485,7 +510,7 @@ impl Client {
         Ok(row)
     }
 
-    fn startup(&mut self, config: &Config, encrypted: bool, nonce: &str) -> Result<(), Error> {
+    fn startup(&mut self, config: &Config, nonce: &str) -> Result<(), Error> {
         let mut body = 196_608i32.to_be_bytes().to_vec(); // protocol 3.0
         let mut pairs = vec![
             ("user", config.user.as_str()),
@@ -509,7 +534,7 @@ impl Client {
         loop {
             let (tag, body) = self.read_message()?;
             match tag {
-                b'R' => self.authenticate(&body, config, encrypted, nonce)?,
+                b'R' => self.authenticate(&body, config, nonce)?,
                 b'E' => return Err(Error::Server(parse_error(&body))),
                 b'Z' => return Ok(()),
                 // ParameterStatus, BackendKeyData (unused: no cancellation), Notice.
@@ -519,18 +544,16 @@ impl Client {
         }
     }
 
-    fn authenticate(
-        &mut self,
-        body: &[u8],
-        config: &Config,
-        encrypted: bool,
-        nonce: &str,
-    ) -> Result<(), Error> {
+    fn authenticate(&mut self, body: &[u8], config: &Config, nonce: &str) -> Result<(), Error> {
         let mut r = Reader(body);
         match r.i32().map_err(refuse)? {
+            // ponytail: no challenge at all (trust auth) is accepted even with a password
+            // set, as libpq does without `require_auth`; add a require-auth option if needed.
             0 => Ok(()),
-            3 if !encrypted => Err(refuse(
-                "the server asked for a cleartext password; refusing to send it without TLS (set sslmode)",
+            // Only a verified server gets the password: under `require` any certificate
+            // passes, so an active attacker could harvest it.
+            3 if config.sslmode != SslMode::VerifyFull => Err(refuse(
+                "the server asked for a cleartext password; refusing to send it unless sslmode is verify-full",
             )),
             3 => {
                 let mut out = Vec::new();
@@ -750,6 +773,9 @@ impl Scram {
             return Err("the SCRAM nonce does not extend ours".into());
         }
         let salt = Base64::decode_vec(field("s=")?).map_err(|_| "the SCRAM salt is not base64")?;
+        if salt.is_empty() {
+            return Err("the SCRAM salt is empty".into());
+        }
         let iterations: u32 = field("i=")?
             .parse()
             .map_err(|_| "bad SCRAM iteration count")?;
@@ -1469,6 +1495,165 @@ mod tests {
         assert!(client.is_broken());
         server.join().unwrap();
         assert!(client.query("SELECT 1", &[]).is_err());
+    }
+
+    /// A client over a plain loopback socket, to call handshake steps directly.
+    fn loopback() -> (Client, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let io = BufReader::new(Io::Plain(stream));
+        (
+            Client {
+                io,
+                broken: true,
+                in_transaction: false,
+            },
+            peer,
+        )
+    }
+
+    #[test]
+    fn cleartext_is_sent_only_to_a_verified_server() {
+        let body = 3i32.to_be_bytes();
+        for mode in [SslMode::Require, SslMode::Disable] {
+            let (mut client, mut peer) = loopback();
+            let error = client
+                .authenticate(&body, &config(1, mode), "n")
+                .unwrap_err();
+            assert!(error.to_string().contains("verify-full"), "{error}");
+            drop(client);
+            let mut sent = Vec::new();
+            peer.read_to_end(&mut sent).unwrap();
+            assert!(sent.is_empty(), "no password may reach the server");
+        }
+        let (mut client, mut peer) = loopback();
+        client
+            .authenticate(&body, &config(1, SslMode::VerifyFull), "n")
+            .unwrap();
+        assert_eq!(read_msg(&mut peer), (b'p', b"pencil\0".to_vec()));
+    }
+
+    #[test]
+    fn each_result_set_of_a_batch_has_its_own_columns() {
+        let (port, server) = serve(|s| {
+            handshake(s);
+            read_extended(s);
+            send(s, b'T', &row_description(&[("a", 23)]));
+            send(s, b'D', &data_row(&[Some(b"1")]));
+            send(s, b'C', b"SELECT 1\0");
+            send(s, b'T', &row_description(&[("a", 23), ("b", 23)]));
+            send(s, b'D', &data_row(&[Some(b"1"), Some(b"2")]));
+            send(s, b'C', b"SELECT 1\0");
+            ready(s);
+        });
+        let mut client = Client::connect(&config(port, SslMode::Disable)).unwrap();
+        let rows = client.query("SELECT 1; SELECT 1, 2", &[]).unwrap();
+        assert_eq!(rows.columns, ["a", "b"]);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn url_errors_do_not_echo_password_fragments() {
+        let c = Config::parse_url("postgres://u:pa/ss@h/db").unwrap();
+        assert_eq!((c.password.as_str(), c.host.as_str()), ("pa/ss", "h"));
+        let c = Config::parse_url("postgres://u:p?ss@h/db?sslmode=disable").unwrap();
+        assert_eq!((c.password.as_str(), c.sslmode), ("p?ss", SslMode::Disable));
+        for bad in [
+            "postgres://u:sekrit@h:x/db",
+            "postgres://u:sekrit@h/db?sekrit=1",
+            "postgres://u:sek%zzrit@h/db",
+            "postgres://u:sekrit@h/db?sslmode=sekrit",
+        ] {
+            let error = Config::parse_url(bad).unwrap_err();
+            assert!(
+                !error.contains("sekrit") && !error.contains("sek"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn debug_hides_the_password() {
+        let shown = format!("{:?}", config(1, SslMode::Disable));
+        assert!(
+            !shown.contains("pencil") && shown.contains("***"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn odd_server_data_is_rejected() {
+        assert!(Datum::decode(16, b"x").is_err());
+        assert!(Datum::decode(16, b"").is_err());
+        let (port, server) = serve(|s| {
+            handshake(s);
+            read_extended(s);
+            s.write_all(&[b'D', 0x7f, 0xff, 0xff, 0xff]).unwrap();
+            s.write_all(&[0]).unwrap();
+        });
+        let mut client = Client::connect(&config(port, SslMode::Disable)).unwrap();
+        let error = client.query("SELECT 1", &[]).unwrap_err();
+        assert!(error.to_string().contains("message length"), "{error}");
+        assert!(client.is_broken());
+        server.join().unwrap();
+    }
+
+    /// Plays SCRAM up to the server-first message, answering with `server_first(client_nonce)`.
+    fn serve_challenge(
+        server_first: impl FnOnce(&str) -> String + Send + 'static,
+        then: impl FnOnce(&mut TcpStream) + Send + 'static,
+    ) -> (u16, JoinHandle<()>) {
+        serve(move |s| {
+            read_startup(s);
+            auth(s, 10, b"SCRAM-SHA-256\0\0");
+            let (_, body) = read_msg(s);
+            let text = String::from_utf8_lossy(&body).into_owned();
+            let nonce = text.rsplit("r=").next().unwrap().to_owned();
+            auth(s, 11, server_first(&nonce).as_bytes());
+            then(s);
+        })
+    }
+
+    #[test]
+    fn a_foreign_server_nonce_is_rejected() {
+        let (port, server) = serve_challenge(
+            |_| "r=someone-elses-nonce,s=MDEyMzQ1Njc4OWFiY2RlZg==,i=4096".into(),
+            |_| {},
+        );
+        let error = Client::connect(&config(port, SslMode::Disable))
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("nonce"), "{error}");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn an_empty_salt_is_rejected() {
+        let (port, server) = serve_challenge(|n| format!("r={n}x,s=,i=4096"), |_| {});
+        let error = Client::connect(&config(port, SslMode::Disable))
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("salt"), "{error}");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn authentication_ok_instead_of_the_final_signature_is_rejected() {
+        let (port, server) = serve_challenge(
+            |n| format!("r={n}x,s=MDEyMzQ1Njc4OWFiY2RlZg==,i=4096"),
+            |s| {
+                read_msg(s);
+                auth(s, 0, &[]);
+                ready(s);
+            },
+        );
+        let error = Client::connect(&config(port, SslMode::Disable))
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("SASL"), "{error}");
+        server.join().unwrap();
     }
 
     /// Against a real server: `RUSTCLAMP_TEST_DATABASE_URL=postgres://.. cargo test --features postgres -- --ignored`.
