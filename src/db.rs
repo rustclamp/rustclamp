@@ -198,7 +198,7 @@ pub enum Journal {
 }
 
 /// Which database to open. An app builds it in `app/config/database.rs`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Settings {
     /// The engine: `sqlite` or `pgsql`.
     pub connection: String,
@@ -208,6 +208,18 @@ pub struct Settings {
     pub url: Option<String>,
     /// Postgres only: the most connections the pool opens.
     pub pool: usize,
+}
+
+/// Without the URL, which carries the password.
+impl std::fmt::Debug for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Settings")
+            .field("connection", &self.connection)
+            .field("database", &self.database)
+            .field("url", &self.url.as_ref().map(|_| "<redacted>"))
+            .field("pool", &self.pool)
+            .finish()
+    }
 }
 
 impl Settings {
@@ -283,7 +295,8 @@ impl Db {
     ///
     /// # Panics
     ///
-    /// When the connection is not `sqlite` or the database cannot be opened:
+    /// When the connection is not `sqlite` (or `pgsql` with the `postgres`
+    /// feature) or the database cannot be opened:
     /// the app should stop at startup rather than run without its data. CLIs
     /// and services that exit with their own code use [`Db::try_connect`].
     pub fn connect(settings: &Settings) -> Self {
@@ -303,7 +316,8 @@ impl Db {
     ///
     /// # Errors
     ///
-    /// [`DbError::Engine`] when the connection is not `sqlite`,
+    /// [`DbError::Engine`] when the connection is not `sqlite` (or `pgsql` with
+    /// the `postgres` feature),
     /// [`DbError::Open`] when the database cannot be opened.
     pub fn try_connect(settings: &Settings) -> Result<Self, DbError> {
         Self::try_connect_with(settings, Journal::Wal)
@@ -311,7 +325,8 @@ impl Db {
 
     /// [`Db::try_connect`], choosing the journal mode: [`Journal::Keep`]
     /// leaves the file's own mode alone, so a file that uses the rollback
-    /// journal is opened without rewriting its header.
+    /// journal is opened without rewriting its header. Postgres has no
+    /// journal, and ignores it.
     ///
     /// # Errors
     ///
@@ -433,7 +448,8 @@ impl Db {
     /// for them. It sees everything committed before it started, but not a
     /// transaction still open on the writer; a write through it fails. An
     /// in-memory database, or one opened with [`Journal::Keep`], has one
-    /// connection, and this is [`Db::with`].
+    /// connection, and this is [`Db::with`]; so is it on Postgres, where a
+    /// write through it works too.
     ///
     /// ```
     /// use rustclamp::config::Config;
@@ -811,13 +827,10 @@ impl Db {
     pub fn seed(&self, seeders: &[&dyn Seeder]) -> Result<(), SeedError> {
         // ponytail: the transaction spans several `with` calls on the shared
         // connection, so run seeders from the console, not while serving.
-        // Postgres has no such connection to span, so its seeders run without
-        // one; a seeder that must be all-or-nothing uses `Db::transaction`.
+        // On Postgres the pool lends the most recently returned client first,
+        // so these sequential calls meet the same one; another thread using
+        // the `Db` meanwhile could be handed it, mid-transaction.
         for seeder in seeders {
-            if self.dialect() == Dialect::Postgres {
-                seeder.run(self)?;
-                continue;
-            }
             self.with(|connection| connection.execute_batch("BEGIN"))?;
             match seeder.run(self) {
                 Ok(()) => self.with(|connection| connection.execute_batch("COMMIT"))?,
@@ -1174,6 +1187,8 @@ fn atomically<T, E: From<Error>>(
 
 /// [`Db::transaction`] on a pooled Postgres connection: `BEGIN`, `COMMIT` on
 /// `Ok`, `ROLLBACK` on `Err`; a panic drops the connection, which rolls back.
+/// A client already in a transaction (a seeder's, see [`Db::seed`]) gets a
+/// savepoint instead, as SQLite does.
 #[cfg(feature = "postgres")]
 fn postgres_transaction<T, E: From<Error>>(
     pool: &pool::Pool,
@@ -1182,22 +1197,39 @@ fn postgres_transaction<T, E: From<Error>>(
 ) -> Result<T, E> {
     let lease = pool.get()?;
     let tx = Tx(lease.connection());
-    tx.execute_batch("BEGIN")?;
-    if immediate {
-        tx.execute_batch(&format!("SELECT pg_advisory_xact_lock({IMMEDIATE_LOCK})"))?;
-    }
-    match work(&tx) {
+    let (begin, commit, abort) = if lease.in_transaction() {
+        (
+            "SAVEPOINT clamp",
+            "RELEASE clamp",
+            "ROLLBACK TO clamp; RELEASE clamp",
+        )
+    } else {
+        ("BEGIN", "COMMIT", "ROLLBACK")
+    };
+    tx.execute_batch(begin)?;
+    let result = (|| {
+        if immediate {
+            tx.execute_batch(&format!("SELECT pg_advisory_xact_lock({IMMEDIATE_LOCK})"))?;
+        }
+        work(&tx)
+    })();
+    match result {
         Ok(value) => {
-            tx.execute_batch("COMMIT")?;
+            tx.execute_batch(commit)?;
             Ok(value)
         }
         Err(error) => {
-            let _ = tx.execute_batch("ROLLBACK");
+            let _ = tx.execute_batch(abort);
             Err(error)
         }
     }
 }
 
+// ponytail: the keys are per database, not per schema, so two apps sharing
+// one Postgres database also serialize each other's migrations and immediate
+// transactions; derive them from `current_schema()` if that shows up. The
+// wire client's 30 s read timeout also bounds one migration statement and the
+// wait for `pg_advisory_lock`.
 /// The advisory lock keys (`pg_advisory_lock`) that [`Db::migrate`] and
 /// [`Db::transaction_immediate`] take on Postgres: arbitrary, fixed, and
 /// different, so that an app's own transactions never wait for a migration.
@@ -1536,11 +1568,9 @@ mod tests {
         db.migrate(&[&posts]).unwrap();
         db.seed(&[&Posts("SELECT 1")]).unwrap();
         assert!(db.seed(&[&Posts("NOT SQL")]).is_err());
-        // Postgres seeders run without a transaction (see `Db::seed`).
-        let kept = if is_postgres(db) { 2 } else { 1 };
-        assert_eq!(count(db, "SELECT count(*) FROM posts"), kept);
+        assert_eq!(count(db, "SELECT count(*) FROM posts"), 1);
         assert_eq!(command(db, "db:seed", &[&posts], &[&Posts("SELECT 1")]), 0);
-        assert_eq!(count(db, "SELECT count(*) FROM posts"), kept + 1);
+        assert_eq!(count(db, "SELECT count(*) FROM posts"), 2);
         assert_eq!(command(db, "nope", &[], &[]), 2);
         let pending = Raw("0002", "SELECT 1", "");
         assert_eq!(
@@ -1548,6 +1578,41 @@ mod tests {
             [("0001", Some(1)), ("0002", None)]
         );
         assert_eq!(memory().status(&[&posts]).unwrap(), [("0001", None)]);
+    }
+
+    /// Inserts one row, then a transaction of its own that fails.
+    struct Nested;
+
+    impl Seeder for Nested {
+        fn run(&self, db: &Db) -> Result<(), SeedError> {
+            db.table("posts").insert_only(&["title"], &[&"kept"])?;
+            let failed: Result<()> = db.transaction(|tx| {
+                tx.table("posts").insert_only(&["title"], &[&"undone"])?;
+                tx.execute("NOT SQL", &[])?;
+                Ok(())
+            });
+            assert!(failed.is_err());
+            db.transaction_immediate(|tx| tx.table("posts").insert_only(&["title"], &[&"also"]))?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_transaction_inside_a_seeder_is_a_savepoint() {
+        each_engine(|db| {
+            db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
+                .unwrap();
+            db.seed(&[&Nested]).unwrap();
+            assert_eq!(count(db, "SELECT count(*) FROM posts"), 2);
+            assert_eq!(
+                count(db, "SELECT count(*) FROM posts WHERE title = 'undone'"),
+                0
+            );
+            // Each seeder has its own transaction: the first one is kept, the
+            // second one's insert is undone.
+            assert!(db.seed(&[&Nested, &Posts("NOT SQL")]).is_err());
+            assert_eq!(count(db, "SELECT count(*) FROM posts"), 4);
+        });
     }
 
     #[test]
@@ -1692,6 +1757,7 @@ mod tests {
             )
         );
         assert_eq!(parts.pool, 4);
+        assert!(!format!("{parts:?}").contains("p%3Ass"));
         let defaults = settings("DB_CONNECTION=pgsql\nDB_DATABASE=shop\nDB_USERNAME=app");
         assert_eq!(
             defaults.url.as_deref(),

@@ -290,6 +290,8 @@ impl Write for Io {
 pub(crate) struct Client {
     io: BufReader<Io>,
     broken: bool,
+    /// From the last `ReadyForQuery`: inside a transaction block, failed or not.
+    in_transaction: bool,
 }
 
 impl Client {
@@ -345,12 +347,18 @@ impl Client {
         let mut client = Self {
             io: BufReader::new(io),
             broken: false,
+            in_transaction: false,
         };
         if let Err(e) = client.startup(config, encrypted, nonce) {
             client.broken = true; // no Terminate to a server that never finished the handshake
             return Err(e);
         }
         Ok(client)
+    }
+
+    /// Whether a transaction is open (`BEGIN` ran, `COMMIT` or `ROLLBACK` has not).
+    pub(crate) fn in_transaction(&self) -> bool {
+        self.in_transaction
     }
 
     /// Whether an I/O or protocol error left the connection unusable.
@@ -445,6 +453,7 @@ impl Client {
                     error.get_or_insert(parse_error(&body));
                 }
                 b'Z' => {
+                    self.in_transaction = body.first() != Some(&b'I');
                     return match error {
                         Some(e) => Err(Error::Server(e)),
                         None => Ok(result),

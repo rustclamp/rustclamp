@@ -12,7 +12,8 @@
     `DB_USERNAME`, `DB_PASSWORD`, `DB_SSLMODE` (`disable`, `require`,
     `verify-full`; the default is `verify-full` off localhost),
     `DB_SSLROOTCERT` and `DB_POOL` (10). `db::Settings` gains `url` and `pool`;
-    `Settings::from_config` reads them, and the web template's
+    `Settings::from_config` reads them (its `Debug` hides the URL, which
+    carries the password), and the web template's
     `app/config/database.rs` now calls it. Without the feature, `pgsql` stops
     the app at startup with an error naming it.
   - Pool: idle clients in a `Vec`, opened on demand up to `DB_POOL`, a 5 s
@@ -30,7 +31,6 @@
   - Not yet (step 3): the framework's own tables (`jobs`, `failed_jobs`,
     `mail_outbox`, `sessions`, `state_history`, auth) are still created with
     SQLite DDL, the queue's `SKIP LOCKED` claim and the mail daily-cap claim.
-    `Db::seed` runs seeders without a surrounding transaction on Postgres.
 - Dialect-aware SQL for Postgres (ADR 0034, step 2a of 3; #121). Step 2a
   only generated the SQL; step 2c runs it.
   - `db::Dialect`, `Db::dialect()` and `Connection::dialect()`.

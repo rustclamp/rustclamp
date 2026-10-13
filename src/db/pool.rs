@@ -12,6 +12,9 @@ use super::postgres::{Client, Config};
 /// SQLite's busy timeout.
 const PATIENCE: Duration = Duration::from_secs(5);
 
+// ponytail: an idle client the server has closed fails the first call that
+// draws it and is dropped then; check or retry on checkout if idle timeouts
+// (a proxy, a restart) show up.
 pub(super) struct Pool {
     config: Config,
     max: usize,
@@ -113,6 +116,13 @@ impl<'a> Lease<'a> {
             pool,
             client: Some(RefCell::new(client)),
         }
+    }
+
+    /// Whether the client is inside a transaction an earlier call began.
+    pub(super) fn in_transaction(&self) -> bool {
+        self.client
+            .as_ref()
+            .is_some_and(|client| client.borrow().in_transaction())
     }
 
     pub(super) fn connection(&self) -> Connection<'_> {
