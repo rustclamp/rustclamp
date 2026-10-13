@@ -1183,8 +1183,24 @@ fn atomically<T, E: From<Error>>(
     if connection.dialect() == Dialect::Sqlite {
         return savepoint(connection, work);
     }
-    connection.execute_batch("BEGIN")?;
-    end_transaction(connection, work(connection), "COMMIT", "ROLLBACK")
+    let (begin, commit, abort) = postgres_scope(connection);
+    connection.execute_batch(begin)?;
+    end_transaction(connection, work(connection), commit, abort)
+}
+
+/// How to open and end a Postgres transaction here: `BEGIN` on a connection
+/// that is not in one (a `Db` call can nest inside a `with` that is not), a
+/// savepoint inside one.
+fn postgres_scope(connection: &Connection<'_>) -> (&'static str, &'static str, &'static str) {
+    if connection.in_transaction() {
+        (
+            "SAVEPOINT clamp",
+            "RELEASE clamp",
+            "ROLLBACK TO clamp; RELEASE clamp",
+        )
+    } else {
+        ("BEGIN", "COMMIT", "ROLLBACK")
+    }
 }
 
 /// Ends a Postgres transaction (or savepoint) with `commit` when `result` is
@@ -1200,10 +1216,11 @@ fn end_transaction<T, E: From<Error>>(
     match result {
         Ok(_) if connection.aborted() => {
             let _ = connection.execute_batch(abort);
-            Err(
-                Error::new("the transaction was rolled back: a statement in it failed earlier")
-                    .into(),
+            Err(Error::with_sqlstate(
+                "the transaction was rolled back: a statement in it failed earlier",
+                "25P02",
             )
+            .into())
         }
         Ok(value) => {
             connection.execute_batch(commit)?;
@@ -1226,16 +1243,8 @@ fn postgres_transaction<T, E: From<Error>>(
     immediate: bool,
     work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
 ) -> Result<T, E> {
-    pool.pinned(|connection, nested| {
-        let (begin, commit, abort) = if nested {
-            (
-                "SAVEPOINT clamp",
-                "RELEASE clamp",
-                "ROLLBACK TO clamp; RELEASE clamp",
-            )
-        } else {
-            ("BEGIN", "COMMIT", "ROLLBACK")
-        };
+    pool.pinned(|connection, _| {
+        let (begin, commit, abort) = postgres_scope(connection);
         connection.execute_batch(begin)?;
         let tx = Tx(*connection);
         let result = (|| {
@@ -1673,6 +1682,36 @@ mod tests {
 
     #[cfg(feature = "postgres")]
     #[test]
+    fn postgres_calls_nest_by_transaction_state_not_by_sharing() {
+        let Some(db) = super::testing::postgres() else {
+            return;
+        };
+        let posts = Raw("0001", "CREATE TABLE posts (title TEXT)", "");
+        db.migrate(&[&posts]).unwrap();
+        // A transaction inside a plain `with` starts one (no savepoint there).
+        db.with(|_| db.transaction(|tx| tx.table("posts").insert_only(&["title"], &[&"a"])))
+            .unwrap();
+        assert_eq!(count(&db, "SELECT count(*) FROM posts"), 1);
+        // `migrate` inside a transaction joins it as a savepoint: the caller's
+        // rollback undoes the migration and its record.
+        let tags = Raw("0002", "CREATE TABLE tags (n INTEGER)", "");
+        let undone: Result<()> = db.transaction(|tx| {
+            tx.table("posts").insert_only(&["title"], &[&"b"])?;
+            db.migrate(&[&posts, &tags])?;
+            assert_eq!(count(&db, "SELECT count(*) FROM migrations"), 2);
+            Err(Error::new("undo"))
+        });
+        assert!(undone.is_err());
+        assert_eq!(count(&db, "SELECT count(*) FROM posts"), 1);
+        assert_eq!(count(&db, "SELECT count(*) FROM migrations"), 1);
+        assert_eq!(tables(&db), 1);
+        // And inside one that is kept, it is kept.
+        db.transaction(|_| db.migrate(&[&posts, &tags])).unwrap();
+        assert_eq!(tables(&db), 2);
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
     fn postgres_refuses_to_commit_after_a_swallowed_error() {
         let Some(db) = super::testing::postgres() else {
             return;
@@ -1686,6 +1725,7 @@ mod tests {
         });
         let error = swallowed.unwrap_err();
         assert!(error.to_string().contains("rolled back"), "{error}");
+        assert_eq!(error.sqlstate(), Some("25P02"));
         assert_eq!(count(&db, "SELECT count(*) FROM posts"), 0);
         // The same inside a savepoint: only the inner one is undone.
         let outer: Result<()> = db.transaction(|tx| {

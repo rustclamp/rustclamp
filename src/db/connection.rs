@@ -38,6 +38,14 @@ pub struct Error {
 }
 
 impl Error {
+    /// An error with `message` that carries a Postgres `sqlstate`.
+    pub(super) fn with_sqlstate(message: impl Into<String>, sqlstate: &str) -> Self {
+        Self {
+            sqlstate: Some(sqlstate.to_owned()),
+            ..Self::new(message)
+        }
+    }
+
     /// An error with `message`, for a [`FromColumn`] or [`Model`](super::Model)
     /// that rejects what it read.
     pub fn new(message: impl Into<String>) -> Self {
@@ -402,6 +410,16 @@ impl Connection<'_> {
             Inner::Sqlite(_) => Dialect::Sqlite,
             #[cfg(feature = "postgres")]
             Inner::Postgres(_) | Inner::Unavailable(_) => Dialect::Postgres,
+        }
+    }
+
+    /// Whether a transaction is open on this Postgres connection. (SQLite code
+    /// asks `is_autocommit` of rusqlite itself.)
+    pub(super) fn in_transaction(&self) -> bool {
+        match self.0 {
+            #[cfg(feature = "postgres")]
+            Inner::Postgres(client) => client.borrow().in_transaction(),
+            _ => false,
         }
     }
 
