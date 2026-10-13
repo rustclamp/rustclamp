@@ -52,6 +52,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use crate::config::Config;
 
 mod connection;
+#[cfg(feature = "postgres")]
+#[allow(dead_code)] // ponytail: wired into `Db` by step 2c of ADR 0034
+mod postgres;
 mod query;
 mod schema;
 mod states;

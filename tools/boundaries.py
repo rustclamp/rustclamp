@@ -37,8 +37,8 @@ ALLOWED = {
         # feature names it weakly (`aho-corasick?/std`), which Cargo still
         # locks and reports in metadata (rust-lang/cargo#10801).
         "aho-corasick", "regex", "regex-automata", "regex-syntax",
-        # The optional `mail` feature: rustls with the ring provider and
-        # webpki-roots (ADR 0015). ring compiles C and assembly with cc; the
+        # The optional `mail` and `postgres` features: rustls with the ring
+        # provider and webpki-roots (ADR 0015, ADR 0034). ring compiles C and assembly with cc; the
         # windows* and wasi entries build only for those targets.
         "ring", "rustls", "rustls-pki-types", "rustls-webpki", "subtle",
         "untrusted", "webpki-roots", "zeroize", "wasi", "windows-sys",
