@@ -81,7 +81,7 @@ struct is that name without the date, in `UpperCamelCase`.
 `app/database/migrations/2026_09_29_000001_create_posts.rs`:
 
 ```rust
-use rustclamp::db::{Migration, Schema, migration_name};
+use rustclamp::db::{Migration, Schema, Sql, migration_name};
 
 pub struct CreatePosts;
 
@@ -89,14 +89,14 @@ impl Migration for CreatePosts {
     fn name(&self) -> &'static str {
         migration_name(file!())
     }
-    fn up(&self) -> String {
+    fn up(&self) -> Sql {
         Schema::create("posts", |table| {
             table.id();
             table.string("title");
             table.timestamps();
         })
     }
-    fn down(&self) -> String {
+    fn down(&self) -> Sql {
         Schema::drop("posts")
     }
 }

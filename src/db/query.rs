@@ -4,7 +4,8 @@
 //! into the SQL, so they must come from the app's code; a name that is not
 //! `letters, digits, _ or .` panics rather than reach SQLite.
 
-use super::{Connection, Db, Param, Result, Row};
+use super::dialect::to_postgres_placeholders;
+use super::{Connection, Db, Dialect, Param, Result, Row};
 
 /// A query on one table, from [`Db::table`]. Chain conditions, then finish
 /// with [`get`](Self::get), [`first`](Self::first), [`count`](Self::count),
@@ -104,7 +105,8 @@ impl<'a> Query<'a> {
     /// nothing.
     pub fn where_in(mut self, column: &str, values: &[&'a dyn Param]) -> Self {
         if values.is_empty() {
-            self.conditions.push("0".to_owned());
+            // Not a bare `0`: Postgres wants a boolean here.
+            self.conditions.push("1 = 0".to_owned());
         } else {
             let marks = vec!["?"; values.len()].join(", ");
             self.conditions
@@ -237,6 +239,11 @@ impl<'a> Query<'a> {
     /// Every matching row, each turned into a `T` by `map`. Read columns by
     /// name: `row.get("title")`.
     pub fn get<T>(&self, map: impl FnMut(&Row) -> Result<T>) -> Result<Vec<T>> {
+        let sql = self.select_sql(self.dialect());
+        self.read(|connection| connection.query(&sql, &self.values, map))
+    }
+
+    fn select_sql(&self, dialect: Dialect) -> String {
         let sql = format!(
             "SELECT {} FROM {}{}{}{}{}",
             if self.joins.is_empty() {
@@ -251,12 +258,15 @@ impl<'a> Query<'a> {
             match (self.limit, self.offset) {
                 (None, None) => String::new(),
                 (Some(rows), None) => format!(" LIMIT {rows}"),
-                // SQLite needs a LIMIT before OFFSET; -1 means none.
-                (rows, Some(skip)) =>
-                    format!(" LIMIT {} OFFSET {skip}", rows.map_or(-1, i128::from)),
+                (Some(rows), Some(skip)) => format!(" LIMIT {rows} OFFSET {skip}"),
+                (None, Some(skip)) => match dialect {
+                    // SQLite needs a LIMIT before OFFSET; -1 means none.
+                    Dialect::Sqlite => format!(" LIMIT -1 OFFSET {skip}"),
+                    Dialect::Postgres => format!(" OFFSET {skip}"),
+                },
             }
         );
-        self.read(|connection| connection.query(&sql, &self.values, map))
+        for_dialect(sql, dialect)
     }
 
     /// The first matching row, if any.
@@ -266,46 +276,89 @@ impl<'a> Query<'a> {
 
     /// How many rows match.
     pub fn count(&self) -> Result<i64> {
-        let sql = format!(
-            "SELECT count(*) FROM {}{}{}",
-            self.table,
-            self.joins.concat(),
-            self.where_sql()
-        );
+        let sql = self.count_sql(self.dialect());
         self.read(|connection| connection.query_row(&sql, &self.values, |row| row.get(0)))
+    }
+
+    fn count_sql(&self, dialect: Dialect) -> String {
+        for_dialect(
+            format!(
+                "SELECT count(*) FROM {}{}{}",
+                self.table,
+                self.joins.concat(),
+                self.where_sql()
+            ),
+            dialect,
+        )
     }
 
     /// Inserts one row with `values` for `columns` and returns its `id`.
     /// Conditions are ignored.
     pub fn insert(&self, columns: &[&str], values: &[&dyn Param]) -> Result<i64> {
-        let names: Vec<String> = columns.iter().map(|column| name(column)).collect();
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            self.table,
-            names.join(", "),
-            vec!["?"; columns.len()].join(", ")
-        );
-        self.with(|connection| {
-            connection.execute(&sql, values)?;
-            Ok(connection.0.last_insert_rowid())
+        self.with(|connection| match connection.dialect() {
+            Dialect::Sqlite => {
+                connection.execute(&self.insert_sql(columns, Dialect::Sqlite, false), values)?;
+                Ok(connection.0.last_insert_rowid())
+            }
+            Dialect::Postgres => connection.query_row(
+                &self.insert_sql(columns, Dialect::Postgres, true),
+                values,
+                |row| row.get(0),
+            ),
         })
+    }
+
+    /// [`insert`](Self::insert) for a table with no `id` column, which has
+    /// nothing to return.
+    pub fn insert_only(&self, columns: &[&str], values: &[&dyn Param]) -> Result<()> {
+        self.with(|connection| {
+            connection
+                .execute(
+                    &self.insert_sql(columns, connection.dialect(), false),
+                    values,
+                )
+                .map(|_| ())
+        })
+    }
+
+    /// `returning_id` adds Postgres's `RETURNING id`; SQLite reads
+    /// `last_insert_rowid()` instead, which also works without an `id` column.
+    fn insert_sql(&self, columns: &[&str], dialect: Dialect, returning_id: bool) -> String {
+        let names: Vec<String> = columns.iter().map(|column| name(column)).collect();
+        let returning = if returning_id { " RETURNING id" } else { "" };
+        for_dialect(
+            format!(
+                "INSERT INTO {} ({}) VALUES ({}){returning}",
+                self.table,
+                names.join(", "),
+                vec!["?"; columns.len()].join(", ")
+            ),
+            dialect,
+        )
     }
 
     /// Sets `columns` to `values` on every matching row, and returns how many
     /// changed. Without a condition that is every row.
     pub fn update(&self, columns: &[&str], values: &[&dyn Param]) -> Result<usize> {
+        let sql = self.update_sql(columns, self.dialect());
+        let all: Vec<&dyn Param> = values.iter().chain(&self.values).copied().collect();
+        self.with(|connection| connection.execute(&sql, &all))
+    }
+
+    fn update_sql(&self, columns: &[&str], dialect: Dialect) -> String {
         let sets: Vec<String> = columns
             .iter()
             .map(|column| format!("{} = ?", name(column)))
             .collect();
-        let sql = format!(
-            "UPDATE {} SET {}{}",
-            self.table,
-            sets.join(", "),
-            self.where_sql()
-        );
-        let all: Vec<&dyn Param> = values.iter().chain(&self.values).copied().collect();
-        self.with(|connection| connection.execute(&sql, &all))
+        for_dialect(
+            format!(
+                "UPDATE {} SET {}{}",
+                self.table,
+                sets.join(", "),
+                self.where_sql()
+            ),
+            dialect,
+        )
     }
 
     /// [`update`](Self::update) with `(column, value)` pairs, so a column and
@@ -319,8 +372,22 @@ impl<'a> Query<'a> {
     /// Deletes every matching row, and returns how many. Without a condition
     /// that is every row.
     pub fn delete(&self) -> Result<usize> {
-        let sql = format!("DELETE FROM {}{}", self.table, self.where_sql());
+        let sql = self.delete_sql(self.dialect());
         self.with(|connection| connection.execute(&sql, &self.values))
+    }
+
+    fn delete_sql(&self, dialect: Dialect) -> String {
+        for_dialect(
+            format!("DELETE FROM {}{}", self.table, self.where_sql()),
+            dialect,
+        )
+    }
+
+    fn dialect(&self) -> Dialect {
+        match self.source {
+            Source::Db(db) => db.dialect(),
+            Source::Transaction(connection) => connection.dialect(),
+        }
     }
 
     fn read<T>(&self, work: impl FnOnce(&Connection<'_>) -> T) -> T {
@@ -397,6 +464,14 @@ impl<T: crate::web::ToValue> crate::web::ToValue for Page<T> {
             ("previous", &self.previous()),
             ("next", &self.next()),
         ])
+    }
+}
+
+/// `sql` as the dialect writes it: Postgres numbers its `?` marks.
+fn for_dialect(sql: String, dialect: Dialect) -> String {
+    match dialect {
+        Dialect::Sqlite => sql,
+        Dialect::Postgres => to_postgres_placeholders(&sql),
     }
 }
 
@@ -588,5 +663,104 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn sql_renders_per_dialect() {
+        use crate::db::Dialect::{Postgres, Sqlite};
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let query = || {
+            db.table("posts")
+                .where_eq("a", &1)
+                .where_in("b", &[&2, &3])
+                .where_null("c")
+                .where_exists(
+                    "SELECT 1 FROM tags WHERE tags.post_id = posts.id AND tags.name = ?",
+                    &[&"x"],
+                )
+                .where_op("d", "LIKE", &"%y%")
+                .order_by("id")
+        };
+        let get = "SELECT * FROM posts WHERE a = ? AND b IN (?, ?) AND c IS NULL AND EXISTS (SELECT 1 FROM tags WHERE tags.post_id = posts.id AND tags.name = ?) AND d LIKE ? ORDER BY id";
+        assert_eq!(query().select_sql(Sqlite), get);
+        assert_eq!(
+            query().select_sql(Postgres),
+            "SELECT * FROM posts WHERE a = $1 AND b IN ($2, $3) AND c IS NULL AND EXISTS (SELECT 1 FROM tags WHERE tags.post_id = posts.id AND tags.name = $4) AND d LIKE $5 ORDER BY id"
+        );
+        assert_eq!(
+            query().count_sql(Postgres),
+            "SELECT count(*) FROM posts WHERE a = $1 AND b IN ($2, $3) AND c IS NULL AND EXISTS (SELECT 1 FROM tags WHERE tags.post_id = posts.id AND tags.name = $4) AND d LIKE $5"
+        );
+        assert_eq!(
+            db.table("posts")
+                .where_eq("id", &1)
+                .update_sql(&["a", "b"], Postgres),
+            "UPDATE posts SET a = $1, b = $2 WHERE id = $3"
+        );
+        assert_eq!(
+            db.table("posts").where_eq("id", &1).delete_sql(Postgres),
+            "DELETE FROM posts WHERE id = $1"
+        );
+        assert_eq!(
+            db.table("posts").where_in("id", &[]).select_sql(Postgres),
+            "SELECT * FROM posts WHERE 1 = 0"
+        );
+    }
+
+    #[test]
+    fn insert_returns_the_id_only_on_postgres() {
+        use crate::db::Dialect::{Postgres, Sqlite};
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let posts = db.table("posts");
+        assert_eq!(
+            posts.insert_sql(&["title", "views"], Sqlite, false),
+            "INSERT INTO posts (title, views) VALUES (?, ?)"
+        );
+        assert_eq!(
+            posts.insert_sql(&["title", "views"], Postgres, true),
+            "INSERT INTO posts (title, views) VALUES ($1, $2) RETURNING id"
+        );
+        assert_eq!(
+            posts.insert_sql(&["title"], Postgres, false),
+            "INSERT INTO posts (title) VALUES ($1)"
+        );
+    }
+
+    #[test]
+    fn offset_without_limit_per_dialect() {
+        use crate::db::Dialect::{Postgres, Sqlite};
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let offset = || db.table("posts").offset(5);
+        assert_eq!(
+            offset().select_sql(Sqlite),
+            "SELECT * FROM posts LIMIT -1 OFFSET 5"
+        );
+        assert_eq!(
+            offset().select_sql(Postgres),
+            "SELECT * FROM posts OFFSET 5"
+        );
+        assert_eq!(
+            offset().limit(2).select_sql(Sqlite),
+            "SELECT * FROM posts LIMIT 2 OFFSET 5"
+        );
+        assert_eq!(
+            offset().limit(2).select_sql(Postgres),
+            "SELECT * FROM posts LIMIT 2 OFFSET 5"
+        );
+        assert_eq!(
+            db.table("posts").limit(2).select_sql(Postgres),
+            "SELECT * FROM posts LIMIT 2"
+        );
+    }
+
+    #[test]
+    fn insert_only_needs_no_id_column() {
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        db.with(|sql| sql.execute_batch("CREATE TABLE pairs (a INTEGER, b INTEGER)"))
+            .unwrap();
+        db.table("pairs")
+            .insert_only(&["a", "b"], crate::db::params![1, 2])
+            .unwrap();
+        assert_eq!(db.table("pairs").count().unwrap(), 1);
     }
 }

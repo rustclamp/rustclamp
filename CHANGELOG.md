@@ -2,7 +2,33 @@
 
 ## Unreleased
 
+### Added
+
+- Dialect-aware SQL for Postgres (ADR 0034, step 2a of 3; #121). SQLite is
+  still the only engine that runs; Postgres SQL is generated and tested, not
+  executed yet.
+  - `db::Dialect`, `Db::dialect()` and `Connection::dialect()`.
+  - `Schema::create`/`::table` render for both dialects (ids as identity
+    columns, `BIGINT`, `DOUBLE PRECISION`, `BOOLEAN`, `to_char(now() ..)`
+    timestamps); `Table::blob`, `Column::default_bool` and
+    `Column::default_now` render per dialect. SQLite output is unchanged.
+  - `Query` writes `$N` marks, `RETURNING id` and `OFFSET` for Postgres; new
+    `Query::insert_only` for tables without an `id`.
+  - `db::Value::Bool`: `bool` binds as `0`/`1` on SQLite and reads from an
+    integer or a bool.
+  - `db::Error::sqlstate()` and `is_unique_violation()` (SQLite
+    `SQLITE_CONSTRAINT_UNIQUE`/`_PRIMARYKEY`, Postgres `23505`).
+  - Empty `where_in` writes `1 = 0` instead of `0`, which Postgres rejects.
+
 ### Changed (breaking)
+
+- `Migration::up` and `down` return `db::Sql` instead of `String` (ADR 0034,
+  step 2a). `Schema::create`, `::table` and `::drop` return it, so a migration
+  built from them only changes its signature: `fn up(&self) -> Sql`
+  (`use rustclamp::db::Sql`). Literal SQL becomes `"...".into()`. (The ADR
+  names `impl Into<Sql>`, which cannot be called through `&dyn Migration`.)
+  A `Schema` result that was inspected as a `String` needs `.to_string()`
+  (the SQLite rendering).
 
 - `rustclamp::db` names no engine in its API (ADR 0034, step 1 of 3; #121).
   The `db::sqlite` (rusqlite) re-export is gone; use the facade types:
