@@ -1,14 +1,20 @@
-//! A SQLite database, configured from `.env`.
+//! A SQLite or Postgres database, configured from `.env`.
 //!
 //! Enabled by the `db` feature, which `clamp init --web` turns on. SQLite is
 //! compiled into the app, so there is no server to run. `DB_CONNECTION`
-//! names the engine (only `sqlite` so far) and `DB_DATABASE` the file,
-//! `storage/database.sqlite` by default, or `:memory:`.
+//! names the engine (`sqlite`, or `pgsql` with the `postgres` feature) and
+//! `DB_DATABASE` the SQLite file, `storage/database.sqlite` by default, or
+//! `:memory:`.
+//!
+//! Postgres reads `DATABASE_URL` (`postgres://user:pass@host:port/db?sslmode=..`)
+//! or `DB_HOST`, `DB_PORT` (5432), `DB_DATABASE`, `DB_USERNAME`,
+//! `DB_PASSWORD`, `DB_SSLMODE` (`disable`, `require` or `verify-full`, which
+//! is the default for any host but this machine), `DB_SSLROOTCERT` (a CA
+//! file) and `DB_POOL` (most connections, 10).
 //!
 //! The API names no engine: [`Db::with`] lends a [`Connection`] that takes
 //! `?`/`?N` marks and [`Param`]s ([`params!`]), and rows come back as
-//! [`Row`]s of [`Value`]s, so the same code can later run on Postgres
-//! (ADR 0034).
+//! [`Row`]s of [`Value`]s, so the same code runs on both (ADR 0034).
 //!
 //! A migration is a struct implementing [`Migration`], one per file, with
 //! `up` and `down` SQL written by [`Schema`] or by hand. [`Db::table`] builds
@@ -54,11 +60,14 @@ use crate::config::Config;
 mod connection;
 mod dialect;
 #[cfg(feature = "postgres")]
-#[allow(dead_code)] // ponytail: wired into `Db` by step 2c of ADR 0034
+mod pool;
+#[cfg(feature = "postgres")]
 mod postgres;
 mod query;
 mod schema;
 mod states;
+#[cfg(test)]
+mod testing;
 pub mod timestamp;
 pub use dialect::{Dialect, Sql};
 pub use query::{Page, Query};
@@ -69,15 +78,17 @@ pub use states::{Change, States, Transition};
 /// `params![title, 3, None::<String>]`.
 #[doc(inline)]
 pub use crate::__db_params as params;
+use connection::Inner;
 pub use connection::{ColumnIndex, Connection, Error, FromColumn, Param, Result, Row, Value};
 /// `#[derive(Model)]` with `#[model(table = "posts")]`: reads each field
 /// from the column of the same name. See [`Model`](trait@Model).
 pub use rustclamp_macros::Model;
 
-/// A shared database. Clones share the same connections: one writer behind
-/// a lock, and for a WAL file database, read-only connections that
-/// [`Db::read`] (and a [`Query`]'s `get`, `first` and `count`) take, so reads
-/// do not wait for the writer or for each other (#39).
+/// A shared database. Clones share the same connections. SQLite has one
+/// writer behind a lock and, for a WAL file database, read-only connections
+/// that [`Db::read`] (and a [`Query`]'s `get`, `first` and `count`) take, so
+/// reads do not wait for the writer or for each other (#39). Postgres has a
+/// pool of connections, which `read` shares with `with` (#121).
 #[derive(Clone)]
 pub struct Db {
     backend: Backend,
@@ -85,7 +96,6 @@ pub struct Db {
 
 /// The engine behind a [`Db`].
 #[derive(Clone)]
-// ponytail: one engine; step 2c of ADR 0034 adds `Postgres(Pool)`.
 enum Backend {
     Sqlite {
         // `:memory:` relies on the single writer: every clone must see the
@@ -93,6 +103,8 @@ enum Backend {
         writer: Arc<Mutex<rusqlite::Connection>>,
         readers: Option<Arc<Readers>>,
     },
+    #[cfg(feature = "postgres")]
+    Postgres(Arc<pool::Pool>),
 }
 
 /// Idle read-only connections to the same file, opened on demand.
@@ -137,13 +149,14 @@ fn open_reader(path: &str) -> rusqlite::Result<rusqlite::Connection> {
 /// Why [`Db::try_connect`] could not open the database.
 #[derive(Debug)]
 pub enum DbError {
-    /// `DB_CONNECTION` names an engine other than `sqlite`.
+    /// `DB_CONNECTION` names an engine this build does not have: not `sqlite`,
+    /// and not `pgsql` with the `postgres` feature.
     Engine(String),
-    /// SQLite could not open or set up the file.
+    /// The database could not be opened or set up.
     Open {
-        /// The `DB_DATABASE` path.
+        /// The SQLite file, or the Postgres host, port and database.
         path: String,
-        /// What SQLite said.
+        /// What the engine said.
         source: Error,
     },
 }
@@ -151,9 +164,13 @@ pub enum DbError {
 impl std::fmt::Display for DbError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Engine(engine) if engine == "pgsql" => write!(
+                f,
+                "config key DB_CONNECTION is pgsql; build with the `postgres` feature"
+            ),
             Self::Engine(engine) => write!(
                 f,
-                "config key DB_CONNECTION is {engine}; only sqlite is supported"
+                "config key DB_CONNECTION is {engine}; only sqlite and pgsql are supported"
             ),
             Self::Open { path, source } => write!(f, "cannot open database {path}: {source}"),
         }
@@ -183,26 +200,75 @@ pub enum Journal {
 /// Which database to open. An app builds it in `app/config/database.rs`.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    /// The engine; only `sqlite` so far.
+    /// The engine: `sqlite` or `pgsql`.
     pub connection: String,
-    /// The SQLite file, or `:memory:`.
+    /// The SQLite file, or `:memory:`. Postgres names its database in `url`.
     pub database: String,
+    /// Postgres only: `postgres://user:pass@host:port/db?sslmode=..`.
+    pub url: Option<String>,
+    /// Postgres only: the most connections the pool opens.
+    pub pool: usize,
 }
 
 impl Settings {
     /// `DB_CONNECTION` (`sqlite`) and `DB_DATABASE`
-    /// (`storage/database.sqlite`).
+    /// (`storage/database.sqlite`); for `pgsql`, `DATABASE_URL` or the
+    /// `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`,
+    /// `DB_SSLMODE` and `DB_SSLROOTCERT` parts of it, and `DB_POOL`.
     pub fn from_config(config: &Config) -> Self {
         // ponytail: the same defaults as the web template's
         // `app/config/database.rs`, for apps without one
+        let connection = config.get("DB_CONNECTION").unwrap_or("sqlite");
+        let pgsql = connection == "pgsql";
         Self {
-            connection: config.get("DB_CONNECTION").unwrap_or("sqlite").into(),
+            connection: connection.into(),
             database: config
                 .get("DB_DATABASE")
-                .unwrap_or("storage/database.sqlite")
+                .unwrap_or(if pgsql { "" } else { "storage/database.sqlite" })
                 .into(),
+            url: pgsql.then(|| postgres_url(config)),
+            pool: config
+                .get("DB_POOL")
+                .and_then(|pool| pool.parse().ok())
+                .unwrap_or(10),
         }
     }
+}
+
+/// `DATABASE_URL`, or the URL the `DB_*` parts make.
+fn postgres_url(config: &Config) -> String {
+    if let Some(url) = config.get("DATABASE_URL") {
+        return url.to_owned();
+    }
+    let get = |key, default| config.get(key).unwrap_or(default);
+    let mut url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        percent_encode(get("DB_USERNAME", "postgres")),
+        percent_encode(get("DB_PASSWORD", "")),
+        get("DB_HOST", "127.0.0.1"),
+        get("DB_PORT", "5432"),
+        percent_encode(get("DB_DATABASE", "")),
+    );
+    let mut separator = '?';
+    for (key, name) in [("DB_SSLMODE", "sslmode"), ("DB_SSLROOTCERT", "sslrootcert")] {
+        if let Some(value) = config.get(key) {
+            url.push_str(&format!("{separator}{name}={}", percent_encode(value)));
+            separator = '&';
+        }
+    }
+    url
+}
+
+/// `text` with everything but unreserved characters as `%XX`.
+fn percent_encode(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                char::from(byte).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
 }
 
 impl Db {
@@ -252,6 +318,10 @@ impl Db {
     /// As [`Db::try_connect`].
     pub fn try_connect_with(settings: &Settings, journal: Journal) -> Result<Self, DbError> {
         let engine = settings.connection.as_str();
+        #[cfg(feature = "postgres")]
+        if engine == "pgsql" {
+            return Self::try_connect_postgres(settings);
+        }
         if engine != "sqlite" {
             return Err(DbError::Engine(engine.to_owned()));
         }
@@ -307,21 +377,52 @@ impl Db {
         })
     }
 
+    #[cfg(feature = "postgres")]
+    fn try_connect_postgres(settings: &Settings) -> Result<Self, DbError> {
+        let open = |path: &str, message: String| DbError::Open {
+            path: path.to_owned(),
+            source: Error::new(message),
+        };
+        let url = settings.url.as_deref().unwrap_or_default();
+        let config =
+            postgres::Config::parse_url(url).map_err(|message| open("DATABASE_URL", message))?;
+        let target = format!("{}:{}/{}", config.host, config.port, config.database);
+        let pool = pool::Pool::new(config, settings.pool).map_err(|source| DbError::Open {
+            path: target,
+            source,
+        })?;
+        Ok(Self {
+            backend: Backend::Postgres(Arc::new(pool)),
+        })
+    }
+
     /// The SQL dialect of the engine behind this database.
     pub fn dialect(&self) -> Dialect {
         match self.backend {
             Backend::Sqlite { .. } => Dialect::Sqlite,
+            #[cfg(feature = "postgres")]
+            Backend::Postgres(_) => Dialect::Postgres,
         }
     }
 
-    /// Runs `work` with the connection, holding it for the duration.
+    /// Runs `work` with the connection, holding it for the duration. On
+    /// Postgres that is one pooled connection, and `work` gets a connection
+    /// whose calls all fail when the pool has none to lend.
     pub fn with<T>(&self, work: impl FnOnce(&Connection<'_>) -> T) -> T {
-        work(&Connection(&self.writer()))
+        match &self.backend {
+            Backend::Sqlite { .. } => work(&Connection(Inner::Sqlite(&self.writer()))),
+            #[cfg(feature = "postgres")]
+            Backend::Postgres(pool) => pool.with(work),
+        }
     }
 
     /// The SQLite writer, locked.
     fn writer(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
-        let Backend::Sqlite { writer, .. } = &self.backend;
+        let writer = match &self.backend {
+            Backend::Sqlite { writer, .. } => writer,
+            #[cfg(feature = "postgres")]
+            Backend::Postgres(_) => unreachable!("Postgres has no single writer"),
+        };
         // A panic in another request leaves the connection usable; SQLite
         // rolls back its unfinished transaction.
         writer.lock().unwrap_or_else(PoisonError::into_inner)
@@ -343,7 +444,12 @@ impl Db {
     /// assert_eq!(one, 1);
     /// ```
     pub fn read<T>(&self, work: impl FnOnce(&Connection<'_>) -> T) -> T {
-        let Backend::Sqlite { readers, .. } = &self.backend;
+        let readers = match &self.backend {
+            Backend::Sqlite { readers, .. } => readers,
+            // MVCC: Postgres reads run beside writes on the same pool.
+            #[cfg(feature = "postgres")]
+            Backend::Postgres(_) => return self.with(work),
+        };
         let Some(readers) = readers else {
             return self.with(work);
         };
@@ -361,7 +467,7 @@ impl Db {
                 Err(_) => return self.with(work),
             },
         };
-        let value = work(&Connection(&connection));
+        let value = work(&Connection(Inner::Sqlite(&connection)));
         // A panic in `work` drops the connection instead of returning it.
         readers
             .idle
@@ -433,9 +539,11 @@ impl Db {
     /// holds; a `Db` write inside `work` waits forever, and a `Db` read sees
     /// only what was committed before it.
     ///
-    /// The write lock is taken at the first write, so two transactions that
-    /// both read and then write can meet a "database is locked" error; use
-    /// [`Db::transaction_immediate`] for those.
+    /// On SQLite the write lock is taken at the first write, so two
+    /// transactions that both read and then write can meet a "database is
+    /// locked" error; use [`Db::transaction_immediate`] for those. On Postgres
+    /// the transaction holds one pooled connection until it ends, and a `Db`
+    /// call inside `work` runs on another one, outside the transaction.
     ///
     /// ```
     /// use rustclamp::config::Config;
@@ -455,26 +563,37 @@ impl Db {
         &self,
         work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
-        self.run_transaction(rusqlite::TransactionBehavior::Deferred, work)
+        self.run_transaction(false, work)
     }
 
     /// [`Db::transaction`], but it takes the write lock up front (`BEGIN
     /// IMMEDIATE`), waiting out the busy timeout, so a read-then-write
     /// cannot fail halfway on a lock another process took meanwhile. Inside
     /// another transaction it is a savepoint of that one, which keeps
-    /// whatever lock that one has.
+    /// whatever lock that one has. On Postgres it takes an advisory lock
+    /// right after `BEGIN`, so one such transaction runs at a time across
+    /// every instance of the app.
     pub fn transaction_immediate<T, E: From<Error>>(
         &self,
         work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
-        self.run_transaction(rusqlite::TransactionBehavior::Immediate, work)
+        self.run_transaction(true, work)
     }
 
     fn run_transaction<T, E: From<Error>>(
         &self,
-        behavior: rusqlite::TransactionBehavior,
+        immediate: bool,
         work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
+        #[cfg(feature = "postgres")]
+        if let Backend::Postgres(pool) = &self.backend {
+            return postgres_transaction(pool, immediate, work);
+        }
+        let behavior = if immediate {
+            rusqlite::TransactionBehavior::Immediate
+        } else {
+            rusqlite::TransactionBehavior::Deferred
+        };
         let mut connection = self.writer();
         // rusqlite's Transaction and Savepoint roll back when dropped, so an
         // `Err` or a panic in `work` leaves no transaction open behind it.
@@ -482,12 +601,12 @@ impl Db {
             let transaction = connection
                 .transaction_with_behavior(behavior)
                 .map_err(Error::from)?;
-            let value = work(&Tx(Connection(&transaction)))?;
+            let value = work(&Tx(Connection(Inner::Sqlite(&transaction))))?;
             transaction.commit().map_err(Error::from)?;
             Ok(value)
         } else {
             let savepoint = connection.savepoint().map_err(Error::from)?;
-            let value = work(&Tx(Connection(&savepoint)))?;
+            let value = work(&Tx(Connection(Inner::Sqlite(&savepoint))))?;
             savepoint.commit().map_err(Error::from)?;
             Ok(value)
         }
@@ -501,15 +620,44 @@ impl Db {
     /// Runs `up` for each migration not yet run, in order, as one batch,
     /// recording each in the `migrations` table. A migration that fails is
     /// rolled back and stops the rest.
+    ///
+    /// On Postgres the whole run holds an advisory lock, so instances that
+    /// migrate at startup take turns.
     pub fn migrate(&self, migrations: &[&dyn Migration]) -> Result<()> {
         self.with(|connection| {
-            connection.execute_batch(
-                "CREATE TABLE IF NOT EXISTS migrations (
+            let postgres = connection.dialect() == Dialect::Postgres;
+            if postgres {
+                connection.execute_batch(&format!("SELECT pg_advisory_lock({MIGRATE_LOCK})"))?;
+            }
+            let result = Self::migrate_on(connection, migrations);
+            if postgres {
+                // Best effort: a broken connection took its session lock with it.
+                let _ =
+                    connection.execute_batch(&format!("SELECT pg_advisory_unlock({MIGRATE_LOCK})"));
+            }
+            result
+        })
+    }
+
+    fn migrate_on(connection: &Connection<'_>, migrations: &[&dyn Migration]) -> Result<()> {
+        {
+            connection.execute_batch(match connection.dialect() {
+                Dialect::Sqlite => {
+                    "CREATE TABLE IF NOT EXISTS migrations (
                     name TEXT PRIMARY KEY,
                     batch INTEGER NOT NULL,
                     ran_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )",
-            )?;
+                )"
+                }
+                Dialect::Postgres => {
+                    "CREATE TABLE IF NOT EXISTS migrations (
+                    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    batch BIGINT NOT NULL,
+                    ran_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+                )"
+                }
+            })?;
             let batch: i64 = connection.query_row(
                 "SELECT coalesce(max(batch), 0) + 1 FROM migrations",
                 &[],
@@ -525,7 +673,7 @@ impl Db {
                 if ran {
                     continue;
                 }
-                savepoint(connection, |connection| {
+                atomically(connection, |connection| {
                     connection.execute_batch(migration.up().render(connection.dialect()))?;
                     connection.execute(
                         "INSERT INTO migrations (name, batch) VALUES (?1, ?2)",
@@ -534,7 +682,7 @@ impl Db {
                 })?;
             }
             Ok(())
-        })
+        }
     }
 
     /// [`Db::migrate`] for a database that tracks its schema in SQLite's
@@ -550,8 +698,9 @@ impl Db {
     ///
     /// # Errors
     ///
-    /// When SQL fails, or the database is at a version beyond `migrations`
-    /// (it was migrated by a newer build).
+    /// When SQL fails, the database is at a version beyond `migrations`
+    /// (it was migrated by a newer build), or the engine is Postgres, which
+    /// has no `user_version`.
     ///
     /// ```
     /// use rustclamp::config::Config;
@@ -578,6 +727,11 @@ impl Db {
         migrations: &[&dyn Migration],
     ) -> Result<()> {
         self.with(|connection| {
+            if connection.dialect() == Dialect::Postgres {
+                return Err(Error::new(
+                    "migrate_user_version is SQLite only; use migrate on Postgres",
+                ));
+            }
             let set_version = |version: i64| {
                 connection.execute_batch(&format!("PRAGMA user_version = {version}"))
             };
@@ -620,7 +774,15 @@ impl Db {
         let ran: Vec<(String, i64)> = self
             .with(|connection| {
                 let exists: bool = connection.query_row(
-                    "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'migrations')",
+                    match connection.dialect() {
+                        Dialect::Sqlite => {
+                            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'migrations')"
+                        }
+                        Dialect::Postgres => {
+                            "SELECT EXISTS (SELECT 1 FROM information_schema.tables
+                             WHERE table_schema = current_schema() AND table_name = 'migrations')"
+                        }
+                    },
                     &[],
                     |row| row.get(0),
                 )?;
@@ -649,7 +811,13 @@ impl Db {
     pub fn seed(&self, seeders: &[&dyn Seeder]) -> Result<(), SeedError> {
         // ponytail: the transaction spans several `with` calls on the shared
         // connection, so run seeders from the console, not while serving.
+        // Postgres has no such connection to span, so its seeders run without
+        // one; a seeder that must be all-or-nothing uses `Db::transaction`.
         for seeder in seeders {
+            if self.dialect() == Dialect::Postgres {
+                seeder.run(self)?;
+                continue;
+            }
             self.with(|connection| connection.execute_batch("BEGIN"))?;
             match seeder.run(self) {
                 Ok(()) => self.with(|connection| connection.execute_batch("COMMIT"))?,
@@ -671,11 +839,17 @@ impl Db {
     /// `migrations`, which would leave its `down` unknown.
     pub fn rollback(&self, migrations: &[&dyn Migration]) -> Result<Vec<&'static str>, String> {
         self.with(|connection| {
+            let newest_first = match connection.dialect() {
+                Dialect::Sqlite => "rowid",
+                Dialect::Postgres => "id",
+            };
             let names: Vec<String> = connection
                 .query(
-                    "SELECT name FROM migrations
-                     WHERE batch = (SELECT max(batch) FROM migrations)
-                     ORDER BY rowid DESC",
+                    &format!(
+                        "SELECT name FROM migrations
+                         WHERE batch = (SELECT max(batch) FROM migrations)
+                         ORDER BY {newest_first} DESC"
+                    ),
                     &[],
                     |row| row.get(0),
                 )
@@ -686,7 +860,7 @@ impl Db {
                     .iter()
                     .find(|migration| migration.name() == name)
                     .ok_or_else(|| format!("migration {name} ran but is not in the list"))?;
-                savepoint(connection, |connection| {
+                atomically(connection, |connection| {
                     connection.execute_batch(migration.down().render(connection.dialect()))?;
                     connection.execute("DELETE FROM migrations WHERE name = ?1", &[&name])
                 })
@@ -975,6 +1149,62 @@ fn savepoint<T, E: From<Error>>(
     }
 }
 
+/// Runs `work` as one transaction on a connection that is not in one: a
+/// savepoint on SQLite, where that starts a transaction, `BEGIN` on Postgres,
+/// where a savepoint outside a transaction is an error.
+fn atomically<T, E: From<Error>>(
+    connection: &Connection<'_>,
+    work: impl FnOnce(&Connection<'_>) -> Result<T, E>,
+) -> Result<T, E> {
+    if connection.dialect() == Dialect::Sqlite {
+        return savepoint(connection, work);
+    }
+    connection.execute_batch("BEGIN")?;
+    match work(connection) {
+        Ok(value) => {
+            connection.execute_batch("COMMIT")?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// [`Db::transaction`] on a pooled Postgres connection: `BEGIN`, `COMMIT` on
+/// `Ok`, `ROLLBACK` on `Err`; a panic drops the connection, which rolls back.
+#[cfg(feature = "postgres")]
+fn postgres_transaction<T, E: From<Error>>(
+    pool: &pool::Pool,
+    immediate: bool,
+    work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
+) -> Result<T, E> {
+    let lease = pool.get()?;
+    let tx = Tx(lease.connection());
+    tx.execute_batch("BEGIN")?;
+    if immediate {
+        tx.execute_batch(&format!("SELECT pg_advisory_xact_lock({IMMEDIATE_LOCK})"))?;
+    }
+    match work(&tx) {
+        Ok(value) => {
+            tx.execute_batch("COMMIT")?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = tx.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// The advisory lock keys (`pg_advisory_lock`) that [`Db::migrate`] and
+/// [`Db::transaction_immediate`] take on Postgres: arbitrary, fixed, and
+/// different, so that an app's own transactions never wait for a migration.
+const MIGRATE_LOCK: i64 = 0x636c_616d_7000_0001;
+#[cfg(feature = "postgres")]
+const IMMEDIATE_LOCK: i64 = 0x636c_616d_7000_0002;
+
 /// The migration name for a source file: `file!()` without its folders and
 /// `.rs`. Keeps a migration's recorded name equal to its file name, so a
 /// file named `2026_09_29_000001_create_posts.rs` (loaded with
@@ -1023,11 +1253,17 @@ pub trait Migration {
 
 #[cfg(test)]
 mod tests {
+    use super::testing::{each_engine, is_postgres};
     use super::*;
 
     #[cfg(feature = "web")]
     #[test]
     fn model_binds_by_public_id() {
+        each_engine(|db| model_binds_by_public_id_on(db.clone()));
+    }
+
+    #[cfg(feature = "web")]
+    fn model_binds_by_public_id_on(db: Db) {
         use crate::web::{Request, Router, error};
         struct Post {
             title: String,
@@ -1040,13 +1276,15 @@ mod tests {
                 })
             }
         }
-        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
         let public_id = crate::uuid::Uuid::v7();
         db.with(|sql| {
             sql.execute_batch(
                 "CREATE TABLE posts (id INTEGER PRIMARY KEY, public_id TEXT, title TEXT)",
             )?;
-            sql.execute("INSERT INTO posts VALUES (7, ?1, 'Hi')", &[&public_id])
+            sql.execute(
+                "INSERT INTO posts (id, public_id, title) VALUES (7, ?1, 'Hi')",
+                &[&public_id],
+            )
         })
         .unwrap();
         let app = Router::new()
@@ -1072,10 +1310,19 @@ mod tests {
     }
 
     #[test]
-    fn a_sqlite_file_speaks_the_sqlite_dialect() {
-        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    fn a_database_speaks_its_engines_dialect() {
+        let db = memory();
         assert_eq!(db.dialect(), Dialect::Sqlite);
         assert_eq!(db.with(|sql| sql.dialect()), Dialect::Sqlite);
+        each_engine(|db| {
+            let expected = if is_postgres(db) {
+                Dialect::Postgres
+            } else {
+                Dialect::Sqlite
+            };
+            assert_eq!(db.dialect(), expected);
+            assert_eq!(db.with(|sql| sql.dialect()), expected);
+        });
     }
 
     /// A migration from literal SQL.
@@ -1102,6 +1349,19 @@ mod tests {
         Db::open(&Config::parse("DB_DATABASE=:memory:"))
     }
 
+    /// How many tables besides `migrations` the database has.
+    fn tables(db: &Db) -> i64 {
+        count(
+            db,
+            if is_postgres(db) {
+                "SELECT count(*) FROM information_schema.tables
+                 WHERE table_schema = current_schema() AND table_name != 'migrations'"
+            } else {
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name != 'migrations'"
+            },
+        )
+    }
+
     /// Polls `future` on this thread, parking until its waker fires.
     fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
         struct Wake(std::thread::Thread);
@@ -1124,8 +1384,11 @@ mod tests {
     }
 
     #[test]
-    fn blocking_runs_off_the_calling_thread_and_shares_the_connection() {
-        let db = memory();
+    fn blocking_runs_off_the_calling_thread_and_shares_the_database() {
+        each_engine(blocking_runs_off_the_calling_thread);
+    }
+
+    fn blocking_runs_off_the_calling_thread(db: &Db) {
         let caller = std::thread::current().id();
         let (ran_on, one) = block_on(db.blocking(|sql| {
             sql.execute_batch("CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1)")
@@ -1134,7 +1397,7 @@ mod tests {
         }));
         assert_ne!(ran_on, caller);
         assert_eq!(one, 1);
-        assert_eq!(count(&db, "SELECT count(*) FROM t"), 1, "same connection");
+        assert_eq!(count(db, "SELECT count(*) FROM t"), 1, "same database");
         // Many at once all complete.
         let all: Vec<_> = (0..8)
             .map(|n| db.blocking(move |sql| sql.execute("INSERT INTO t VALUES (?1)", &[&n])))
@@ -1142,15 +1405,16 @@ mod tests {
         for one in all {
             assert_eq!(block_on(one).unwrap(), 1);
         }
-        assert_eq!(count(&db, "SELECT count(*) FROM t"), 9);
+        assert_eq!(count(db, "SELECT count(*) FROM t"), 9);
     }
 
     #[test]
     fn blocking_panics_reach_the_awaiter_and_leave_the_db_usable() {
-        let db = memory();
-        let caught = std::panic::catch_unwind(|| block_on(db.blocking(|_| panic!("boom"))));
-        assert!(caught.is_err());
-        assert_eq!(count(&db, "SELECT 1"), 1);
+        each_engine(|db| {
+            let caught = std::panic::catch_unwind(|| block_on(db.blocking(|_| panic!("boom"))));
+            assert!(caught.is_err());
+            assert_eq!(count(db, "SELECT 1"), 1);
+        });
     }
 
     #[test]
@@ -1184,40 +1448,34 @@ mod tests {
 
     #[test]
     fn migrations_run_once() {
-        let db = memory();
-        let posts = Raw(
-            "0001",
-            "CREATE TABLE posts (title TEXT)",
-            "DROP TABLE posts",
-        );
-        db.migrate(&[&posts]).unwrap();
-        db.migrate(&[&posts]).unwrap();
-        let ran: i64 = db
-            .with(|sql| sql.query_row("SELECT count(*) FROM migrations", &[], |row| row.get(0)))
-            .unwrap();
-        assert_eq!(ran, 1);
+        each_engine(|db| {
+            let posts = Raw(
+                "0001",
+                "CREATE TABLE posts (title TEXT)",
+                "DROP TABLE posts",
+            );
+            db.migrate(&[&posts]).unwrap();
+            db.migrate(&[&posts]).unwrap();
+            assert_eq!(count(db, "SELECT count(*) FROM migrations"), 1);
+        });
     }
 
     #[test]
     fn failed_migration_is_rolled_back_and_not_recorded() {
-        let db = memory();
-        let broken = Raw("0001", "CREATE TABLE posts (title TEXT); NOT SQL", "");
-        assert!(db.migrate(&[&broken]).is_err());
-        let tables: i64 = db
-            .with(|sql| {
-                sql.query_row(
-                    "SELECT count(*) FROM sqlite_master WHERE name = 'posts'",
-                    &[],
-                    |row| row.get(0),
-                )
-            })
-            .unwrap();
-        assert_eq!(tables, 0);
+        each_engine(|db| {
+            let broken = Raw("0001", "CREATE TABLE posts (title TEXT); NOT SQL", "");
+            assert!(db.migrate(&[&broken]).is_err());
+            assert_eq!(tables(db), 0);
+            assert_eq!(count(db, "SELECT count(*) FROM migrations"), 0);
+        });
     }
 
     #[test]
     fn rollback_undoes_the_last_batch_newest_first() {
-        let db = memory();
+        each_engine(rollback_undoes_the_last_batch);
+    }
+
+    fn rollback_undoes_the_last_batch(db: &Db) {
         let posts = Raw(
             "0001",
             "CREATE TABLE posts (id INTEGER PRIMARY KEY)",
@@ -1233,40 +1491,32 @@ mod tests {
         db.migrate(&[&posts, &tags, &views]).unwrap();
         let all: [&dyn Migration; 3] = [&posts, &tags, &views];
         assert_eq!(db.rollback(&all).unwrap(), ["0003", "0002"]);
-        assert_eq!(
-            count(
-                &db,
-                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name != 'migrations'"
-            ),
-            1
-        );
+        assert_eq!(tables(db), 1);
         assert_eq!(db.rollback(&all).unwrap(), ["0001"]);
         assert!(db.rollback(&all).unwrap().is_empty());
         db.migrate(&all).unwrap();
-        assert_eq!(
-            count(&db, "SELECT count(DISTINCT batch) FROM migrations"),
-            1
-        );
+        assert_eq!(count(db, "SELECT count(DISTINCT batch) FROM migrations"), 1);
     }
 
     #[test]
     fn rollback_needs_every_migration_in_the_batch() {
-        let db = memory();
-        db.migrate(&[&Raw(
-            "0001",
-            "CREATE TABLE posts (id INTEGER)",
-            "DROP TABLE posts",
-        )])
-        .unwrap();
-        let error = db.rollback(&[]).unwrap_err();
-        assert!(error.contains("0001"), "{error}");
+        each_engine(|db| {
+            db.migrate(&[&Raw(
+                "0001",
+                "CREATE TABLE posts (id INTEGER)",
+                "DROP TABLE posts",
+            )])
+            .unwrap();
+            let error = db.rollback(&[]).unwrap_err();
+            assert!(error.contains("0001"), "{error}");
+        });
     }
 
     struct Posts(&'static str);
 
     impl Seeder for Posts {
         fn run(&self, db: &Db) -> Result<(), SeedError> {
-            db.table("posts").insert(&["title"], &[&"one"])?;
+            db.table("posts").insert_only(&["title"], &[&"one"])?;
             db.with(|connection| connection.execute_batch(self.0))?;
             Ok(())
         }
@@ -1274,7 +1524,10 @@ mod tests {
 
     #[test]
     fn seeding_commits_or_leaves_nothing() {
-        let db = memory();
+        each_engine(seeding_commits_or_leaves_nothing_on);
+    }
+
+    fn seeding_commits_or_leaves_nothing_on(db: &Db) {
         let posts = Raw(
             "0001",
             "CREATE TABLE posts (title TEXT)",
@@ -1283,10 +1536,12 @@ mod tests {
         db.migrate(&[&posts]).unwrap();
         db.seed(&[&Posts("SELECT 1")]).unwrap();
         assert!(db.seed(&[&Posts("NOT SQL")]).is_err());
-        assert_eq!(count(&db, "SELECT count(*) FROM posts"), 1);
-        assert_eq!(command(&db, "db:seed", &[&posts], &[&Posts("SELECT 1")]), 0);
-        assert_eq!(count(&db, "SELECT count(*) FROM posts"), 2);
-        assert_eq!(command(&db, "nope", &[], &[]), 2);
+        // Postgres seeders run without a transaction (see `Db::seed`).
+        let kept = if is_postgres(db) { 2 } else { 1 };
+        assert_eq!(count(db, "SELECT count(*) FROM posts"), kept);
+        assert_eq!(command(db, "db:seed", &[&posts], &[&Posts("SELECT 1")]), 0);
+        assert_eq!(count(db, "SELECT count(*) FROM posts"), kept + 1);
+        assert_eq!(command(db, "nope", &[], &[]), 2);
         let pending = Raw("0002", "SELECT 1", "");
         assert_eq!(
             db.status(&[&posts, &pending]).unwrap(),
@@ -1296,18 +1551,24 @@ mod tests {
     }
 
     #[test]
+    fn status_of_a_fresh_database_lists_everything_pending() {
+        each_engine(|db| {
+            let posts = Raw("0001", "CREATE TABLE posts (title TEXT)", "");
+            assert_eq!(db.status(&[&posts]).unwrap(), [("0001", None)]);
+        });
+    }
+
+    #[test]
     fn clones_share_the_database() {
-        let db = memory();
-        db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
-            .unwrap();
-        let other = db.clone();
-        other
-            .with(|sql| sql.execute("INSERT INTO posts VALUES ('a')", &[]))
-            .unwrap();
-        let count: i64 = db
-            .with(|sql| sql.query_row("SELECT count(*) FROM posts", &[], |row| row.get(0)))
-            .unwrap();
-        assert_eq!(count, 1);
+        each_engine(|db| {
+            db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
+                .unwrap();
+            let other = db.clone();
+            other
+                .with(|sql| sql.execute("INSERT INTO posts VALUES ('a')", &[]))
+                .unwrap();
+            assert_eq!(count(db, "SELECT count(*) FROM posts"), 1);
+        });
     }
 
     #[test]
@@ -1342,35 +1603,41 @@ mod tests {
     // #36: the query builder works inside a transaction, through the handle.
     #[test]
     fn transaction_queries_through_the_handle() {
-        let db = memory();
-        db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
-            .unwrap();
-        let failed: Result<()> = db.transaction(|tx| {
-            tx.table("posts").insert(&["title"], &[&"a"])?;
-            assert_eq!(tx.table("posts").count()?, 1);
-            tx.execute("NOT SQL", &[])?;
-            Ok(())
+        each_engine(|db| {
+            db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
+                .unwrap();
+            let failed: Result<()> = db.transaction(|tx| {
+                tx.table("posts").insert_only(&["title"], &[&"a"])?;
+                assert_eq!(tx.table("posts").count()?, 1);
+                tx.execute("NOT SQL", &[])?;
+                Ok(())
+            });
+            assert!(failed.is_err());
+            db.transaction(|tx| tx.table("posts").insert_only(&["title"], &[&"b"]))
+                .unwrap();
+            assert_eq!(db.table("posts").count().unwrap(), 1);
         });
-        assert!(failed.is_err());
-        db.transaction(|tx| tx.table("posts").insert(&["title"], &[&"b"]))
-            .unwrap();
-        assert_eq!(db.table("posts").count().unwrap(), 1);
     }
 
     #[test]
     fn a_panic_in_a_transaction_leaves_none_open() {
-        let db = memory();
-        db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
-            .unwrap();
-        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _: Result<()> = db.transaction_immediate(|tx| {
-                tx.table("posts").insert(&["title"], &[&"a"])?;
-                panic!("boom");
-            });
-        }));
-        assert!(panicked.is_err());
-        assert!(db.with(|sql| sql.0.is_autocommit()));
-        assert_eq!(db.table("posts").count().unwrap(), 0);
+        each_engine(|db| {
+            db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
+                .unwrap();
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _: Result<()> = db.transaction_immediate(|tx| {
+                    tx.table("posts").insert_only(&["title"], &[&"a"])?;
+                    panic!("boom");
+                });
+            }));
+            assert!(panicked.is_err());
+            // Still inside the transaction, the insert would show on SQLite's
+            // one connection.
+            assert_eq!(db.table("posts").count().unwrap(), 0);
+            // A later transaction still works (and on Postgres, takes the lock).
+            db.transaction_immediate(|tx| tx.table("posts").insert_only(&["title"], &[&"b"]))
+                .unwrap();
+        });
     }
 
     // Two processes that read, then write: deferred ones can both hold a read
@@ -1398,7 +1665,7 @@ mod tests {
                     for _ in 0..10 {
                         db.transaction_immediate(|tx| {
                             let n = tx.table("hits").count()?;
-                            tx.table("hits").insert(&["n"], &[&n])
+                            tx.table("hits").insert_only(&["n"], &[&n])
                         })
                         .unwrap();
                     }
@@ -1407,6 +1674,115 @@ mod tests {
         });
         assert_eq!(Db::open(&config).table("hits").count().unwrap(), 40);
         let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn settings_read_the_postgres_keys() {
+        let settings = |text: &str| Settings::from_config(&Config::parse(text));
+        let sqlite = settings("");
+        assert_eq!(sqlite.database, "storage/database.sqlite");
+        assert_eq!((sqlite.url, sqlite.pool), (None, 10));
+        let parts = settings(
+            "DB_CONNECTION=pgsql\nDB_HOST=db.internal\nDB_PORT=6543\nDB_DATABASE=shop\nDB_USERNAME=al@ice\nDB_PASSWORD=p:ss/w\nDB_SSLMODE=require\nDB_SSLROOTCERT=/etc/ca.pem\nDB_POOL=4",
+        );
+        assert_eq!(
+            parts.url.as_deref(),
+            Some(
+                "postgres://al%40ice:p%3Ass%2Fw@db.internal:6543/shop?sslmode=require&sslrootcert=%2Fetc%2Fca.pem"
+            )
+        );
+        assert_eq!(parts.pool, 4);
+        let defaults = settings("DB_CONNECTION=pgsql\nDB_DATABASE=shop\nDB_USERNAME=app");
+        assert_eq!(
+            defaults.url.as_deref(),
+            Some("postgres://app:@127.0.0.1:5432/shop")
+        );
+        let url = settings(
+            "DB_CONNECTION=pgsql\nDATABASE_URL=postgres://u@h/d\nDB_HOST=ignored\nDB_POOL=nonsense",
+        );
+        assert_eq!(url.url.as_deref(), Some("postgres://u@h/d"));
+        assert_eq!(url.pool, 10);
+    }
+
+    #[cfg(not(feature = "postgres"))]
+    #[test]
+    fn pgsql_needs_the_postgres_feature() {
+        let settings = Settings::from_config(&Config::parse("DB_CONNECTION=pgsql\nDB_DATABASE=x"));
+        let stopped = std::panic::catch_unwind(|| Db::connect(&settings)).unwrap_err();
+        let message = stopped.downcast_ref::<String>().unwrap();
+        assert!(message.contains("`postgres` feature"), "{message}");
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn an_unreachable_postgres_stops_startup() {
+        let settings = |url: &str| Settings {
+            connection: "pgsql".into(),
+            database: String::new(),
+            url: Some(url.into()),
+            pool: 2,
+        };
+        // Port 1: nothing listens there.
+        let error = Db::try_connect(&settings(
+            "postgres://u:secret@127.0.0.1:1/d?sslmode=disable",
+        ))
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.starts_with("cannot open database 127.0.0.1:1/d"),
+            "{message}"
+        );
+        assert!(!message.contains("secret"), "{message}");
+        let error = Db::try_connect(&settings("mysql://nope")).unwrap_err();
+        assert!(error.to_string().contains("postgres://"), "{error}");
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn postgres_only_behaviour() {
+        let Some(db) = super::testing::postgres() else {
+            return;
+        };
+        let posts = Raw("0001", "CREATE TABLE posts (id INTEGER, n INTEGER)", "");
+        let error = db.migrate_user_version(0, &[&posts]).unwrap_err();
+        assert!(error.to_string().contains("SQLite only"), "{error}");
+
+        // Instances that migrate at startup take turns on the advisory lock.
+        std::thread::scope(|threads| {
+            for _ in 0..4 {
+                threads.spawn(|| db.migrate(&[&posts]).unwrap());
+            }
+        });
+        assert_eq!(count(&db, "SELECT count(*) FROM migrations"), 1);
+
+        // A read-then-write that would hand out duplicates without the lock.
+        std::thread::scope(|threads| {
+            for _ in 0..4 {
+                threads.spawn(|| {
+                    for _ in 0..10 {
+                        db.transaction_immediate(|tx| {
+                            let n = tx.table("posts").count()?;
+                            tx.table("posts").insert_only(&["n"], &[&n])
+                        })
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(count(&db, "SELECT count(DISTINCT n) FROM posts"), 40);
+
+        // A plain transaction does not take that lock.
+        db.transaction(|tx| tx.table("posts").insert_only(&["n"], &[&99]))
+            .unwrap();
+        // A failure inside a transaction rolls it back and frees its client.
+        let failed: Result<()> = db.transaction(|tx| {
+            tx.table("posts").insert_only(&["n"], &[&100])?;
+            tx.execute("NOT SQL", &[])?;
+            Ok(())
+        });
+        assert!(failed.unwrap_err().sqlstate() == Some("42601"));
+        assert_eq!(count(&db, "SELECT count(*) FROM posts WHERE n = 100"), 0);
+        assert_eq!(count(&db, "SELECT count(*) FROM posts WHERE n = 99"), 1);
     }
 
     #[test]
@@ -1444,6 +1820,8 @@ mod tests {
         let settings = |database: &std::path::Path, connection: &str| Settings {
             connection: connection.into(),
             database: database.display().to_string(),
+            url: None,
+            pool: 10,
         };
         let missing = folder.join("missing/database.sqlite");
         assert!(matches!(
@@ -1482,6 +1860,8 @@ mod tests {
         let settings = Settings {
             connection: "sqlite".into(),
             database: path.display().to_string(),
+            url: None,
+            pool: 10,
         };
         let mode = |db: &Db| {
             db.with(|sql| sql.query_row("PRAGMA journal_mode", &[], |row| row.get::<String>(0)))
@@ -1503,6 +1883,8 @@ mod tests {
         let settings = Settings {
             connection: "mysql".into(),
             database: folder.join("database.sqlite").display().to_string(),
+            url: None,
+            pool: 10,
         };
         let stopped = std::panic::catch_unwind(|| Db::connect(&settings)).unwrap_err();
         let message = stopped.downcast_ref::<String>().unwrap();

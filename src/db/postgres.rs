@@ -1,7 +1,7 @@
 //! A small Postgres client over std TCP: protocol 3.0, SCRAM-SHA-256,
 //! optional TLS, simple and extended queries in text format (ADR 0034).
 //!
-//! Not wired into [`Db`](super::Db) yet. Not included: MD5 and channel
+//! [`Db`](super::Db) uses it through `pool`. Not included: MD5 and channel
 //! binding, binary format, `COPY`, `LISTEN`, cancellation, prepared-statement
 //! caching, client certificates.
 
@@ -68,12 +68,14 @@ pub(crate) struct Config {
     /// A PEM file of CA certificates that replaces the web's roots (`verify-full`).
     pub(crate) root_cert: Option<String>,
     pub(crate) application_name: Option<String>,
+    /// Command-line style session settings, `-csearch_path=app` (the `options` startup parameter).
+    pub(crate) options: Option<String>,
     /// Connect, read and write timeout.
     pub(crate) timeout: Duration,
 }
 
 impl Config {
-    /// Reads `postgres://user:pass@host:port/db?sslmode=..&sslrootcert=..&application_name=..`.
+    /// Reads `postgres://user:pass@host:port/db?sslmode=..&sslrootcert=..&application_name=..&options=..`.
     /// User and password are percent-decoded. Unknown parameters are an error.
     pub(crate) fn parse_url(url: &str) -> Result<Self, String> {
         let rest = url
@@ -109,6 +111,7 @@ impl Config {
             sslmode: SslMode::default_for(host),
             root_cert: None,
             application_name: None,
+            options: None,
             timeout: Duration::from_secs(30),
         };
         if config.database.is_empty() {
@@ -121,6 +124,7 @@ impl Config {
                 "sslmode" => config.sslmode = SslMode::parse(&value)?,
                 "sslrootcert" => config.root_cert = Some(value),
                 "application_name" => config.application_name = Some(value),
+                "options" => config.options = Some(value),
                 other => return Err(format!("unsupported database URL parameter {other}")),
             }
         }
@@ -481,6 +485,9 @@ impl Client {
         ];
         if let Some(name) = &config.application_name {
             pairs.push(("application_name", name));
+        }
+        if let Some(options) = &config.options {
+            pairs.push(("options", options));
         }
         for (key, value) in pairs {
             body.extend(cstr(key));
@@ -918,6 +925,7 @@ mod tests {
             sslmode,
             root_cert: None,
             application_name: None,
+            options: None,
             timeout: Duration::from_secs(5),
         }
     }
@@ -1023,7 +1031,7 @@ mod tests {
 
     #[test]
     fn urls_are_parsed_and_percent_decoded() {
-        let c = Config::parse_url("postgres://al%40ice:p%3Ass%2Fw@db.example.com:6543/shop?sslmode=require&sslrootcert=%2Fetc%2Fca.pem&application_name=app").unwrap();
+        let c = Config::parse_url("postgres://al%40ice:p%3Ass%2Fw@db.example.com:6543/shop?sslmode=require&sslrootcert=%2Fetc%2Fca.pem&application_name=app&options=-csearch_path%3Dx").unwrap();
         assert_eq!((c.user.as_str(), c.password.as_str()), ("al@ice", "p:ss/w"));
         assert_eq!(
             (c.host.as_str(), c.port, c.database.as_str()),
@@ -1032,6 +1040,7 @@ mod tests {
         assert_eq!(c.sslmode, SslMode::Require);
         assert_eq!(c.root_cert.as_deref(), Some("/etc/ca.pem"));
         assert_eq!(c.application_name.as_deref(), Some("app"));
+        assert_eq!(c.options.as_deref(), Some("-csearch_path=x"));
 
         let c = Config::parse_url("postgresql://bob@localhost").unwrap();
         assert_eq!(

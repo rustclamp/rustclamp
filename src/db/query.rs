@@ -298,7 +298,7 @@ impl<'a> Query<'a> {
         self.with(|connection| match connection.dialect() {
             Dialect::Sqlite => {
                 connection.execute(&self.insert_sql(columns, Dialect::Sqlite, false), values)?;
-                Ok(connection.0.last_insert_rowid())
+                Ok(connection.last_insert_rowid())
             }
             Dialect::Postgres => connection.query_row(
                 &self.insert_sql(columns, Dialect::Postgres, true),
@@ -491,6 +491,7 @@ pub(super) fn name(identifier: &str) -> String {
 mod tests {
     use crate::config::Config;
     use crate::db::Db;
+    use crate::db::testing::each_engine;
 
     #[test]
     #[should_panic(expected = "not a table or column name")]
@@ -499,8 +500,15 @@ mod tests {
         let _ = db.table("posts").order_by("id; DROP TABLE posts");
     }
 
-    fn blog() -> Db {
-        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    /// Runs `test` on a blog database per engine.
+    fn on_blog(test: impl Fn(&Db)) {
+        each_engine(|db| {
+            blog(db);
+            test(db);
+        });
+    }
+
+    fn blog(db: &Db) {
         db.with(|sql| {
             sql.execute_batch(
                 "CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT, views INTEGER);
@@ -510,7 +518,6 @@ mod tests {
             )
         })
         .unwrap();
-        db
     }
 
     fn titles(query: super::Query<'_>) -> Vec<String> {
@@ -519,150 +526,159 @@ mod tests {
 
     #[test]
     fn where_in_binds_and_empty_matches_nothing() {
-        let db = blog();
-        let ids: [&dyn crate::db::Param; 2] = [&1, &3];
-        assert_eq!(titles(db.table("posts").where_in("id", &ids)), ["a", "c"]);
-        assert_eq!(db.table("posts").where_in("id", &[]).count().unwrap(), 0);
-        let quote = "1) OR (1=1";
-        assert_eq!(
-            db.table("posts")
-                .where_in("title", &[&quote])
-                .count()
-                .unwrap(),
-            0
-        );
-        // Later conditions keep their own values after the list.
-        assert_eq!(
-            titles(
+        on_blog(|db| {
+            let ids: [&dyn crate::db::Param; 2] = [&1, &3];
+            assert_eq!(titles(db.table("posts").where_in("id", &ids)), ["a", "c"]);
+            assert_eq!(db.table("posts").where_in("id", &[]).count().unwrap(), 0);
+            let quote = "1) OR (1=1";
+            assert_eq!(
                 db.table("posts")
-                    .where_in("id", &ids)
-                    .where_op("views", ">", &6)
-            ),
-            ["c"]
-        );
+                    .where_in("title", &[&quote])
+                    .count()
+                    .unwrap(),
+                0
+            );
+            // Later conditions keep their own values after the list.
+            assert_eq!(
+                titles(
+                    db.table("posts")
+                        .where_in("id", &ids)
+                        .where_op("views", ">", &6)
+                ),
+                ["c"]
+            );
+        });
     }
 
     #[test]
     fn exists_takes_a_subquery_with_bound_params() {
-        let db = blog();
-        let tagged = "SELECT 1 FROM tags WHERE tags.post_id = posts.id AND tags.name = ?";
-        assert_eq!(
-            titles(db.table("posts").where_exists(tagged, &[&"sql"])),
-            ["B"]
-        );
-        assert_eq!(
-            titles(
-                db.table("posts")
-                    .where_not_exists(tagged, &[&"rust"])
-                    .order_by("id")
-            ),
-            ["c"]
-        );
-        assert_eq!(
-            titles(
-                db.table("posts")
-                    .where_exists(tagged, &[&"rust"])
-                    .where_op("views", ">", &10)
-            ),
-            ["B"]
-        );
+        on_blog(|db| {
+            let tagged = "SELECT 1 FROM tags WHERE tags.post_id = posts.id AND tags.name = ?";
+            assert_eq!(
+                titles(db.table("posts").where_exists(tagged, &[&"sql"])),
+                ["B"]
+            );
+            assert_eq!(
+                titles(
+                    db.table("posts")
+                        .where_not_exists(tagged, &[&"rust"])
+                        .order_by("id")
+                ),
+                ["c"]
+            );
+            assert_eq!(
+                titles(
+                    db.table("posts")
+                        .where_exists(tagged, &[&"rust"])
+                        .where_op("views", ">", &10)
+                ),
+                ["B"]
+            );
+        });
     }
 
     #[test]
     fn joins_and_raw_order() {
-        let db = blog();
-        let joined = || db.table("posts").join("tags", "tags.post_id", "posts.id");
-        assert_eq!(titles(joined().where_eq("tags.name", &"sql")), ["B"]);
-        assert_eq!(joined().count().unwrap(), 3);
-        let all = db
-            .table("posts")
-            .left_join("tags", "tags.post_id", "posts.id")
-            .where_null("tags.name");
-        assert_eq!(titles(all), ["c"]);
-        assert_eq!(
-            titles(db.table("posts").order_by_raw("lower(title) DESC")),
-            ["c", "B", "a"]
-        );
+        on_blog(|db| {
+            let joined = || db.table("posts").join("tags", "tags.post_id", "posts.id");
+            assert_eq!(titles(joined().where_eq("tags.name", &"sql")), ["B"]);
+            assert_eq!(joined().count().unwrap(), 3);
+            let all = db
+                .table("posts")
+                .left_join("tags", "tags.post_id", "posts.id")
+                .where_null("tags.name");
+            assert_eq!(titles(all), ["c"]);
+            assert_eq!(
+                titles(db.table("posts").order_by_raw("lower(title) DESC")),
+                ["c", "B", "a"]
+            );
+        });
     }
 
     #[test]
     fn update_takes_named_values() {
-        let db = blog();
-        let changed = db
-            .table("posts")
-            .where_eq("id", &2)
-            .update_values(&[("title", &"z"), ("views", &99)])
-            .unwrap();
-        assert_eq!(changed, 1);
-        let row = db
-            .table("posts")
-            .where_eq("id", &2)
-            .first(|r| Ok((r.get::<String>("title")?, r.get::<i64>("views")?)));
-        assert_eq!(row.unwrap(), Some(("z".to_owned(), 99)));
+        on_blog(|db| {
+            let changed = db
+                .table("posts")
+                .where_eq("id", &2)
+                .update_values(&[("title", &"z"), ("views", &99)])
+                .unwrap();
+            assert_eq!(changed, 1);
+            let row = db
+                .table("posts")
+                .where_eq("id", &2)
+                .first(|r| Ok((r.get::<String>("title")?, r.get::<i64>("views")?)));
+            assert_eq!(row.unwrap(), Some(("z".to_owned(), 99)));
+        });
     }
 
     #[test]
     fn paginate_counts_and_clamps() {
-        let db = blog();
-        let page = |n, per| {
-            db.table("posts")
-                .order_by("id")
-                .paginate(n, per, |row| row.get::<String>("title"))
-                .unwrap()
-        };
-        let first = page(0, 2);
-        assert_eq!(
-            (first.items.as_slice(), first.page),
-            (&["a".to_owned(), "B".to_owned()][..], 1)
-        );
-        assert_eq!(
-            (first.previous(), first.next(), first.last_page()),
-            (None, Some(2), 2)
-        );
-        let last = page(2, 2);
-        assert_eq!((last.next(), last.items), (None, vec!["c".to_owned()]));
-        // Past the end: no rows, and "previous" points at the real last page.
-        let beyond = page(9, 2);
-        assert!(beyond.items.is_empty());
-        assert_eq!((beyond.previous(), beyond.total), (Some(2), 3));
-        // The count keeps the query's conditions.
-        let popular = db
-            .table("posts")
-            .where_op("views", ">", &6)
-            .paginate(1, 1, |row| row.get::<i64>("id"))
-            .unwrap();
-        assert_eq!((popular.total, popular.last_page()), (2, 2));
-        assert_eq!(
-            db.table("posts")
-                .order_by("id")
-                .offset(2)
-                .get(|r| r.get::<i64>("id"))
-                .unwrap(),
-            [3]
-        );
+        on_blog(|db| {
+            let page = |n, per| {
+                db.table("posts")
+                    .order_by("id")
+                    .paginate(n, per, |row| row.get::<String>("title"))
+                    .unwrap()
+            };
+            let first = page(0, 2);
+            assert_eq!(
+                (first.items.as_slice(), first.page),
+                (&["a".to_owned(), "B".to_owned()][..], 1)
+            );
+            assert_eq!(
+                (first.previous(), first.next(), first.last_page()),
+                (None, Some(2), 2)
+            );
+            let last = page(2, 2);
+            assert_eq!((last.next(), last.items), (None, vec!["c".to_owned()]));
+            // Past the end: no rows, and "previous" points at the real last page.
+            let beyond = page(9, 2);
+            assert!(beyond.items.is_empty());
+            assert_eq!((beyond.previous(), beyond.total), (Some(2), 3));
+            // The count keeps the query's conditions.
+            let popular = db
+                .table("posts")
+                .where_op("views", ">", &6)
+                .paginate(1, 1, |row| row.get::<i64>("id"))
+                .unwrap();
+            assert_eq!((popular.total, popular.last_page()), (2, 2));
+            assert_eq!(
+                db.table("posts")
+                    .order_by("id")
+                    .offset(2)
+                    .get(|r| r.get::<i64>("id"))
+                    .unwrap(),
+                [3]
+            );
+        });
     }
 
     #[test]
     #[should_panic(expected = "not a table or column name")]
     fn join_names_cannot_carry_sql() {
-        let db = blog();
-        let _ = db.table("posts").join("tags; DROP TABLE posts", "a", "b");
+        on_blog(|db| {
+            let _ = db.table("posts").join("tags; DROP TABLE posts", "a", "b");
+        });
     }
 
     #[test]
     fn values_are_bound_not_spliced() {
-        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
-        db.with(|sql| sql.execute_batch("CREATE TABLE posts (title TEXT)"))
-            .unwrap();
-        let sneaky = "x' OR '1'='1";
-        db.table("posts").insert(&["title"], &[&"real"]).unwrap();
-        assert_eq!(
+        each_engine(|db| {
+            db.with(|sql| sql.execute_batch("CREATE TABLE posts (title TEXT)"))
+                .unwrap();
+            let sneaky = "x' OR '1'='1";
             db.table("posts")
-                .where_eq("title", &sneaky)
-                .count()
-                .unwrap(),
-            0
-        );
+                .insert_only(&["title"], &[&"real"])
+                .unwrap();
+            assert_eq!(
+                db.table("posts")
+                    .where_eq("title", &sneaky)
+                    .count()
+                    .unwrap(),
+                0
+            );
+        });
     }
 
     #[test]
@@ -755,12 +771,30 @@ mod tests {
 
     #[test]
     fn insert_only_needs_no_id_column() {
-        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
-        db.with(|sql| sql.execute_batch("CREATE TABLE pairs (a INTEGER, b INTEGER)"))
-            .unwrap();
-        db.table("pairs")
-            .insert_only(&["a", "b"], crate::db::params![1, 2])
-            .unwrap();
-        assert_eq!(db.table("pairs").count().unwrap(), 1);
+        each_engine(|db| {
+            db.with(|sql| sql.execute_batch("CREATE TABLE pairs (a INTEGER, b INTEGER)"))
+                .unwrap();
+            db.table("pairs")
+                .insert_only(&["a", "b"], crate::db::params![1, 2])
+                .unwrap();
+            assert_eq!(db.table("pairs").count().unwrap(), 1);
+        });
+    }
+
+    #[test]
+    fn insert_returns_the_new_id_on_both_engines() {
+        each_engine(|db| {
+            let create = crate::db::Schema::create("things", |table| {
+                table.id();
+                table.string("name");
+            });
+            db.with(|sql| sql.execute_batch(create.render(db.dialect())))
+                .unwrap();
+            let things = db.table("things");
+            assert_eq!(things.insert(&["name"], &[&"a"]).unwrap(), 1);
+            assert_eq!(things.insert(&["name"], &[&"b"]).unwrap(), 2);
+            let in_tx = db.transaction(|tx| tx.table("things").insert(&["name"], &[&"c"]));
+            assert_eq!(in_tx.unwrap(), 3);
+        });
     }
 }

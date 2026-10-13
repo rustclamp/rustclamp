@@ -5,6 +5,8 @@
 use std::rc::Rc;
 
 use super::Dialect;
+#[cfg(feature = "postgres")]
+use super::dialect::to_postgres_placeholders;
 
 /// A database value, as bound to a statement or read from a column.
 #[derive(Debug, Clone, PartialEq)]
@@ -310,11 +312,21 @@ impl Row {
 
 /// The connection [`Db::with`](super::Db::with), [`Db::read`](super::Db::read)
 /// and a [`Tx`](super::Tx) lend. SQL marks are `?` (in order) or `?N` (the
-/// `N`th value, from 1).
+/// `N`th value, from 1), on either engine.
 #[derive(Clone, Copy)]
-// ponytail: SQLite only; step 2c of ADR 0034 makes this an enum with a
-// Postgres arm that runs `to_postgres_placeholders` over the SQL.
-pub struct Connection<'a>(pub(super) &'a rusqlite::Connection);
+pub struct Connection<'a>(pub(super) Inner<'a>);
+
+/// What a [`Connection`] lends: a SQLite connection, a Postgres client (behind
+/// a `RefCell`, since the wire client needs `&mut`), or the reason there is none.
+#[derive(Clone, Copy)]
+pub(super) enum Inner<'a> {
+    Sqlite(&'a rusqlite::Connection),
+    #[cfg(feature = "postgres")]
+    Postgres(&'a std::cell::RefCell<super::postgres::Client>),
+    /// The pool could not lend a client; every call returns this error.
+    #[cfg(feature = "postgres")]
+    Unavailable(&'a Error),
+}
 
 impl std::fmt::Debug for Connection<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -340,10 +352,66 @@ fn bind(params: &[&dyn Param]) -> impl rusqlite::Params {
     rusqlite::params_from_iter(params.iter().map(|param| param.to_value()))
 }
 
+#[cfg(feature = "postgres")]
+impl From<super::postgres::Error> for Error {
+    fn from(error: super::postgres::Error) -> Self {
+        use super::postgres::Error::{Connection, Server};
+        match error {
+            Server(server) => Self {
+                sqlstate: Some(server.code.clone()),
+                ..Self::new(Server(server).to_string())
+            },
+            Connection(message) => Self::new(message),
+        }
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl From<Value> for super::postgres::Datum {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::Null => Self::Null,
+            Value::Integer(n) => Self::Integer(n),
+            Value::Real(n) => Self::Real(n),
+            Value::Text(text) => Self::Text(text),
+            Value::Blob(bytes) => Self::Bytes(bytes),
+            Value::Bool(flag) => Self::Bool(flag),
+        }
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl From<super::postgres::Datum> for Value {
+    fn from(datum: super::postgres::Datum) -> Self {
+        use super::postgres::Datum;
+        match datum {
+            Datum::Null => Self::Null,
+            Datum::Integer(n) => Self::Integer(n),
+            Datum::Real(n) => Self::Real(n),
+            Datum::Text(text) => Self::Text(text),
+            Datum::Bytes(bytes) => Self::Blob(bytes),
+            Datum::Bool(flag) => Self::Bool(flag),
+        }
+    }
+}
+
 impl Connection<'_> {
     /// The engine this connection talks to.
     pub fn dialect(&self) -> Dialect {
-        Dialect::Sqlite
+        match self.0 {
+            Inner::Sqlite(_) => Dialect::Sqlite,
+            #[cfg(feature = "postgres")]
+            Inner::Postgres(_) | Inner::Unavailable(_) => Dialect::Postgres,
+        }
+    }
+
+    /// The id of the last row inserted on this SQLite connection.
+    pub(super) fn last_insert_rowid(&self) -> i64 {
+        match self.0 {
+            Inner::Sqlite(connection) => connection.last_insert_rowid(),
+            #[cfg(feature = "postgres")]
+            _ => unreachable!("Postgres inserts read RETURNING id"),
+        }
     }
 
     /// Runs one statement and returns how many rows it changed.
@@ -352,7 +420,11 @@ impl Connection<'_> {
     ///
     /// When the SQL fails.
     pub fn execute(&self, sql: &str, params: &[&dyn Param]) -> Result<usize> {
-        Ok(self.0.execute(sql, bind(params))?)
+        match self.0 {
+            Inner::Sqlite(connection) => Ok(connection.execute(sql, bind(params))?),
+            #[cfg(feature = "postgres")]
+            _ => Ok(self.run(sql, params)?.affected as usize),
+        }
     }
 
     /// Runs any number of `;`-separated statements, without parameters.
@@ -361,7 +433,13 @@ impl Connection<'_> {
     ///
     /// When any of them fails; the ones before it stay done.
     pub fn execute_batch(&self, sql: &str) -> Result<()> {
-        Ok(self.0.execute_batch(sql)?)
+        match self.0 {
+            Inner::Sqlite(connection) => Ok(connection.execute_batch(sql)?),
+            #[cfg(feature = "postgres")]
+            Inner::Postgres(client) => Ok(client.borrow_mut().execute_batch(sql)?),
+            #[cfg(feature = "postgres")]
+            Inner::Unavailable(error) => Err(error.clone()),
+        }
     }
 
     /// Every row `sql` returns, each turned into a `T` by `map`. For "the
@@ -404,6 +482,23 @@ impl Connection<'_> {
         map(&first.ok_or_else(|| Error::new("the query returned no rows"))?)
     }
 
+    /// One bound statement on Postgres, with the marks numbered `$N`.
+    #[cfg(feature = "postgres")]
+    fn run(&self, sql: &str, params: &[&dyn Param]) -> Result<super::postgres::Rows> {
+        let Inner::Postgres(client) = self.0 else {
+            let Inner::Unavailable(error) = self.0 else {
+                unreachable!("run is for Postgres")
+            };
+            return Err(error.clone());
+        };
+        let values: Vec<_> = params.iter().map(|param| param.to_value().into()).collect();
+        // The borrow ends with the statement: rows are buffered, so a `map`
+        // that queries again does not find the client taken.
+        Ok(client
+            .borrow_mut()
+            .query(&to_postgres_placeholders(sql), &values)?)
+    }
+
     /// Hands each row to `visit` while it returns `true`.
     fn each(
         &self,
@@ -412,7 +507,27 @@ impl Connection<'_> {
         mut visit: impl FnMut(Row) -> Result<bool>,
     ) -> Result<()> {
         use rusqlite::types::ValueRef;
-        let mut statement = self.0.prepare(sql)?;
+        #[cfg_attr(
+            not(feature = "postgres"),
+            allow(clippy::infallible_destructuring_match)
+        )]
+        let connection = match self.0 {
+            Inner::Sqlite(connection) => connection,
+            #[cfg(feature = "postgres")]
+            _ => {
+                let result = self.run(sql, params)?;
+                let columns: Rc<[String]> = result.columns.into();
+                for values in result.rows {
+                    let values = values.into_iter().map(Value::from).collect();
+                    let columns = columns.clone();
+                    if !visit(Row { columns, values })? {
+                        break;
+                    }
+                }
+                return Ok(());
+            }
+        };
+        let mut statement = connection.prepare(sql)?;
         let columns: Rc<[String]> = statement
             .column_names()
             .into_iter()
@@ -456,6 +571,7 @@ macro_rules! __db_params {
 #[cfg(test)]
 mod tests {
     use crate::config::Config;
+    use crate::db::testing::{each_engine, is_postgres};
     use crate::db::{Db, Error, FromColumn, Value, params};
 
     #[test]
@@ -518,21 +634,25 @@ mod tests {
 
     #[test]
     fn unique_violations_are_told_apart_on_both_engines() {
-        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
-        db.with(|sql| {
-            sql.execute_batch(
-                "CREATE TABLE t (id INTEGER PRIMARY KEY, n INTEGER UNIQUE, m INTEGER NOT NULL)",
-            )?;
-            sql.execute("INSERT INTO t VALUES (1, 1, 1)", &[])
-        })
-        .unwrap();
-        let fail = |sql: &str| db.with(|c| c.execute(sql, &[])).unwrap_err();
-        let unique = fail("INSERT INTO t VALUES (2, 1, 1)");
-        assert!(unique.is_unique_violation(), "{unique}");
-        assert!(fail("INSERT INTO t VALUES (1, 2, 1)").is_unique_violation());
-        assert!(!fail("INSERT INTO t VALUES (3, 3, NULL)").is_unique_violation());
-        assert!(!fail("NOT SQL").is_unique_violation());
-        assert_eq!(unique.sqlstate(), None);
+        each_engine(|db| {
+            db.with(|sql| {
+                sql.execute_batch(
+                    "CREATE TABLE t (id INTEGER PRIMARY KEY, n INTEGER UNIQUE, m INTEGER NOT NULL)",
+                )?;
+                sql.execute("INSERT INTO t VALUES (1, 1, 1)", &[])
+            })
+            .unwrap();
+            let fail = |sql: &str| db.with(|c| c.execute(sql, &[])).unwrap_err();
+            let unique = fail("INSERT INTO t VALUES (2, 1, 1)");
+            assert!(unique.is_unique_violation(), "{unique}");
+            assert!(fail("INSERT INTO t VALUES (1, 2, 1)").is_unique_violation());
+            let null = fail("INSERT INTO t VALUES (3, 3, NULL)");
+            assert!(!null.is_unique_violation(), "{null}");
+            assert!(!fail("NOT SQL").is_unique_violation());
+            let postgres = is_postgres(db);
+            assert_eq!(unique.sqlstate(), postgres.then_some("23505"));
+            assert_eq!(null.sqlstate(), postgres.then_some("23502"));
+        });
         let pg = Error {
             message: "duplicate key".into(),
             sqlstate: Some("23505".into()),
@@ -546,5 +666,42 @@ mod tests {
         };
         assert!(!other.is_unique_violation());
         assert!(!Error::new("local").is_unique_violation());
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn values_round_trip_on_postgres() {
+        let Some(db) = crate::db::testing::postgres() else {
+            return;
+        };
+        let id = crate::uuid::Uuid::v7();
+        db.with(|sql| {
+            // Parameters are sent untyped, so the server needs casts to type them.
+            let row = sql.query_row(
+                "SELECT ?1::bigint AS n, ?2::text AS t, ?3::boolean AS b, ?4::double precision AS r, ?5::bigint AS z, ?6::text AS u, ?7::bytea AS x",
+                params![7, "hi", true, 1.5, None::<i64>, id, vec![0u8, 255]],
+                |row| {
+                    Ok((
+                        row.get::<i64>("N")?,
+                        row.get::<String>(1)?,
+                        row.get::<bool>("b")?,
+                        row.get::<f64>("r")?,
+                        row.get::<Option<i64>>("z")?,
+                        row.get::<crate::uuid::Uuid>("u")?,
+                        row.get::<Value>("x")?,
+                    ))
+                },
+            )?;
+            assert_eq!(row, (7, "hi".into(), true, 1.5, None, id, Value::Blob(vec![0, 255])));
+            let error = sql
+                .query_row("SELECT 'x' AS n", &[], |row| row.get::<i64>("n"))
+                .unwrap_err();
+            assert!(error.to_string().starts_with("column n: expected"), "{error}");
+            // Marks in literals and comments are not parameters.
+            let marks = sql.query_row("SELECT '?' || ?1::text -- ?", params!["x"], |row| row.get::<String>(0))?;
+            assert_eq!(marks, "?x");
+            Ok::<_, Error>(())
+        })
+        .unwrap();
     }
 }

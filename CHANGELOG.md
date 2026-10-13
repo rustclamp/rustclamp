@@ -4,9 +4,35 @@
 
 ### Added
 
-- Dialect-aware SQL for Postgres (ADR 0034, step 2a of 3; #121). SQLite is
-  still the only engine that runs; Postgres SQL is generated and tested, not
-  executed yet.
+- Postgres behind `Db` (ADR 0034, step 2c of 3; #121). With the `postgres`
+  feature, `DB_CONNECTION=pgsql` opens a pool of Postgres connections instead
+  of a SQLite file, and `Db`, `Query`, `Schema`, `Model`, `Db::migrate` and
+  transactions run on it unchanged.
+  - Config: `DATABASE_URL`, or `DB_HOST`, `DB_PORT` (5432), `DB_DATABASE`,
+    `DB_USERNAME`, `DB_PASSWORD`, `DB_SSLMODE` (`disable`, `require`,
+    `verify-full`; the default is `verify-full` off localhost),
+    `DB_SSLROOTCERT` and `DB_POOL` (10). `db::Settings` gains `url` and `pool`;
+    `Settings::from_config` reads them, and the web template's
+    `app/config/database.rs` now calls it. Without the feature, `pgsql` stops
+    the app at startup with an error naming it.
+  - Pool: idle clients in a `Vec`, opened on demand up to `DB_POOL`, a 5 s
+    wait for a free one and then an error, a broken client dropped instead
+    of returned. `Db::read` uses it too; a transaction holds one client.
+  - `Db::transaction` is `BEGIN`/`COMMIT`/`ROLLBACK`; `transaction_immediate`
+    also takes `pg_advisory_xact_lock`. `Db::migrate` holds
+    `pg_advisory_lock` for the run and creates `migrations` with an identity
+    `id`. `migrate_user_version` is SQLite only and returns an error.
+  - `db::Error::sqlstate()` is set from the server's error, so
+    `is_unique_violation()` works on both engines.
+  - Tests for `Db`, `Query`, `Schema` and `Model` run on both engines through
+    one helper; CI starts `postgres:17-alpine` and sets
+    `RUSTCLAMP_TEST_DATABASE_URL`.
+  - Not yet (step 3): the framework's own tables (`jobs`, `failed_jobs`,
+    `mail_outbox`, `sessions`, `state_history`, auth) are still created with
+    SQLite DDL, the queue's `SKIP LOCKED` claim and the mail daily-cap claim.
+    `Db::seed` runs seeders without a surrounding transaction on Postgres.
+- Dialect-aware SQL for Postgres (ADR 0034, step 2a of 3; #121). Step 2a
+  only generated the SQL; step 2c runs it.
   - `db::Dialect`, `Db::dialect()` and `Connection::dialect()`.
   - `Schema::create`/`::table` render for both dialects (ids as identity
     columns, `BIGINT`, `DOUBLE PRECISION`, `BOOLEAN`, `to_char(now() ..)`
@@ -21,11 +47,13 @@
   - Empty `where_in` writes `1 = 0` instead of `0`, which Postgres rejects.
 - `postgres` feature: a std-only Postgres wire client in `db` (protocol 3.0,
   SCRAM-SHA-256, TLS with `require` or `verify-full`, extended queries in text
-  format), ADR 0034 step 2b of #121. Not yet usable from `Db`; it adds no
-  crates beyond those `crypto` and `mail` already use.
+  format), ADR 0034 step 2b of #121; it adds no crates beyond those `crypto` and
+  `mail` already use.
 
 ### Changed (breaking)
 
+- `db::Settings` has two more fields, `url` and `pool` (step 2c). Build it
+  with `Settings::from_config(config)` instead of a struct literal.
 - `Migration::up` and `down` return `db::Sql` instead of `String` (ADR 0034,
   step 2a). `Schema::create`, `::table` and `::drop` return it, so a migration
   built from them only changes its signature: `fn up(&self) -> Sql`
