@@ -405,6 +405,16 @@ impl Connection<'_> {
         }
     }
 
+    /// Whether this Postgres connection's transaction failed and can only be
+    /// rolled back; SQLite keeps going after a failed statement.
+    pub(super) fn aborted(&self) -> bool {
+        match self.0 {
+            #[cfg(feature = "postgres")]
+            Inner::Postgres(client) => client.borrow().aborted(),
+            _ => false,
+        }
+    }
+
     /// The id of the last row inserted on this SQLite connection.
     pub(super) fn last_insert_rowid(&self) -> i64 {
         match self.0 {

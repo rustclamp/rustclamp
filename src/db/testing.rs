@@ -7,7 +7,8 @@ use crate::config::Config;
 
 /// A [`Db`] that cleans up after the test.
 pub(crate) struct TestDb {
-    db: Db,
+    /// Taken in `drop`, so the pool's connections close before the schema goes.
+    db: Option<Db>,
     #[cfg(feature = "postgres")]
     schema: Option<(super::postgres::Client, String)>,
 }
@@ -16,15 +17,18 @@ impl std::ops::Deref for TestDb {
     type Target = Db;
 
     fn deref(&self) -> &Db {
-        &self.db
+        self.db.as_ref().expect("a TestDb has its Db until dropped")
     }
 }
 
 #[cfg(feature = "postgres")]
 impl Drop for TestDb {
     fn drop(&mut self) {
-        if let Some((admin, schema)) = &mut self.schema {
-            let _ = admin.execute_batch(&format!("DROP SCHEMA {schema} CASCADE"));
+        drop(self.db.take());
+        if let Some((admin, schema)) = &mut self.schema
+            && let Err(error) = admin.execute_batch(&format!("DROP SCHEMA {schema} CASCADE"))
+        {
+            eprintln!("leaked test schema {schema}: {error}");
         }
     }
 }
@@ -32,7 +36,7 @@ impl Drop for TestDb {
 /// An in-memory SQLite database.
 pub(crate) fn sqlite() -> TestDb {
     TestDb {
-        db: Db::open(&Config::parse("DB_DATABASE=:memory:")),
+        db: Some(Db::open(&Config::parse("DB_DATABASE=:memory:"))),
         #[cfg(feature = "postgres")]
         schema: None,
     }
@@ -64,7 +68,7 @@ pub(crate) fn postgres() -> Option<TestDb> {
     })
     .expect("test database");
     Some(TestDb {
-        db,
+        db: Some(db),
         schema: Some((admin, schema)),
     })
 }

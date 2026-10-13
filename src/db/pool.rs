@@ -2,6 +2,7 @@
 //! clients in a mutex-guarded `Vec`, opened on demand up to a cap.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -53,10 +54,37 @@ impl Pool {
     /// Runs `work` on a pooled client. When none can be had, `work` gets a
     /// connection whose every call returns why.
     pub(super) fn with<T>(&self, work: impl FnOnce(&Connection<'_>) -> T) -> T {
-        match self.get() {
-            Ok(lease) => work(&lease.connection()),
-            Err(error) => work(&Connection(Inner::Unavailable(&error))),
+        let mut work = Some(work);
+        let run =
+            |connection: &Connection<'_>, _nested| (work.take().expect("runs once"))(connection);
+        match self.pinned(run) {
+            Ok(value) => value,
+            Err(error) => (work.take().expect("not run"))(&Connection(Inner::Unavailable(&error))),
         }
+    }
+
+    /// Runs `work` on one client, which every [`with`](Self::with) and
+    /// `pinned` on this thread meanwhile shares, so a transaction sees its
+    /// own nested `Db` calls. `work` is told whether it is that nested call.
+    /// Other threads, and `Db::blocking`'s, get clients of their own.
+    pub(super) fn pinned<T>(
+        &self,
+        work: impl FnOnce(&Connection<'_>, bool) -> T,
+    ) -> Result<T, Error> {
+        let here = PINNED.with(|pinned| {
+            pinned
+                .borrow()
+                .iter()
+                .find(|(pool, _)| std::ptr::eq(*pool, self))
+                .map(|(_, client)| client.clone())
+        });
+        if let Some(client) = here {
+            return Ok(work(&Connection(Inner::Postgres(&client)), true));
+        }
+        let lease = self.get()?;
+        PINNED.with(|pinned| pinned.borrow_mut().push((self, lease.client())));
+        let _unpin = Unpin(self);
+        Ok(work(&lease.connection(), false))
     }
 
     /// A client for as long as the lease lives; a transaction keeps it to its end.
@@ -102,27 +130,45 @@ impl Pool {
     }
 }
 
-/// A client taken from the [`Pool`]; goes back when dropped, unless it broke
-/// or a panic unwinds through it (its transaction state is then unknown, and
-/// closing it makes the server roll back).
+/// A client shared by one thread's nested `Db` calls.
+type Shared = Rc<RefCell<Client>>;
+
+thread_local! {
+    /// The client each pool lent this thread's current `Db` call or transaction.
+    static PINNED: RefCell<Vec<(*const Pool, Shared)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Ends [`Pool::pinned`]'s sharing, also when `work` panics.
+struct Unpin<'a>(&'a Pool);
+
+impl Drop for Unpin<'_> {
+    fn drop(&mut self) {
+        PINNED.with(|pinned| {
+            pinned
+                .borrow_mut()
+                .retain(|(pool, _)| !std::ptr::eq(*pool, self.0));
+        });
+    }
+}
+
+/// A client taken from the [`Pool`]; goes back when dropped, unless it broke,
+/// a panic unwinds through it, or a `ROLLBACK` of a transaction left open
+/// fails (its state is then unknown, and closing it makes the server roll back).
 pub(super) struct Lease<'a> {
     pool: &'a Pool,
-    client: Option<RefCell<Client>>,
+    client: Option<Rc<RefCell<Client>>>,
 }
 
 impl<'a> Lease<'a> {
     fn new(pool: &'a Pool, client: Client) -> Self {
         Self {
             pool,
-            client: Some(RefCell::new(client)),
+            client: Some(Rc::new(RefCell::new(client))),
         }
     }
 
-    /// Whether the client is inside a transaction an earlier call began.
-    pub(super) fn in_transaction(&self) -> bool {
-        self.client
-            .as_ref()
-            .is_some_and(|client| client.borrow().in_transaction())
+    fn client(&self) -> Shared {
+        self.client.clone().expect("a lease holds its client")
     }
 
     pub(super) fn connection(&self) -> Connection<'_> {
@@ -133,13 +179,19 @@ impl<'a> Lease<'a> {
 
 impl Drop for Lease<'_> {
     fn drop(&mut self) {
-        let Some(client) = self.client.take().map(RefCell::into_inner) else {
-            return;
+        // Only this lease holds the client by now: `Unpin` ran before it.
+        let client = self
+            .client
+            .take()
+            .and_then(|client| Rc::try_unwrap(client).ok());
+        let Some(mut client) = client.map(RefCell::into_inner) else {
+            return self.pool.forget_one();
         };
-        if client.is_broken() || std::thread::panicking() {
-            drop(client);
-            self.pool.forget_one();
-        } else {
+        // A transaction `work` left open (a raw `BEGIN`) must not reach the next caller.
+        let clean = !client.is_broken()
+            && !std::thread::panicking()
+            && (!client.in_transaction() || client.execute_batch("ROLLBACK").is_ok());
+        if clean && !client.is_broken() {
             let mut state = self
                 .pool
                 .state
@@ -147,6 +199,9 @@ impl Drop for Lease<'_> {
                 .unwrap_or_else(PoisonError::into_inner);
             state.idle.push(client);
             self.pool.freed.notify_one();
+        } else {
+            drop(client);
+            self.pool.forget_one();
         }
     }
 }
@@ -233,5 +288,49 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn a_transaction_left_open_is_rolled_back_before_reuse() {
+        let Some(pool) = pool(1, Duration::from_secs(1)) else {
+            return;
+        };
+        let assigned = |pool: &Pool| {
+            pool.with(|c| {
+                c.query_row(
+                    "SELECT pg_current_xact_id_if_assigned() IS NOT NULL",
+                    &[],
+                    |r| r.get::<bool>(0),
+                )
+            })
+            .unwrap()
+        };
+        pool.with(|c| c.execute_batch("BEGIN; SELECT pg_current_xact_id()"))
+            .unwrap();
+        assert!(
+            !assigned(&pool),
+            "the next caller must not inherit the transaction"
+        );
+        assert_eq!(open(&pool), 1);
+    }
+
+    #[test]
+    fn nested_calls_share_the_client_even_in_a_pool_of_one() {
+        let Some(pool) = pool(1, Duration::from_millis(200)) else {
+            return;
+        };
+        let result = pool.pinned(|outer, nested| {
+            assert!(!nested);
+            outer.execute_batch("BEGIN").unwrap();
+            let inside = pool.with(|c| c.query_row("SELECT 1", &[], |r| r.get::<i64>(0)));
+            pool.pinned(|_, nested| assert!(nested)).unwrap();
+            // A thread of its own does not get the pinned client.
+            let other =
+                std::thread::scope(|threads| threads.spawn(|| pool.get().is_err()).join().unwrap());
+            outer.execute_batch("ROLLBACK").unwrap();
+            (inside.unwrap(), other)
+        });
+        assert_eq!(result.unwrap(), (1, true));
+        pool.get().unwrap();
     }
 }

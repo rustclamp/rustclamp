@@ -312,8 +312,8 @@ impl Write for Io {
 pub(crate) struct Client {
     io: BufReader<Io>,
     broken: bool,
-    /// From the last `ReadyForQuery`: inside a transaction block, failed or not.
-    in_transaction: bool,
+    /// The last `ReadyForQuery` status: `I` idle, `T` in a transaction, `E` in a failed one.
+    status: u8,
 }
 
 impl Client {
@@ -369,7 +369,7 @@ impl Client {
         let mut client = Self {
             io: BufReader::new(io),
             broken: false,
-            in_transaction: false,
+            status: b'I',
         };
         if let Err(e) = client.startup(config, nonce) {
             client.broken = true; // no Terminate to a server that never finished the handshake
@@ -380,7 +380,13 @@ impl Client {
 
     /// Whether a transaction is open (`BEGIN` ran, `COMMIT` or `ROLLBACK` has not).
     pub(crate) fn in_transaction(&self) -> bool {
-        self.in_transaction
+        self.status != b'I'
+    }
+
+    /// Whether the open transaction failed: every statement is refused until
+    /// `ROLLBACK`, and `COMMIT` quietly rolls back.
+    pub(crate) fn aborted(&self) -> bool {
+        self.status == b'E'
     }
 
     /// Whether an I/O or protocol error left the connection unusable.
@@ -478,7 +484,7 @@ impl Client {
                     error.get_or_insert(parse_error(&body));
                 }
                 b'Z' => {
-                    self.in_transaction = body.first() != Some(&b'I');
+                    self.status = body.first().copied().unwrap_or(b'I');
                     return match error {
                         Some(e) => Err(Error::Server(e)),
                         None => Ok(result),
@@ -1508,7 +1514,7 @@ mod tests {
             Client {
                 io,
                 broken: true,
-                in_transaction: false,
+                status: b'I',
             },
             peer,
         )

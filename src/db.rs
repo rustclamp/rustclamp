@@ -558,8 +558,12 @@ impl Db {
     /// On SQLite the write lock is taken at the first write, so two
     /// transactions that both read and then write can meet a "database is
     /// locked" error; use [`Db::transaction_immediate`] for those. On Postgres
-    /// the transaction holds one pooled connection until it ends, and a `Db`
-    /// call inside `work` runs on another one, outside the transaction.
+    /// the transaction holds one pooled connection until it ends, and `Db`
+    /// calls `work` makes on the same thread share it, but a spawned thread, or
+    /// [`Db::blocking`], gets a connection of its own, outside the transaction.
+    /// Postgres refuses every statement after a failed one, so if `work` ignores
+    /// an error and returns `Ok`, the transaction is rolled back and the call
+    /// returns an error; SQLite would keep the rest.
     ///
     /// ```
     /// use rustclamp::config::Config;
@@ -827,10 +831,17 @@ impl Db {
     pub fn seed(&self, seeders: &[&dyn Seeder]) -> Result<(), SeedError> {
         // ponytail: the transaction spans several `with` calls on the shared
         // connection, so run seeders from the console, not while serving.
-        // On Postgres the pool lends the most recently returned client first,
-        // so these sequential calls meet the same one; another thread using
-        // the `Db` meanwhile could be handed it, mid-transaction.
+        // On Postgres the seeder's `Db` calls on this thread share the
+        // transaction's client; calls from other threads do not.
         for seeder in seeders {
+            #[cfg(feature = "postgres")]
+            if let Backend::Postgres(pool) = &self.backend {
+                pool.pinned(|connection, _| {
+                    connection.execute_batch("BEGIN")?;
+                    end_transaction(connection, seeder.run(self), "COMMIT", "ROLLBACK")
+                })??;
+                continue;
+            }
             self.with(|connection| connection.execute_batch("BEGIN"))?;
             match seeder.run(self) {
                 Ok(()) => self.with(|connection| connection.execute_batch("COMMIT"))?,
@@ -1173,13 +1184,33 @@ fn atomically<T, E: From<Error>>(
         return savepoint(connection, work);
     }
     connection.execute_batch("BEGIN")?;
-    match work(connection) {
+    end_transaction(connection, work(connection), "COMMIT", "ROLLBACK")
+}
+
+/// Ends a Postgres transaction (or savepoint) with `commit` when `result` is
+/// `Ok`, else with `abort`. An `Ok` after an error `work` caught and ignored
+/// is not kept: the server refuses everything in a failed transaction, and a
+/// `COMMIT` would roll back without an error.
+fn end_transaction<T, E: From<Error>>(
+    connection: &Connection<'_>,
+    result: Result<T, E>,
+    commit: &str,
+    abort: &str,
+) -> Result<T, E> {
+    match result {
+        Ok(_) if connection.aborted() => {
+            let _ = connection.execute_batch(abort);
+            Err(
+                Error::new("the transaction was rolled back: a statement in it failed earlier")
+                    .into(),
+            )
+        }
         Ok(value) => {
-            connection.execute_batch("COMMIT")?;
+            connection.execute_batch(commit)?;
             Ok(value)
         }
         Err(error) => {
-            let _ = connection.execute_batch("ROLLBACK");
+            let _ = connection.execute_batch(abort);
             Err(error)
         }
     }
@@ -1187,42 +1218,34 @@ fn atomically<T, E: From<Error>>(
 
 /// [`Db::transaction`] on a pooled Postgres connection: `BEGIN`, `COMMIT` on
 /// `Ok`, `ROLLBACK` on `Err`; a panic drops the connection, which rolls back.
-/// A client already in a transaction (a seeder's, see [`Db::seed`]) gets a
-/// savepoint instead, as SQLite does.
+/// The client is shared with the `Db` calls `work` makes on this thread, and
+/// a transaction started inside one (a seeder's) is a savepoint, as on SQLite.
 #[cfg(feature = "postgres")]
 fn postgres_transaction<T, E: From<Error>>(
     pool: &pool::Pool,
     immediate: bool,
     work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
 ) -> Result<T, E> {
-    let lease = pool.get()?;
-    let tx = Tx(lease.connection());
-    let (begin, commit, abort) = if lease.in_transaction() {
-        (
-            "SAVEPOINT clamp",
-            "RELEASE clamp",
-            "ROLLBACK TO clamp; RELEASE clamp",
-        )
-    } else {
-        ("BEGIN", "COMMIT", "ROLLBACK")
-    };
-    tx.execute_batch(begin)?;
-    let result = (|| {
-        if immediate {
-            tx.execute_batch(&format!("SELECT pg_advisory_xact_lock({IMMEDIATE_LOCK})"))?;
-        }
-        work(&tx)
-    })();
-    match result {
-        Ok(value) => {
-            tx.execute_batch(commit)?;
-            Ok(value)
-        }
-        Err(error) => {
-            let _ = tx.execute_batch(abort);
-            Err(error)
-        }
-    }
+    pool.pinned(|connection, nested| {
+        let (begin, commit, abort) = if nested {
+            (
+                "SAVEPOINT clamp",
+                "RELEASE clamp",
+                "ROLLBACK TO clamp; RELEASE clamp",
+            )
+        } else {
+            ("BEGIN", "COMMIT", "ROLLBACK")
+        };
+        connection.execute_batch(begin)?;
+        let tx = Tx(*connection);
+        let result = (|| {
+            if immediate {
+                tx.execute_batch(&format!("SELECT pg_advisory_xact_lock({IMMEDIATE_LOCK})"))?;
+            }
+            work(&tx)
+        })();
+        end_transaction(connection, result, commit, abort)
+    })?
 }
 
 // ponytail: the keys are per database, not per schema, so two apps sharing
@@ -1613,6 +1636,72 @@ mod tests {
             assert!(db.seed(&[&Nested, &Posts("NOT SQL")]).is_err());
             assert_eq!(count(db, "SELECT count(*) FROM posts"), 4);
         });
+    }
+
+    /// Inserts through a plain `Db` call, then fails.
+    struct InsertThenFail;
+
+    impl Seeder for InsertThenFail {
+        fn run(&self, db: &Db) -> Result<(), SeedError> {
+            db.with(|c| c.execute("INSERT INTO posts (title) VALUES ('nested')", &[]))?;
+            Err("no".into())
+        }
+    }
+
+    /// Hits an error and carries on, as an `is_unique_violation` check would.
+    #[cfg(feature = "postgres")]
+    struct SwallowsAnError;
+
+    #[cfg(feature = "postgres")]
+    impl Seeder for SwallowsAnError {
+        fn run(&self, db: &Db) -> Result<(), SeedError> {
+            db.table("posts").insert_only(&["title"], &[&"x"])?;
+            let _ = db.with(|c| c.execute("NOT SQL", &[]));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn db_calls_inside_a_failing_seeder_are_rolled_back_with_it() {
+        each_engine(|db| {
+            db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
+                .unwrap();
+            assert!(db.seed(&[&InsertThenFail]).is_err());
+            assert_eq!(count(db, "SELECT count(*) FROM posts"), 0);
+        });
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn postgres_refuses_to_commit_after_a_swallowed_error() {
+        let Some(db) = super::testing::postgres() else {
+            return;
+        };
+        db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
+            .unwrap();
+        let swallowed: Result<()> = db.transaction(|tx| {
+            tx.table("posts").insert_only(&["title"], &[&"a"])?;
+            let _ = tx.execute("NOT SQL", &[]);
+            Ok(())
+        });
+        let error = swallowed.unwrap_err();
+        assert!(error.to_string().contains("rolled back"), "{error}");
+        assert_eq!(count(&db, "SELECT count(*) FROM posts"), 0);
+        // The same inside a savepoint: only the inner one is undone.
+        let outer: Result<()> = db.transaction(|tx| {
+            tx.table("posts").insert_only(&["title"], &[&"kept"])?;
+            let inner: Result<()> = db.transaction(|inner| {
+                inner.table("posts").insert_only(&["title"], &[&"b"])?;
+                let _ = inner.execute("NOT SQL", &[]);
+                Ok(())
+            });
+            assert!(inner.is_err());
+            Ok(())
+        });
+        outer.unwrap();
+        assert_eq!(count(&db, "SELECT count(*) FROM posts"), 1);
+        assert!(db.seed(&[&SwallowsAnError]).is_err());
+        assert_eq!(count(&db, "SELECT count(*) FROM posts"), 1);
     }
 
     #[test]
