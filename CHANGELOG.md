@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- `postgres` feature: a std-only Postgres wire client in `db` (protocol 3.0,
+  SCRAM-SHA-256, TLS with `require` or `verify-full`, extended queries in text
+  format), ADR 0034 step 2b of #121. Not yet usable from `Db`; it adds no
+  crates beyond those `crypto` and `mail` already use.
+
 ### Changed (breaking)
 
 - `rustclamp::db` names no engine in its API (ADR 0034, step 1 of 3; #121).
