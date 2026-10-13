@@ -49,6 +49,9 @@ queue = ["web", "db"]
 # Optional scheduled tasks (`rustclamp::schedule`, ADR 0035): `schedule:run`
 # from cron, or a thread beside the server outside production.
 schedule = ["web", "db"]
+# Optional Postgres for `rustclamp::db` (ADR 0034): a std-only wire client over TCP,
+# behind `DB_CONNECTION=pgsql`.
+postgres = ["db", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom", "dep:rustls", "dep:webpki-roots"]
 crypto = ["config", "dep:argon2", "dep:chacha20poly1305", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom"]
 
 [[example]]

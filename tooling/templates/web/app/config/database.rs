@@ -6,13 +6,9 @@ use rustclamp::db::Settings;
 
 /// Which database to open. Change it in `.env`, not here.
 pub fn database(config: &Config) -> Settings {
-    Settings {
-        // `DB_CONNECTION`: the engine; only `sqlite` so far.
-        connection: config.get("DB_CONNECTION").unwrap_or("sqlite").into(),
-        // `DB_DATABASE`: the SQLite file, or `:memory:`.
-        database: config
-            .get("DB_DATABASE")
-            .unwrap_or("storage/database.sqlite")
-            .into(),
-    }
+    // `DB_CONNECTION`: `sqlite` (`DB_DATABASE`: the file, or `:memory:`), or
+    // `pgsql` with rustclamp's `postgres` feature (`DATABASE_URL`, or
+    // `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`,
+    // `DB_SSLMODE`, `DB_SSLROOTCERT`; `DB_POOL` caps the connections).
+    Settings::from_config(config)
 }

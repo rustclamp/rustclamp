@@ -70,7 +70,7 @@ Packages made with `clamp init --package` bring their own routes, views and
 tests; add one with `.package(...)` in `app/lib.rs`, and override its views in
 `app/resources/views/vendor/{package}/`.
 The database is `rustclamp::db`, the `db` feature: SQLite compiled in, opened
-from `DB_CONNECTION` and `DB_DATABASE`. Handlers reach it with `request.db()`;
+from `DB_CONNECTION` and `DB_DATABASE` (Postgres with the `postgres` feature: see `.env.example`). Handlers reach it with `request.db()`;
 `#[derive(Model)]` with `#[model(table = "posts")]` maps a table to a struct, `request.db().table("posts")` builds queries and
 `Db::with` lends a `db::Connection` for raw SQL (`?`/`?N` marks, values from
 `db::params!`, rows read with `row.get::<T>("column")`).
@@ -81,7 +81,7 @@ struct is that name without the date, in `UpperCamelCase`.
 `app/database/migrations/2026_09_29_000001_create_posts.rs`:
 
 ```rust
-use rustclamp::db::{Migration, Schema, migration_name};
+use rustclamp::db::{Migration, Schema, Sql, migration_name};
 
 pub struct CreatePosts;
 
@@ -89,14 +89,14 @@ impl Migration for CreatePosts {
     fn name(&self) -> &'static str {
         migration_name(file!())
     }
-    fn up(&self) -> String {
+    fn up(&self) -> Sql {
         Schema::create("posts", |table| {
             table.id();
             table.string("title");
             table.timestamps();
         })
     }
-    fn down(&self) -> String {
+    fn down(&self) -> Sql {
         Schema::drop("posts")
     }
 }

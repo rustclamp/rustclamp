@@ -11,13 +11,25 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    # A real server for rustclamp::redis's live test; the other tests use fakes.
+    # Real servers: Redis for rustclamp::redis's live test, Postgres for the db tests
+    # (each test gets a schema of its own); the other tests use fakes.
     services:
       redis:
         image: redis:8-alpine
         ports: ["6379:6379"]
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       RUSTCLAMP_TEST_REDIS_URL: redis://127.0.0.1:6379/1
+      RUSTCLAMP_TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres?sslmode=disable
     steps:
       # tooling depends on ../../core and ../../kernel: check the repos out side by side.
       - uses: actions/checkout@v7
