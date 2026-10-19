@@ -351,6 +351,13 @@ ALLOWED = {
     'zmij',
     },
 }
+# Core's random source on Windows (`Reference::new`; Unix reads /dev/urandom):
+# getrandom and what it can pull in on any target. rand_core comes from the
+# facade's `sys_rng` feature through workspace feature unification.
+CORE_RANDOM = {"getrandom", "cfg-if", "libc", "r-efi", "rand_core"}
+for _name in ("rustclamp-core", "rustclamp-kernel", "rustclamp-runtime", "rustclamp-messaging",
+              "rustclamp-scheduler", "rustclamp-worker"):
+    ALLOWED[_name] |= CORE_RANDOM
 OPTIONAL = {
     "rustclamp-runtime": {"tokio"},
     "rustclamp-worker": {"tokio", "rustclamp-runtime", "rusqlite", "rumqttc"},
