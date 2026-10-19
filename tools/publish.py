@@ -3,12 +3,15 @@
 
 Without --execute this is a dry run: each crate is packaged and built with its
 unpublished siblings patched in from the sibling checkouts, so the whole set is
-checked before anything is uploaded. With --execute the crates are uploaded in
-order, unpatched; cargo waits for each one to reach the index before the next.
+checked before anything is uploaded. The dry run also runs cargo-semver-checks
+against each crate's latest crates.io release, so a breaking change cannot ship
+under a compatible version. With --execute the crates are uploaded in order,
+unpatched; cargo waits for each one to reach the index before the next.
 """
 
 import argparse
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -26,6 +29,8 @@ CRATES = (
     ("rustclamp", "rustclamp"),
     ("rustclamp-tooling", "rustclamp/tooling"),
 )
+# No library API for cargo-semver-checks: a proc-macro crate and a binary.
+NO_SEMVER = {"rustclamp-macros", "rustclamp-tooling"}
 
 
 def patches(root):
@@ -49,6 +54,8 @@ def main():
     if args.start and args.start not in names:
         parser.error(f"unknown crate {args.start}; one of {', '.join(names)}")
     crates = CRATES[names.index(args.start):] if args.start else CRATES
+    if not args.execute and not shutil.which("cargo-semver-checks"):
+        sys.exit("cargo-semver-checks is missing: sudo pacman -S cargo-semver-checks")
     for name, directory in crates:
         if not (root / directory / "Cargo.toml").is_file():
             parser.error(f"missing checkout: {root / directory}")
@@ -61,6 +68,12 @@ def main():
         status = subprocess.run(command, cwd=root / directory).returncode
         if not args.execute and locked is not None:
             lockfile.write_bytes(locked)
+        if status == 0 and not args.execute and name not in NO_SEMVER:
+            # Compares the public API with the latest release on crates.io.
+            status = subprocess.run(
+                ["cargo", "semver-checks", "--manifest-path", str(root / directory / "Cargo.toml")],
+                cwd=root / directory,
+            ).returncode
         if status != 0:
             sys.exit(f"{name} failed; fix it, then rerun with --from {name}")
     print(f"{len(crates)} crates {'published' if args.execute else 'ready to publish'}")

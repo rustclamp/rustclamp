@@ -40,7 +40,9 @@ To release:
 1. Run combined and isolated checks against exact dependency revisions, review the
    changelog and publishable file list with `cargo package --list`.
 2. `python3 tools/publish.py`: packages and builds every crate in dependency order,
-   with unpublished siblings patched in from their checkouts.
+   with unpublished siblings patched in from their checkouts, and runs
+   `cargo semver-checks` against each library's latest crates.io release. A
+   breaking change needs a major bump (a minor one during `0.x`).
 3. `python3 tools/publish.py --execute`: uploads in the same order; cargo waits for
    each crate to reach the index. After a failure, fix it and resume with
    `--from NAME`.
