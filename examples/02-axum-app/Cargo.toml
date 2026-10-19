@@ -10,9 +10,9 @@ resolver = "3"
 
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
-rustclamp-core = { version = "0.1.0", path = "../../../core" }
-rustclamp-http = { version = "0.1.0", path = "../../../http" }
-rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
+rustclamp-core = { version = "1.0.0", path = "../../../core" }
+rustclamp-http = { version = "1.0.0", path = "../../../http" }
+rustclamp-kernel = { version = "1.0.0", path = "../../../kernel" }
 tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 

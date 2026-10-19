@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "rustclamp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "argon2",
  "base64ct",
@@ -486,14 +486,14 @@ dependencies = [
 
 [[package]]
 name = "rustclamp-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.4.3",
 ]
 
 [[package]]
 name = "rustclamp-macros"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "proc-macro2",
  "quote",

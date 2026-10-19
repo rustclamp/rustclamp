@@ -46,12 +46,11 @@ combines presets for a kind of software into one binary
 for every command, including `clamp make:controller`, `clamp make:migration`, `clamp migrate` and
 `clamp inspect`.
 
-To use the facade directly, depend on it from Git (publishing to crates.io is
-disabled for now) and pick features:
+To use the facade directly, add it from crates.io and pick features:
 
 ```toml
 [dependencies]
-rustclamp = { git = "https://github.com/rustclamp/rustclamp", branch = "main", features = ["web", "db"] }
+rustclamp = { version = "1", features = ["web", "db"] }
 ```
 
 Rust 1.96.1 is the tested minimum (edition 2024). Run the smallest example with

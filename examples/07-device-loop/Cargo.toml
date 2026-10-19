@@ -11,9 +11,9 @@ tokio-service = ["rustclamp-runtime/tokio"]
 tooling-inspection = ["dep:rustclamp-tooling"]
 
 [dependencies]
-rustclamp-core = { version = "0.1.0", path = "../../../core" }
-rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
-rustclamp-runtime = { version = "0.1.0", path = "../../../runtime" }
+rustclamp-core = { version = "1.0.0", path = "../../../core" }
+rustclamp-kernel = { version = "1.0.0", path = "../../../kernel" }
+rustclamp-runtime = { version = "1.0.0", path = "../../../runtime" }
 rustclamp-tooling = { version = "0.5", path = "../../tooling", optional = true }
 
 [[example]]

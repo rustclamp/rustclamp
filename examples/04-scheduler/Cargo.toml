@@ -7,9 +7,9 @@ publish = false
 
 [dependencies]
 futures-executor = "0.3"
-rustclamp-core = { version = "0.1.0", path = "../../../core" }
-rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
-rustclamp-scheduler = { version = "0.1.0", path = "../../../scheduler" }
+rustclamp-core = { version = "1.0.0", path = "../../../core" }
+rustclamp-kernel = { version = "1.0.0", path = "../../../kernel" }
+rustclamp-scheduler = { version = "1.0.0", path = "../../../scheduler" }
 
 [[example]]
 name = "04-scheduler"

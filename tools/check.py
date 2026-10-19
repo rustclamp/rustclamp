@@ -476,7 +476,7 @@ def main():
                 name = "rustclamp" if repo == "rustclamp" else f"rustclamp-{repo}"
                 (consumer / "Cargo.toml").write_text(
                     '[package]\nname="external-consumer"\nversion="0.0.0"\nedition="2024"\n'
-                    f'[dependencies]\n{name}={{version="0.1", path="../isolated/{repo}"}}\n')
+                    f'[dependencies]\n{name}={{version="1", path="../isolated/{repo}"}}\n')
                 (consumer / "src/main.rs").write_text("fn main() {}\n")
                 run("cargo", "+1.96.1", "check", "--offline", cwd=consumer)
                 data = json.loads(subprocess.check_output(

@@ -7,10 +7,10 @@ publish = false
 
 [dependencies]
 futures-executor = "0.3"
-rustclamp-core = { version = "0.1.0", path = "../../../core" }
-rustclamp-kernel = { version = "0.1.0", path = "../../../kernel" }
-rustclamp-http = { version = "0.1.0", path = "../../../http", optional = true }
-rustclamp-postgres = { version = "0.1.0", path = "../../../postgres", optional = true }
+rustclamp-core = { version = "1.0.0", path = "../../../core" }
+rustclamp-kernel = { version = "1.0.0", path = "../../../kernel" }
+rustclamp-http = { version = "1.0.0", path = "../../../http", optional = true }
+rustclamp-postgres = { version = "1.0.0", path = "../../../postgres", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 futures-util = { version = "0.3", optional = true }
