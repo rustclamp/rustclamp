@@ -68,8 +68,8 @@ facade features, and a `main.rs` that runs the first one, or another by its
 subcommand (`serve`, `work`). Every other project gets
 `Procfile.dev` (`app: cargo run`) and a `cargo dev` alias for `cargo run`. `clamp dev` runs each `name: command`
 line of `Procfile.dev` at once with `[name]`-prefixed output; a command that
-fails stops the rest. All manifests use the RustClamp facade from its public Git repository so a
-starter app can build before the crates.io publication gate is cleared.
+fails stops the rest. All manifests depend on the RustClamp facade from crates.io as
+`rustclamp = "1"`.
 In a `--web` project, `clamp make:migration NAME` and `make:seeder NAME` add
 files that `build.rs` picks up; `make:controller`, `make:middleware`,
 `make:request` (a validated form struct) and `make:model` (a
