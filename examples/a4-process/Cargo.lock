@@ -274,6 +274,9 @@ dependencies = [
 [[package]]
 name = "rustclamp-core"
 version = "0.1.0"
+dependencies = [
+ "getrandom",
+]
 
 [[package]]
 name = "rustclamp-example-process"

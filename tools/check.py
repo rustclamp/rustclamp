@@ -228,12 +228,13 @@ def check_examples(root):
 
 def check_process_build_targets(root):
     manifest = root / "rustclamp/examples/a4-process/build-targets/Cargo.toml"
+    # Core with its Windows random source; metadata resolves every target.
+    core = {"rustclamp-core", "getrandom", "cfg-if", "libc", "r-efi"}
     modes = (
         ("runtime-selected", "runtime-selected", [["cli"], ["worker"]],
-         {"rustclamp-core", "rustclamp-kernel"}),
-        ("cli-target", "cli-target", [[]], {"rustclamp-core"}),
-        ("worker-target", "worker-target", [[]],
-         {"rustclamp-core", "rustclamp-kernel"}),
+         core | {"rustclamp-kernel"}),
+        ("cli-target", "cli-target", [[]], core),
+        ("worker-target", "worker-target", [[]], core | {"rustclamp-kernel"}),
     )
     run("cargo", "fmt", "--manifest-path", str(manifest), "--", "--check", cwd=root)
     for feature, binary, runs, expected_dependencies in modes:
