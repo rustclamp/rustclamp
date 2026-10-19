@@ -58,6 +58,13 @@ crypto = ["config", "dep:argon2", "dep:chacha20poly1305", "dep:sha2", "dep:hmac"
 name = "00-pico"
 path = "examples/00-pico/main.rs"
 
+# The phase 11 driver: admin area behind roles, contact mail through all three layers.
+[[example]]
+name = "blog"
+path = "examples/blog/main.rs"
+required-features = ["auth", "mail"]
+test = true
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "deny"

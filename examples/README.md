@@ -29,3 +29,11 @@ How Clamp itself is built, in dependency order.
 | [`a4-process`](a4-process/README.md) | Process projection, configuration isolation, inspection |
 | [`a5-lifecycle`](a5-lifecycle/README.md) | Startup, readiness, drain and cleanup |
 | [`a6-platform-neutral`](a6-platform-neutral/README.md) | Core in a `no_std + alloc` consumer |
+
+## Web apps
+
+Apps on the `rustclamp` facade itself, run with `cargo run --example NAME`.
+
+| Example | Shows |
+| --- | --- |
+| [`blog`](blog/main.rs) | Admin area behind login and roles (403 as 404, blocking, role changes); a contact form through the mail throttle, outbox and daily cap. `--features auth,mail` |
