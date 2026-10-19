@@ -42,10 +42,10 @@ def prepare(root):
         manifest = '[package]\nname="pico-cost-probe"\nversion="0.0.0"\nedition="2024"\npublish=false\n'
         manifest += '[workspace]\nresolver="3"\n' + PROFILE
         if name == "pico":
-            manifest += '[dependencies]\nrustclamp={version="0.1", path="../facade"}\n'
+            manifest += '[dependencies]\nrustclamp={version="1", path="../facade"}\n'
             source = REPO / "examples/00-pico/main.rs"
         elif name == "allocations":
-            manifest += '[dependencies]\nrustclamp={version="0.1", path="../facade", optional=true}\n[features]\nclamp=["dep:rustclamp"]\n'
+            manifest += '[dependencies]\nrustclamp={version="1", path="../facade", optional=true}\n[features]\nclamp=["dep:rustclamp"]\n'
             source = REPO / "benchmarks/fixtures/allocations.rs"
         else:
             source = REPO / "benchmarks/fixtures/plain.rs"

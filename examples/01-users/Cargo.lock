@@ -964,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "rustclamp-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.4.3",
 ]
@@ -991,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "rustclamp-http"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "bytes",
@@ -1005,14 +1005,14 @@ dependencies = [
 
 [[package]]
 name = "rustclamp-kernel"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rustclamp-core",
 ]
 
 [[package]]
 name = "rustclamp-postgres"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rustclamp-core",
  "sqlx",

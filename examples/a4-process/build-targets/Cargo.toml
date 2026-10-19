@@ -12,8 +12,8 @@ cli-target = []
 worker-target = ["dep:rustclamp-kernel"]
 
 [dependencies]
-rustclamp-core = { version = "0.1.0", path = "../../../../core" }
-rustclamp-kernel = { version = "0.1.0", path = "../../../../kernel", optional = true }
+rustclamp-core = { version = "1.0.0", path = "../../../../core" }
+rustclamp-kernel = { version = "1.0.0", path = "../../../../kernel", optional = true }
 
 [[bin]]
 name = "runtime-selected"

@@ -16,10 +16,10 @@ description = "Developer inspection commands for resolved Clamp process models."
 resolver = "3"
 
 [dependencies]
-rustclamp-core = { version = "0.1.0", path = "../../core" }
-rustclamp-kernel = { version = "0.1.0", path = "../../kernel" }
+rustclamp-core = { version = "1.0.0", path = "../../core" }
+rustclamp-kernel = { version = "1.0.0", path = "../../kernel" }
 serde_json = "1"
-rustclamp = { version = "0.1.0", path = "..", features = ["config", "crypto"] }
+rustclamp = { version = "1.0.0", path = "..", features = ["config", "crypto"] }
 
 [[bin]]
 name = "clamp"

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.0.0 - 2026-10-19
+
 ### Added
 
 - `examples/blog` (`cargo run --example blog --features auth,mail`): the
