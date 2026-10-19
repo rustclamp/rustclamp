@@ -6,7 +6,7 @@
 pub enum Dialect {
     /// SQLite: `?`/`?N` marks, `INTEGER PRIMARY KEY` ids.
     Sqlite,
-    /// Postgres: `$N` marks, identity ids. Not yet reachable from a [`Db`](super::Db).
+    /// Postgres: `$N` marks, identity ids.
     Postgres,
 }
 

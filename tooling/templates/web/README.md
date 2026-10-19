@@ -70,7 +70,7 @@ Packages made with `clamp init --package` bring their own routes, views and
 tests; add one with `.package(...)` in `app/lib.rs`, and override its views in
 `app/resources/views/vendor/{package}/`.
 The database is `rustclamp::db`, the `db` feature: SQLite compiled in, opened
-from `DB_CONNECTION` and `DB_DATABASE`. Handlers reach it with `request.db()`;
+from `DB_CONNECTION` and `DB_DATABASE` (Postgres with the `postgres` feature: see `.env.example`). Handlers reach it with `request.db()`;
 `#[derive(Model)]` with `#[model(table = "posts")]` maps a table to a struct, `request.db().table("posts")` builds queries and
 `Db::with` lends a `db::Connection` for raw SQL (`?`/`?N` marks, values from
 `db::params!`, rows read with `row.get::<T>("column")`).

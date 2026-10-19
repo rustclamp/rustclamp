@@ -396,7 +396,7 @@ impl Column {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::db::testing::each_engine;
     use crate::db::{Db, Migration};
 
     struct Up(&'static str, Sql);
@@ -414,8 +414,11 @@ mod tests {
     }
 
     #[test]
-    fn constraints_are_enforced_by_sqlite() {
-        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    fn constraints_are_enforced() {
+        each_engine(constraints_are_enforced_on);
+    }
+
+    fn constraints_are_enforced_on(db: &Db) {
         let create = |name, sql| Up(name, sql);
         let migrations = [
             create(
@@ -458,7 +461,6 @@ mod tests {
         let all: Vec<&dyn Migration> = migrations.iter().map(|m| m as &dyn Migration).collect();
         db.migrate(&all).unwrap();
         let run = |sql: &str| db.with(|c| c.execute(sql, &[]));
-        assert!(run("INSERT INTO users (age) VALUES (-1)").is_err(), "CHECK");
         run("INSERT INTO users (age) VALUES (30)").unwrap();
         run("INSERT INTO users (age) VALUES (31)").unwrap();
         run("DELETE FROM users WHERE id = 2").unwrap();
@@ -466,7 +468,7 @@ mod tests {
         let id: i64 = db
             .with(|c| c.query_row("SELECT max(id) FROM users", &[], |r| r.get(0)))
             .unwrap();
-        assert_eq!(id, 3, "AUTOINCREMENT does not reuse ids");
+        assert_eq!(id, 3, "ids are not reused");
         run("INSERT INTO memberships VALUES (1, 7)").unwrap();
         assert!(
             run("INSERT INTO memberships VALUES (1, 7)").is_err(),
@@ -485,6 +487,8 @@ mod tests {
             .with(|c| c.query_row("SELECT count(*) FROM memberships", &[], |r| r.get(0)))
             .unwrap();
         assert_eq!(memberships, 0, "CASCADE stays the default");
+        // Last: a refused insert still uses up a Postgres identity value.
+        assert!(run("INSERT INTO users (age) VALUES (-1)").is_err(), "CHECK");
     }
 
     #[test]
@@ -494,8 +498,11 @@ mod tests {
     }
 
     #[test]
-    fn schema_sql_runs_in_sqlite() {
-        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    fn schema_sql_runs() {
+        each_engine(schema_sql_runs_on);
+    }
+
+    fn schema_sql_runs_on(db: &Db) {
         let migrations = [
             Up(
                 "0001",
@@ -521,7 +528,7 @@ mod tests {
             Up(
                 "0003",
                 Schema::table("posts", |table| {
-                    table.boolean("published").default("0");
+                    table.boolean("published").default_bool(false);
                     table.index(&["published"]);
                 }),
             ),
@@ -664,8 +671,11 @@ CREATE INDEX posts_published_index ON posts (published);"
     }
 
     #[test]
-    fn default_now_and_bool_run_in_sqlite() {
-        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    fn default_now_and_bool_run() {
+        each_engine(default_now_and_bool_run_on);
+    }
+
+    fn default_now_and_bool_run_on(db: &Db) {
         db.migrate(&[&Up(
             "0001",
             Schema::create("flags", |table| {
