@@ -4,6 +4,11 @@
 
 ### Added
 
+- `examples/blog` (`cargo run --example blog --features auth,mail`): the
+  phase 11 driver on the facade. An admin area behind login and roles, with
+  tests for guests, 403 as 404, an app role (`editor`), blocking mid-session
+  and role changes; a contact form whose tests pass the mail throttle, the
+  outbox and the daily cap.
 - Postgres behind `Db` (ADR 0034, step 2c of 3; #121). With the `postgres`
   feature, `DB_CONNECTION=pgsql` opens a pool of Postgres connections instead
   of a SQLite file, and `Db`, `Query`, `Schema`, `Model`, `Db::migrate` and
