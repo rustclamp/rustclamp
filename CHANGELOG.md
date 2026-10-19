@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- `clamp init` (rustclamp-tooling 0.6.0) generates `rustclamp = { version = "1", ... }`
+  from crates.io instead of a git dependency on `main`, for normal and build
+  dependencies. `tools/check.py` tests the generated projects against the
+  checkout with the same requirement.
+
 ## 1.0.0 - 2026-10-19
 
 ### Added
