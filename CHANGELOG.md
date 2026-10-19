@@ -112,6 +112,9 @@
 
 ### Changed
 
+- Ready for crates.io: `publish = false` is gone and the manifest carries
+  homepage, documentation, keywords and categories. Nothing is uploaded until
+  rustclamp's `tools/publish.py --execute` runs.
 - Without `LOG_CHANNEL` (and no `app/config/logging.rs`), `Log` writes to
   stderr unless the working directory has a `storage/` folder, so a CLI or
   service started elsewhere no longer creates a stray `storage/logs/app.log`
