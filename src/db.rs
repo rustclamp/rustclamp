@@ -16,7 +16,7 @@
 //!
 //! ```
 //! use rustclamp::config::Config;
-//! use rustclamp::db::{Db, Migration, Schema, params};
+//! use rustclamp::db::{Db, Migration, Schema, Sql, params};
 //!
 //! struct CreatePosts;
 //!
@@ -24,14 +24,14 @@
 //!     fn name(&self) -> &'static str {
 //!         "2026_09_29_000001_create_posts"
 //!     }
-//!     fn up(&self) -> String {
+//!     fn up(&self) -> Sql {
 //!         Schema::create("posts", |table| {
 //!             table.id();
 //!             table.string("title");
 //!             table.timestamps();
 //!         })
 //!     }
-//!     fn down(&self) -> String {
+//!     fn down(&self) -> Sql {
 //!         Schema::drop("posts")
 //!     }
 //! }
@@ -52,10 +52,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use crate::config::Config;
 
 mod connection;
+mod dialect;
 mod query;
 mod schema;
 mod states;
 pub mod timestamp;
+pub use dialect::{Dialect, Sql};
 pub use query::{Page, Query};
 pub use schema::{Column, OnDelete, Schema, Table};
 pub use states::{Change, States, Transition};
@@ -80,7 +82,7 @@ pub struct Db {
 
 /// The engine behind a [`Db`].
 #[derive(Clone)]
-// ponytail: one engine; step 2 of ADR 0034 adds `Postgres(Pool)`.
+// ponytail: one engine; step 2c of ADR 0034 adds `Postgres(Pool)`.
 enum Backend {
     Sqlite {
         // `:memory:` relies on the single writer: every clone must see the
@@ -302,6 +304,13 @@ impl Db {
         })
     }
 
+    /// The SQL dialect of the engine behind this database.
+    pub fn dialect(&self) -> Dialect {
+        match self.backend {
+            Backend::Sqlite { .. } => Dialect::Sqlite,
+        }
+    }
+
     /// Runs `work` with the connection, holding it for the duration.
     pub fn with<T>(&self, work: impl FnOnce(&Connection<'_>) -> T) -> T {
         work(&Connection(&self.writer()))
@@ -514,7 +523,7 @@ impl Db {
                     continue;
                 }
                 savepoint(connection, |connection| {
-                    connection.execute_batch(&migration.up())?;
+                    connection.execute_batch(migration.up().render(connection.dialect()))?;
                     connection.execute(
                         "INSERT INTO migrations (name, batch) VALUES (?1, ?2)",
                         params![name, batch],
@@ -543,20 +552,20 @@ impl Db {
     ///
     /// ```
     /// use rustclamp::config::Config;
-    /// use rustclamp::db::{Db, Migration};
+    /// use rustclamp::db::{Db, Migration, Sql};
     ///
-    /// struct Sql(&'static str, &'static str);
-    /// impl Migration for Sql {
+    /// struct Raw(&'static str, &'static str);
+    /// impl Migration for Raw {
     ///     fn name(&self) -> &'static str { self.0 }
-    ///     fn up(&self) -> String { self.1.into() }
-    ///     fn down(&self) -> String { String::new() }
+    ///     fn up(&self) -> Sql { self.1.into() }
+    ///     fn down(&self) -> Sql { "".into() }
     /// }
     ///
     /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
     /// // An existing database that already has the first table.
     /// db.with(|sql| sql.execute_batch("CREATE TABLE posts (id INTEGER PRIMARY KEY)")).unwrap();
-    /// let first = Sql("0001", "CREATE TABLE posts (id INTEGER PRIMARY KEY);");
-    /// let second = Sql("0002", "CREATE TABLE tags (id INTEGER PRIMARY KEY);");
+    /// let first = Raw("0001", "CREATE TABLE posts (id INTEGER PRIMARY KEY);");
+    /// let second = Raw("0002", "CREATE TABLE tags (id INTEGER PRIMARY KEY);");
     /// db.migrate_user_version(1, &[&first, &second]).unwrap();
     /// assert_eq!(db.with(|sql| sql.query_row("PRAGMA user_version", &[], |r| r.get::<i64>(0))).unwrap(), 2);
     /// ```
@@ -591,7 +600,7 @@ impl Db {
             }
             for (index, migration) in migrations.iter().enumerate().skip(current as usize) {
                 savepoint(connection, |connection| {
-                    connection.execute_batch(&migration.up())?;
+                    connection.execute_batch(migration.up().render(connection.dialect()))?;
                     set_version(index as i64 + 1)
                 })?;
             }
@@ -675,7 +684,7 @@ impl Db {
                     .find(|migration| migration.name() == name)
                     .ok_or_else(|| format!("migration {name} ran but is not in the list"))?;
                 savepoint(connection, |connection| {
-                    connection.execute_batch(&migration.down())?;
+                    connection.execute_batch(migration.down().render(connection.dialect()))?;
                     connection.execute("DELETE FROM migrations WHERE name = ?1", &[&name])
                 })
                 .map_err(|error: Error| format!("{name}: {error}"))?;
@@ -853,10 +862,10 @@ impl Migration for Named {
     fn name(&self) -> &'static str {
         self.0
     }
-    fn up(&self) -> String {
+    fn up(&self) -> Sql {
         self.1.up()
     }
-    fn down(&self) -> String {
+    fn down(&self) -> Sql {
         self.1.down()
     }
 }
@@ -1004,9 +1013,9 @@ pub trait Migration {
         )
     }
     /// The SQL that applies the change, often [`Schema::create`].
-    fn up(&self) -> String;
+    fn up(&self) -> Sql;
     /// The SQL that undoes [`up`](Self::up), often [`Schema::drop`].
-    fn down(&self) -> String;
+    fn down(&self) -> Sql;
 }
 
 #[cfg(test)]
@@ -1059,18 +1068,25 @@ mod tests {
         );
     }
 
-    /// A migration from literal SQL.
-    struct Sql(&'static str, &'static str, &'static str);
+    #[test]
+    fn a_sqlite_file_speaks_the_sqlite_dialect() {
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        assert_eq!(db.dialect(), Dialect::Sqlite);
+        assert_eq!(db.with(|sql| sql.dialect()), Dialect::Sqlite);
+    }
 
-    impl Migration for Sql {
+    /// A migration from literal SQL.
+    struct Raw(&'static str, &'static str, &'static str);
+
+    impl Migration for Raw {
         fn name(&self) -> &'static str {
             self.0
         }
-        fn up(&self) -> String {
-            self.1.to_owned()
+        fn up(&self) -> Sql {
+            self.1.into()
         }
-        fn down(&self) -> String {
-            self.2.to_owned()
+        fn down(&self) -> Sql {
+            self.2.into()
         }
     }
 
@@ -1136,9 +1152,9 @@ mod tests {
 
     #[test]
     fn user_version_runs_pending_and_adopts_existing() {
-        let a = Sql("0001", "CREATE TABLE a (n INTEGER)", "");
-        let b = Sql("0002", "CREATE TABLE b (n INTEGER)", "");
-        let bad = Sql("0003", "CREATE TABLE c (n INTEGER); NOT SQL", "");
+        let a = Raw("0001", "CREATE TABLE a (n INTEGER)", "");
+        let b = Raw("0002", "CREATE TABLE b (n INTEGER)", "");
+        let bad = Raw("0003", "CREATE TABLE c (n INTEGER); NOT SQL", "");
         let version = |db: &Db| count(db, "PRAGMA user_version");
 
         let fresh = memory();
@@ -1166,7 +1182,7 @@ mod tests {
     #[test]
     fn migrations_run_once() {
         let db = memory();
-        let posts = Sql(
+        let posts = Raw(
             "0001",
             "CREATE TABLE posts (title TEXT)",
             "DROP TABLE posts",
@@ -1182,7 +1198,7 @@ mod tests {
     #[test]
     fn failed_migration_is_rolled_back_and_not_recorded() {
         let db = memory();
-        let broken = Sql("0001", "CREATE TABLE posts (title TEXT); NOT SQL", "");
+        let broken = Raw("0001", "CREATE TABLE posts (title TEXT); NOT SQL", "");
         assert!(db.migrate(&[&broken]).is_err());
         let tables: i64 = db
             .with(|sql| {
@@ -1199,17 +1215,17 @@ mod tests {
     #[test]
     fn rollback_undoes_the_last_batch_newest_first() {
         let db = memory();
-        let posts = Sql(
+        let posts = Raw(
             "0001",
             "CREATE TABLE posts (id INTEGER PRIMARY KEY)",
             "DROP TABLE posts",
         );
-        let tags = Sql(
+        let tags = Raw(
             "0002",
             "CREATE TABLE tags (post_id INTEGER REFERENCES posts (id))",
             "DROP TABLE tags",
         );
-        let views = Sql("0003", "CREATE TABLE views (n INTEGER)", "DROP TABLE views");
+        let views = Raw("0003", "CREATE TABLE views (n INTEGER)", "DROP TABLE views");
         db.migrate(&[&posts]).unwrap();
         db.migrate(&[&posts, &tags, &views]).unwrap();
         let all: [&dyn Migration; 3] = [&posts, &tags, &views];
@@ -1233,7 +1249,7 @@ mod tests {
     #[test]
     fn rollback_needs_every_migration_in_the_batch() {
         let db = memory();
-        db.migrate(&[&Sql(
+        db.migrate(&[&Raw(
             "0001",
             "CREATE TABLE posts (id INTEGER)",
             "DROP TABLE posts",
@@ -1256,7 +1272,7 @@ mod tests {
     #[test]
     fn seeding_commits_or_leaves_nothing() {
         let db = memory();
-        let posts = Sql(
+        let posts = Raw(
             "0001",
             "CREATE TABLE posts (title TEXT)",
             "DROP TABLE posts",
@@ -1268,7 +1284,7 @@ mod tests {
         assert_eq!(command(&db, "db:seed", &[&posts], &[&Posts("SELECT 1")]), 0);
         assert_eq!(count(&db, "SELECT count(*) FROM posts"), 2);
         assert_eq!(command(&db, "nope", &[], &[]), 2);
-        let pending = Sql("0002", "SELECT 1", "");
+        let pending = Raw("0002", "SELECT 1", "");
         assert_eq!(
             db.status(&[&posts, &pending]).unwrap(),
             [("0001", Some(1)), ("0002", None)]
@@ -1279,7 +1295,7 @@ mod tests {
     #[test]
     fn clones_share_the_database() {
         let db = memory();
-        db.migrate(&[&Sql("0001", "CREATE TABLE posts (title TEXT)", "")])
+        db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
             .unwrap();
         let other = db.clone();
         other
@@ -1324,7 +1340,7 @@ mod tests {
     #[test]
     fn transaction_queries_through_the_handle() {
         let db = memory();
-        db.migrate(&[&Sql("0001", "CREATE TABLE posts (title TEXT)", "")])
+        db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
             .unwrap();
         let failed: Result<()> = db.transaction(|tx| {
             tx.table("posts").insert(&["title"], &[&"a"])?;
@@ -1341,7 +1357,7 @@ mod tests {
     #[test]
     fn a_panic_in_a_transaction_leaves_none_open() {
         let db = memory();
-        db.migrate(&[&Sql("0001", "CREATE TABLE posts (title TEXT)", "")])
+        db.migrate(&[&Raw("0001", "CREATE TABLE posts (title TEXT)", "")])
             .unwrap();
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _: Result<()> = db.transaction_immediate(|tx| {
@@ -1368,7 +1384,7 @@ mod tests {
             folder.join("tx.sqlite").display()
         ));
         Db::open(&config)
-            .migrate(&[&Sql("0001", "CREATE TABLE hits (n INTEGER)", "")])
+            .migrate(&[&Raw("0001", "CREATE TABLE hits (n INTEGER)", "")])
             .unwrap();
         let start = std::sync::Barrier::new(4);
         std::thread::scope(|threads| {
