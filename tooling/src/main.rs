@@ -216,7 +216,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[dependencies]\nrustclamp = {{ git = \"https://github.com/rustclamp/rustclamp\", branch = \"main\"{features} }}\n"
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[dependencies]\nrustclamp = {{ version = \"1\"{features} }}\n"
             ),
         )
         .map_err(|error| format!("cannot write manifest: {error}"))?;
@@ -655,7 +655,7 @@ fn create_web(root: &std::path::Path, name: &str, frontend: Option<&str>) -> Res
     let mut cargo_toml =
         fs::read_to_string(&manifest).map_err(|error| format!("cannot read manifest: {error}"))?;
     cargo_toml.push_str(&format!(
-        "\n[build-dependencies]\nrustclamp = {{ git = \"https://github.com/rustclamp/rustclamp\", branch = \"main\", features = [\"build\"] }}\n\n[lib]\npath = \"app/lib.rs\"\n\n[[bin]]\nname = \"{name}\"\npath = \"app/main.rs\"\n"
+        "\n[build-dependencies]\nrustclamp = {{ version = \"1\", features = [\"build\"] }}\n\n[lib]\npath = \"app/lib.rs\"\n\n[[bin]]\nname = \"{name}\"\npath = \"app/main.rs\"\n"
     ));
     fs::write(&manifest, cargo_toml).map_err(|error| format!("cannot write manifest: {error}"))?;
     let gitignore = root.join(".gitignore");

@@ -299,7 +299,7 @@ def check_tooling(root):
 def check_tooling_generator(root):
     tooling_manifest = root / "rustclamp/tooling/Cargo.toml"
     facade = root / "rustclamp"
-    git_dependency = 'git = "https://github.com/rustclamp/rustclamp", branch = "main"'
+    registry_dependency = 'version = "1"'
     with tempfile.TemporaryDirectory(prefix="clamp-init-") as temporary:
         for template, flags, expected, run_args in (
             ("blank", ["--blank"], "Hello from Clamp!", []),
@@ -321,8 +321,9 @@ def check_tooling_generator(root):
 
             manifest = project / "Cargo.toml"
             contents = manifest.read_text()
-            assert git_dependency in contents, f"{template} did not use the public facade dependency"
-            contents = contents.replace(git_dependency, f'path = "{facade}"')
+            assert registry_dependency in contents, f"{template} did not use the crates.io facade"
+            # Offline: the same requirement, served by the checkout.
+            contents = contents.replace(registry_dependency, f'version = "1", path = "{facade}"')
             manifest.write_text(contents)
 
             run("cargo", "check", "--offline", "--manifest-path", str(manifest), cwd=root)
