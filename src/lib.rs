@@ -14,6 +14,8 @@
 pub mod build;
 #[cfg(feature = "cache")]
 pub mod cache;
+#[cfg(feature = "cli")]
+pub mod cli;
 #[cfg(feature = "config")]
 pub mod config;
 #[cfg(feature = "crypto")]

@@ -1,6 +1,7 @@
 # ADR 0024: Command contribution target
 
-Status: Accepted, 2026-10-07.
+Status: Accepted, 2026-10-07 (web commands); the kernel-level target below
+proposed with answers, 2026-10-21 (rustclamp/rustclamp#141).
 
 ## Context
 
@@ -35,10 +36,9 @@ dependency (rustclamp/rustclamp#122):
 - The web template keeps them in `app/console/`; `clamp make:command NAME`
   writes one and adds it to the module map in `app/lib.rs`.
 
-The kernel-level `CliCommandTarget` with `clap` below is deferred. Its open
-questions stay open; it is the target for non-web CLI processes (levels 07
-and 08) and should reuse the same name/description/handler shape where it
-fits.
+The kernel-level `CliCommandTarget` with `clap` below was deferred to
+rustclamp/rustclamp#141; see "Decision (2026-10-21)" for the answers to its
+open questions.
 
 ## Proposal
 
@@ -82,7 +82,45 @@ handlers.
   today except core under `uuid`. Where the target lives decides which edge
   is new (open question 1).
 
-## Open questions
+## Decision (2026-10-21)
+
+Status: proposed until the maintainer confirms answers 1 and 3. Implemented
+as `rustclamp::cli` (rustclamp/rustclamp#141).
+
+1. **Placement: the facade, `rustclamp::cli` behind feature `cli`.** The
+   target implements `rustclamp_core::ContributionTarget` and needs nothing
+   from the kernel: the caller builds it with `TargetComposition::build` or
+   `FrozenProcess::compose`, which already drops contributions from modules
+   outside the process. So the only new edges are facade -> `clap` and the
+   existing optional facade -> core, which `tools/boundaries.py` already
+   allows. Kernel is a path dev-dependency for the projection test only. A
+   `rustclamp-cli` crate would add a repository, a release and a publish
+   step (the scheduler crate is still unpublished, #84) for one module.
+2. **Handler: the web `Command` shape.** `CommandDeclaration::new(name,
+   description, run)` with `run: Fn(&ArgMatches) -> i32 + Send + Sync`,
+   stored behind an `Arc` as the scheduler stores its job handlers. Context
+   comes from what the closure captures, so there is no context type
+   parameter. The exit status is the handler's return, as in
+   `web::Command`; `CommandTree::run` returns `Result<i32, clap::Error>` and
+   prints nothing (item 5). `.arg(..)` adds `clap` arguments; typed argument
+   structs (`FromArgMatches`) stay available to an app that adds `clap` with
+   `derive` itself.
+3. **`clap` feature set: the minimum that still lists commands.**
+   `default-features = false, features = ["std", "help", "usage",
+   "error-context"]`: help and usage text with each command's one-line
+   description, and errors that say what went wrong. No `color` and no
+   `suggestions`. The closure is `clap`, `clap_builder`, `clap_lex` and
+   `anstyle`, added to `ALLOWED["rustclamp"]`, with `clap` in `OPTIONAL`.
+4. **Example 03 (`examples/a3-contribution`) is not ported.** It stays the
+   dependency-free Core + Kernel prototype its Phase 3 measurements
+   describe; `rustclamp::cli` is its production form. `tests/cli.rs` proves
+   the target through a frozen process projection.
+
+Not done here: a contributed command named `help` collides with `clap`'s
+`help` subcommand and panics in debug builds when parsed; nested groups,
+completion and async handlers stay undecided.
+
+## Open questions (2026-10-07)
 
 1. **Placement.** Facade (`rustclamp::cli`, feature `cli`, new optional
    facade -> kernel edge) or a new package crate `rustclamp-cli` that depends

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- `rustclamp::cli` behind the optional `cli` feature (ADR 0024, #141):
+  `CommandDeclaration<Q>` (name, one-line description, handler returning the
+  exit status, `clap` arguments), `CliCommandTarget<Q>` as a
+  `ContributionTarget` that rejects duplicate names, and `CommandTree::run`,
+  which parses with `clap` and returns usage errors instead of printing them.
+  Adds `clap` (no default features) to the facade's optional dependencies.
+
 ### Changed
 
 - `clamp init` (rustclamp-tooling 0.6.0) generates `rustclamp = { version = "1", ... }`
