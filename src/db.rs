@@ -78,6 +78,7 @@ pub use states::{Change, States, Transition};
 /// `params![title, 3, None::<String>]`.
 #[doc(inline)]
 pub use crate::__db_params as params;
+#[cfg(feature = "sqlite")]
 use connection::Inner;
 pub use connection::{ColumnIndex, Connection, Error, FromColumn, Param, Result, Row, Value};
 /// `#[derive(Model)]` with `#[model(table = "posts")]`: reads each field
@@ -97,6 +98,7 @@ pub struct Db {
 /// The engine behind a [`Db`].
 #[derive(Clone)]
 enum Backend {
+    #[cfg(feature = "sqlite")]
     Sqlite {
         // `:memory:` relies on the single writer: every clone must see the
         // same in-memory database, so it gets no readers.
@@ -108,6 +110,7 @@ enum Backend {
 }
 
 /// Idle read-only connections to the same file, opened on demand.
+#[cfg(feature = "sqlite")]
 struct Readers {
     path: String,
     // ponytail: grows to the peak number of concurrent readers and keeps them
@@ -137,6 +140,7 @@ impl<T> Default for Slot<T> {
 }
 
 /// A read-only connection to `path` for [`Db::read`].
+#[cfg(feature = "sqlite")]
 fn open_reader(path: &str) -> rusqlite::Result<rusqlite::Connection> {
     let connection = rusqlite::Connection::open_with_flags(
         path,
@@ -149,8 +153,8 @@ fn open_reader(path: &str) -> rusqlite::Result<rusqlite::Connection> {
 /// Why [`Db::try_connect`] could not open the database.
 #[derive(Debug)]
 pub enum DbError {
-    /// `DB_CONNECTION` names an engine this build does not have: not `sqlite`,
-    /// and not `pgsql` with the `postgres` feature.
+    /// `DB_CONNECTION` names an engine this build does not have: not `sqlite`
+    /// with the `sqlite` feature, and not `pgsql` with the `postgres` feature.
     Engine(String),
     /// The database could not be opened or set up.
     Open {
@@ -167,6 +171,10 @@ impl std::fmt::Display for DbError {
             Self::Engine(engine) if engine == "pgsql" => write!(
                 f,
                 "config key DB_CONNECTION is pgsql; build with the `postgres` feature"
+            ),
+            Self::Engine(engine) if engine == "sqlite" => write!(
+                f,
+                "config key DB_CONNECTION is sqlite (the default); build with the `sqlite` feature, or set it to pgsql"
             ),
             Self::Engine(engine) => write!(
                 f,
@@ -302,7 +310,8 @@ impl Db {
     pub fn connect(settings: &Settings) -> Self {
         // Only for an engine try_connect accepts: an unsupported one must stop
         // the app without leaving a `storage/` folder behind.
-        if settings.connection == "sqlite"
+        if cfg!(feature = "sqlite")
+            && settings.connection == "sqlite"
             && settings.database != ":memory:"
             && let Some(folder) = std::path::Path::new(&settings.database).parent()
         {
@@ -337,9 +346,16 @@ impl Db {
         if engine == "pgsql" {
             return Self::try_connect_postgres(settings);
         }
-        if engine != "sqlite" {
-            return Err(DbError::Engine(engine.to_owned()));
+        #[cfg(feature = "sqlite")]
+        if engine == "sqlite" {
+            return Self::try_connect_sqlite(settings, journal);
         }
+        let _ = journal;
+        Err(DbError::Engine(engine.to_owned()))
+    }
+
+    #[cfg(feature = "sqlite")]
+    fn try_connect_sqlite(settings: &Settings, journal: Journal) -> Result<Self, DbError> {
         let path = settings.database.as_str();
         let connection = if path == ":memory:" {
             rusqlite::Connection::open_in_memory()
@@ -414,6 +430,7 @@ impl Db {
     /// The SQL dialect of the engine behind this database.
     pub fn dialect(&self) -> Dialect {
         match self.backend {
+            #[cfg(feature = "sqlite")]
             Backend::Sqlite { .. } => Dialect::Sqlite,
             #[cfg(feature = "postgres")]
             Backend::Postgres(_) => Dialect::Postgres,
@@ -425,6 +442,7 @@ impl Db {
     /// whose calls all fail when the pool has none to lend.
     pub fn with<T>(&self, work: impl FnOnce(&Connection<'_>) -> T) -> T {
         match &self.backend {
+            #[cfg(feature = "sqlite")]
             Backend::Sqlite { .. } => work(&Connection(Inner::Sqlite(&self.writer()))),
             #[cfg(feature = "postgres")]
             Backend::Postgres(pool) => pool.with(work),
@@ -432,6 +450,7 @@ impl Db {
     }
 
     /// The SQLite writer, locked.
+    #[cfg(feature = "sqlite")]
     fn writer(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
         let writer = match &self.backend {
             Backend::Sqlite { writer, .. } => writer,
@@ -460,15 +479,20 @@ impl Db {
     /// assert_eq!(one, 1);
     /// ```
     pub fn read<T>(&self, work: impl FnOnce(&Connection<'_>) -> T) -> T {
-        let readers = match &self.backend {
-            Backend::Sqlite { readers, .. } => readers,
+        match &self.backend {
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite {
+                readers: Some(readers),
+                ..
+            } => self.read_sqlite(readers, work),
             // MVCC: Postgres reads run beside writes on the same pool.
-            #[cfg(feature = "postgres")]
-            Backend::Postgres(_) => return self.with(work),
-        };
-        let Some(readers) = readers else {
-            return self.with(work);
-        };
+            _ => self.with(work),
+        }
+    }
+
+    /// [`Db::read`] on a SQLite file with readers.
+    #[cfg(feature = "sqlite")]
+    fn read_sqlite<T>(&self, readers: &Readers, work: impl FnOnce(&Connection<'_>) -> T) -> T {
         let idle = readers
             .idle
             .lock()
@@ -605,10 +629,20 @@ impl Db {
         immediate: bool,
         work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
-        #[cfg(feature = "postgres")]
-        if let Backend::Postgres(pool) = &self.backend {
-            return postgres_transaction(pool, immediate, work);
+        match &self.backend {
+            #[cfg(feature = "postgres")]
+            Backend::Postgres(pool) => postgres_transaction(pool, immediate, work),
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite { .. } => self.sqlite_transaction(immediate, work),
         }
+    }
+
+    #[cfg(feature = "sqlite")]
+    fn sqlite_transaction<T, E: From<Error>>(
+        &self,
+        immediate: bool,
+        work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
+    ) -> Result<T, E> {
         let behavior = if immediate {
             rusqlite::TransactionBehavior::Immediate
         } else {
@@ -828,6 +862,7 @@ impl Db {
 
     /// Runs each seeder in order, each in its own transaction, so a failing
     /// seeder leaves nothing half inserted.
+    #[cfg_attr(not(feature = "sqlite"), allow(irrefutable_let_patterns))]
     pub fn seed(&self, seeders: &[&dyn Seeder]) -> Result<(), SeedError> {
         // ponytail: the transaction spans several `with` calls on the shared
         // connection, so run seeders from the console, not while serving.
@@ -2028,6 +2063,9 @@ mod tests {
             Db::try_connect(&settings(&missing, "mysql")),
             Err(DbError::Engine(engine)) if engine == "mysql"
         ));
+        // A build without SQLite says which feature the default engine needs.
+        let message = DbError::Engine("sqlite".into()).to_string();
+        assert!(message.contains("`sqlite` feature"), "{message}");
         std::fs::create_dir_all(&folder).unwrap();
         let junk = folder.join("junk.sqlite");
         let bytes = b"not a database, but somebody's file".repeat(40);

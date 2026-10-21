@@ -128,7 +128,7 @@ impl ExitError for crate::config::ConfigError {
     }
 }
 
-#[cfg(feature = "db")]
+#[cfg(feature = "db-core")]
 impl ExitError for crate::db::DbError {
     fn exit_code(&self) -> i32 {
         match self {
@@ -213,7 +213,7 @@ mod tests {
         assert!(busy.problem().detail.contains("Port 80"));
     }
 
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     #[test]
     fn database_errors_split_config_from_io() {
         use crate::db::DbError;

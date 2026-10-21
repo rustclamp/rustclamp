@@ -116,7 +116,7 @@ pub struct Sessions {
     secure: bool,
     capacity: usize,
     store: Mutex<HashMap<String, (Data, Instant)>>,
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     database: Option<crate::db::Db>,
 }
 
@@ -128,7 +128,7 @@ impl Sessions {
             secure: false,
             capacity: CAPACITY,
             store: Mutex::default(),
-            #[cfg(feature = "db")]
+            #[cfg(feature = "db-core")]
             database: None,
         }
     }
@@ -162,7 +162,7 @@ impl Sessions {
     /// # Panics
     ///
     /// When the table cannot be created: the app should stop at startup.
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     #[must_use]
     pub fn database(mut self, db: crate::db::Db) -> Self {
         db.with(|sql| {
@@ -190,7 +190,7 @@ impl Sessions {
 
     /// The session for cookie value `id`, or a new one with a fresh ID.
     fn open(&self, id: Option<&str>) -> (String, Data) {
-        #[cfg(feature = "db")]
+        #[cfg(feature = "db-core")]
         if let Some(db) = &self.database {
             return self.open_stored(db, id);
         }
@@ -225,7 +225,7 @@ impl Sessions {
         (id, data)
     }
 
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     fn open_stored(&self, db: &crate::db::Db, id: Option<&str>) -> (String, Data) {
         let now = unix_seconds();
         let fresh = now - self.lifetime.as_secs() as i64;
@@ -251,7 +251,7 @@ impl Sessions {
     /// Moves the session stored under `old` to a new ID and returns it.
     fn rename(&self, old: &str, data: &Data) -> String {
         let id = random_token();
-        #[cfg(feature = "db")]
+        #[cfg(feature = "db-core")]
         if let Some(db) = &self.database {
             let _ = db.with(|sql| sql.execute("DELETE FROM sessions WHERE id = ?1", &[&old]));
             return id;
@@ -267,7 +267,7 @@ impl Sessions {
 
     /// Writes the session back to the database store, if there is one.
     fn save(&self, id: &str, data: &Data) {
-        #[cfg(feature = "db")]
+        #[cfg(feature = "db-core")]
         if let Some(db) = &self.database {
             let payload = pack(&data.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
             let saved = db.with(|sql| {
@@ -281,7 +281,7 @@ impl Sessions {
                 crate::log::Log::error(format_args!("session: could not save: {error}"));
             }
         }
-        #[cfg(not(feature = "db"))]
+        #[cfg(not(feature = "db-core"))]
         let _ = (id, data);
     }
 
@@ -339,7 +339,7 @@ pub fn csrf() -> impl Fn(&Request, Next) -> Response + Send + Sync + 'static {
 }
 
 /// Seconds since the Unix epoch.
-#[cfg(feature = "db")]
+#[cfg(feature = "db-core")]
 fn unix_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -347,7 +347,7 @@ fn unix_seconds() -> i64 {
 }
 
 /// Session values as a form-encoded string, for the database store.
-#[cfg(feature = "db")]
+#[cfg(feature = "db-core")]
 fn pack(values: &HashMap<String, String>) -> String {
     use super::request::encode;
     values
@@ -358,7 +358,7 @@ fn pack(values: &HashMap<String, String>) -> String {
 }
 
 /// The values [`pack`] wrote.
-#[cfg(feature = "db")]
+#[cfg(feature = "db-core")]
 fn unpack(payload: &str) -> HashMap<String, String> {
     use super::request::decode;
     payload
@@ -536,14 +536,14 @@ mod tests {
         regenerate_moves_the_session(Sessions::new(Duration::from_secs(60)));
     }
 
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     #[test]
     fn regenerate_moves_a_database_session() {
         let db = crate::db::Db::open(&crate::config::Config::parse("DB_DATABASE=:memory:"));
         regenerate_moves_the_session(Sessions::new(Duration::from_secs(60)).database(db));
     }
 
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     #[test]
     fn database_sessions_survive_a_restart_and_expire() {
         use crate::config::Config;
