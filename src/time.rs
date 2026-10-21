@@ -1,5 +1,6 @@
 //! UTC dates and times on [`SystemTime`], without a time crate: RFC 3339
-//! text, calendar dates and day arithmetic.
+//! text, calendar dates and day arithmetic, and local time in a [`Zone`]
+//! with a fixed offset or EU summer time.
 //!
 //! Enabled by the `time` feature (`log` and `db` include it).
 //!
@@ -110,6 +111,120 @@ pub fn weekday(time: SystemTime) -> Weekday {
     [
         Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday,
     ][(seconds(time).div_euclid(DAY) + 3).rem_euclid(7) as usize]
+}
+
+/// A time zone without a tz database: a fixed offset from UTC, or a
+/// standard offset with EU summer time. Summer time is one hour ahead, from
+/// 01:00 UTC on the last Sunday of March to 01:00 UTC on the last Sunday of
+/// October, the same instant in every EU zone (Directive 2000/84/EC).
+///
+/// ```
+/// use rustclamp::time::{self, Zone};
+///
+/// let central = Zone::eu(60); // CET/CEST: Ljubljana, Berlin, Paris
+/// let at = time::parse_rfc3339("2026-10-20T22:30:00Z").unwrap();
+/// assert_eq!(central.format_date(at), "2026-10-21");
+/// assert_eq!(central.format_rfc3339(at), "2026-10-21T00:30:00+02:00");
+/// assert_eq!(time::format_rfc3339(central.start_of_day(at)), "2026-10-20T22:00:00Z");
+/// ```
+// ponytail: EU rule only; other regions' rules or a tz database when an app needs them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Zone {
+    /// Minutes east of UTC outside summer time.
+    standard: i32,
+    eu_summer_time: bool,
+}
+
+impl Zone {
+    /// UTC.
+    pub const UTC: Self = Self::fixed(0);
+
+    /// Always `minutes` east of UTC (negative for west): `Zone::fixed(-300)`
+    /// is UTC-5 all year.
+    ///
+    /// # Panics
+    ///
+    /// When `minutes` is a day or more.
+    pub const fn fixed(minutes: i32) -> Self {
+        assert!(minutes.abs() < 24 * 60, "a zone offset is under a day");
+        Self {
+            standard: minutes,
+            eu_summer_time: false,
+        }
+    }
+
+    /// `standard_minutes` east of UTC, an hour more in EU summer time:
+    /// `Zone::eu(0)` for WET/WEST, `eu(60)` for CET/CEST, `eu(120)` for EET/EEST.
+    ///
+    /// # Panics
+    ///
+    /// When `standard_minutes` is a day or more.
+    pub const fn eu(standard_minutes: i32) -> Self {
+        Self {
+            eu_summer_time: true,
+            ..Self::fixed(standard_minutes)
+        }
+    }
+
+    /// Minutes east of UTC at `at`.
+    pub fn offset_at(self, at: SystemTime) -> i32 {
+        let now = seconds(at);
+        let year = split(now).0[..4].parse().unwrap_or(1970);
+        let summer = self.eu_summer_time
+            && (last_sunday_one_utc(year, 3)..last_sunday_one_utc(year, 10)).contains(&now);
+        self.standard + if summer { 60 } else { 0 }
+    }
+
+    /// The local calendar date of `at`, `YYYY-MM-DD`.
+    pub fn format_date(self, at: SystemTime) -> String {
+        split(self.local_seconds(at)).0
+    }
+
+    /// `at` as RFC 3339 in local time with its offset, whole seconds:
+    /// `2026-10-21T00:30:00+02:00`; `Z` when the offset is 0.
+    pub fn format_rfc3339(self, at: SystemTime) -> String {
+        let (date, clock) = split(self.local_seconds(at));
+        let offset = self.offset_at(at);
+        if offset == 0 {
+            return format!("{date}T{clock}Z");
+        }
+        let sign = if offset < 0 { '-' } else { '+' };
+        let offset = offset.unsigned_abs();
+        format!("{date}T{clock}{sign}{:02}:{:02}", offset / 60, offset % 60)
+    }
+
+    /// The local hour (0 to 23) and minute (0 to 59) of `at`.
+    pub fn hour_minute(self, at: SystemTime) -> (u32, u32) {
+        let of_day = self.local_seconds(at).rem_euclid(DAY) as u32;
+        (of_day / 3600, of_day % 3600 / 60)
+    }
+
+    /// The local day of the week of `at`.
+    pub fn weekday(self, at: SystemTime) -> Weekday {
+        weekday(from_seconds(self.local_seconds(at)))
+    }
+
+    /// The instant the local day of `at` began, local midnight: the lower
+    /// bound for "today" in a query.
+    pub fn start_of_day(self, at: SystemTime) -> SystemTime {
+        let midnight = self.local_seconds(at).div_euclid(DAY) * DAY;
+        // Midnight's own offset, which differs from `at`'s on a switch day.
+        let guess = from_seconds(midnight - i64::from(self.offset_at(at)) * 60);
+        from_seconds(midnight - i64::from(self.offset_at(guess)) * 60)
+    }
+
+    fn local_seconds(self, at: SystemTime) -> i64 {
+        seconds(at) + i64::from(self.offset_at(at)) * 60
+    }
+}
+
+/// Unix seconds of 01:00 UTC on the last Sunday of `month` (March or
+/// October, both 31 days long) of `year`.
+fn last_sunday_one_utc(year: i64, month: u32) -> i64 {
+    let last = days(&format!("{year:04}-{month:02}-31")).unwrap_or(0);
+    // 1970-01-01, day 0, was a Thursday: (day + 3) % 7 is 0 on a Monday.
+    let since_sunday = (last + 4).rem_euclid(7);
+    (last - since_sunday) * DAY + 3600
 }
 
 /// `YYYY-MM-DD HH:MM:SS` in UTC for Unix `seconds`, the form SQLite's
@@ -265,6 +380,64 @@ mod tests {
         }
         assert_eq!(parse_date("2024-02-30"), None);
         assert_eq!(parse_date("2024-2-3"), None);
+    }
+
+    #[test]
+    fn eu_summer_time_switches_at_one_utc_on_the_last_sundays() {
+        let at = |text| parse_rfc3339(text).unwrap();
+        let central = Zone::eu(60);
+        for (text, offset) in [
+            ("2026-03-29T00:59:59Z", 60),
+            ("2026-03-29T01:00:00Z", 120),
+            ("2026-10-25T00:59:59Z", 120),
+            ("2026-10-25T01:00:00Z", 60),
+            ("2025-03-30T01:00:00Z", 120),
+            ("2025-03-29T12:00:00Z", 60),
+            ("2026-01-01T00:00:00Z", 60),
+        ] {
+            assert_eq!(central.offset_at(at(text)), offset, "{text}");
+        }
+        assert_eq!(Zone::eu(0).offset_at(at("2026-07-01T00:00:00Z")), 60);
+        assert_eq!(Zone::fixed(60).offset_at(at("2026-07-01T00:00:00Z")), 60);
+        assert_eq!(Zone::UTC.offset_at(at("2026-07-01T00:00:00Z")), 0);
+    }
+
+    #[test]
+    fn local_dates_clocks_and_midnights() {
+        let at = |text| parse_rfc3339(text).unwrap();
+        let central = Zone::eu(60);
+        let late = at("2026-12-31T23:30:00Z");
+        assert_eq!(central.format_date(late), "2027-01-01");
+        assert_eq!(central.format_rfc3339(late), "2027-01-01T00:30:00+01:00");
+        assert_eq!(central.hour_minute(late), (0, 30));
+        assert_eq!(central.weekday(late), Weekday::Friday);
+        assert_eq!(format_date(late), "2026-12-31");
+        // The day summer time starts began at +01:00, though noon is at +02:00.
+        let switch = at("2026-03-29T12:00:00Z");
+        assert_eq!(
+            format_rfc3339(central.start_of_day(switch)),
+            "2026-03-28T23:00:00Z"
+        );
+        assert_eq!(
+            format_rfc3339(central.start_of_day(at("2026-10-25T12:00:00Z"))),
+            "2026-10-24T22:00:00Z"
+        );
+        let west = Zone::fixed(-330);
+        assert_eq!(
+            west.format_rfc3339(at("2026-01-01T03:00:00Z")),
+            "2025-12-31T21:30:00-05:30"
+        );
+        assert_eq!(Zone::UTC.format_rfc3339(late), format_rfc3339(late));
+        assert_eq!(
+            format_rfc3339(west.start_of_day(late)),
+            "2026-12-31T05:30:00Z"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "under a day")]
+    fn offsets_are_under_a_day() {
+        let _ = Zone::fixed(24 * 60);
     }
 
     #[test]

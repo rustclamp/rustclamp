@@ -4,17 +4,12 @@
 
 ### Added
 
-- `Query::insert_many(columns, rows)`: many rows in multi-row `VALUES`
-  statements, chunked under 32 766 bound values a statement, inside one
-  transaction (or the caller's), on SQLite and Postgres. Returns the rows
-  inserted. 3 400 rows on a local Postgres 17: 15 ms against 372 ms row by row
-  in one transaction (`cargo run --release --example measure-insert-many
-  --features postgres`).
-- `Query::upsert(columns, values, unique_by, update)`: inserts a row or, on a
-  conflict with the unique key `unique_by`, sets the `update` columns on the
-  existing row, and returns the row's `id` either way. One
-  `INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING id` on SQLite and
-  Postgres; with `update` empty an existing row keeps its values.
+- `time::Zone` (#177): local time without a tz database. `Zone::UTC`,
+  `Zone::fixed(minutes)`, and `Zone::eu(standard_minutes)` with EU summer
+  time (last Sunday of March to last Sunday of October, 01:00 UTC). It has
+  `offset_at`, `format_date`, `format_rfc3339` (with the local offset),
+  `hour_minute`, `weekday` and `start_of_day`, the local midnight for "today"
+  in a query. Other regions' rules are not included.
 
 ### Fixed
 
