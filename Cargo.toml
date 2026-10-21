@@ -50,8 +50,9 @@ redis = ["config"]
 # needs `redis`.
 queue = ["web", "db"]
 # Optional scheduled tasks (`rustclamp::schedule`, ADR 0035): `schedule:run`
-# from cron, or a thread beside the server outside production.
-schedule = ["web", "db"]
+# from cron, or a thread beside the server outside production. Without `web`
+# a headless process runs a `Schedule` itself.
+schedule = ["db", "log"]
 # Optional Postgres for `rustclamp::db` (ADR 0034): a std-only wire client over TCP,
 # behind `DB_CONNECTION=pgsql`.
 postgres = ["db", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom", "dep:rustls", "dep:webpki-roots"]

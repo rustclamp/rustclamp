@@ -48,6 +48,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::error::panic_reason;
 use crate::log::Log;
 
 #[cfg(feature = "regex")]
@@ -1407,25 +1408,6 @@ impl App {
             .unwrap_or_else(|error| panic!("seeding failed: {error}"));
         (self.router(&config, db.clone()), db)
     }
-}
-
-/// Runs `work`, turning a panic into an `Err` with its message, for queue
-/// jobs and scheduled tasks.
-#[cfg(any(feature = "queue", feature = "schedule"))]
-pub(crate) fn catch_panic(
-    work: impl FnOnce() -> std::result::Result<(), String>,
-) -> std::result::Result<(), String> {
-    catch_unwind(AssertUnwindSafe(work))
-        .unwrap_or_else(|panic| Err(format!("panicked: {}", panic_reason(&*panic))))
-}
-
-/// The message of a caught panic, or nothing.
-fn panic_reason(panic: &(dyn std::any::Any + Send)) -> String {
-    panic
-        .downcast_ref::<&str>()
-        .map(|text| (*text).to_owned())
-        .or_else(|| panic.downcast_ref::<String>().cloned())
-        .unwrap_or_default()
 }
 
 /// Threads answering requests unless `WEB_THREADS` says otherwise.

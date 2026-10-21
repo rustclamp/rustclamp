@@ -67,7 +67,7 @@ mod query;
 mod schema;
 mod states;
 #[cfg(test)]
-mod testing;
+pub(crate) mod testing;
 pub mod timestamp;
 pub use dialect::{Dialect, Sql};
 pub use query::{Page, Query};

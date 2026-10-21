@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- The `schedule` feature no longer needs `web` (ADR 0035 amendment): it is
+  `db` + `log`, so a headless worker builds a `Schedule` with
+  `Schedule::new(tasks, &config, db)` and calls `start()` or `run_due(now)`.
+  With `web`, `App::schedule` and `schedule:run` work as before. An app that
+  named only `schedule` and used `web` items must now name `web` too.
+
 ### Fixed
 
 - `row.get::<f64>()` reads a Postgres `numeric` column (and `sum`/`avg`, which
@@ -9,6 +17,10 @@
   still arrives as its exact text, so `row.get::<String>()` keeps every digit;
   `f64` now parses text that is a number on either engine, rounding to the
   nearest double.
+
+- Scheduled tasks run on Postgres: claiming a slot used SQLite's
+  `INSERT OR IGNORE`, which Postgres rejects; it is now
+  `INSERT ... ON CONFLICT (task) DO NOTHING` on both engines.
 
 ## 1.1.0 - 2026-10-21
 

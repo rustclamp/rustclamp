@@ -1,7 +1,7 @@
 //! Scheduled tasks (ADR 0035), with the `schedule` feature.
 //!
-//! The app lists its tasks ([`App::schedule`](crate::web::App::schedule)),
-//! each with a name, a UTC time ([`At`]) and a `fn(&Config, &Db)`. The
+//! The app lists its tasks (a web app in `web::App::schedule`), each with
+//! a name, a UTC time ([`At`]) and a `fn(&Config, &Db)`. The
 //! schedule works in whole UTC minutes: a task runs in the minutes its `At`
 //! matches, at most once per minute across every process sharing the
 //! database, and never while its previous run is unfinished. A minute when
@@ -16,6 +16,9 @@
 //!   timer: `* * * * * cd /srv/app && ./app schedule:run`.
 //! - `App::run` starts a schedule thread beside the server when
 //!   `SCHEDULE_THREAD` is true: by default outside production only.
+//! - A process without `web` (a worker, a collector) builds the
+//!   [`Schedule`] itself: [`Schedule::start`] for a thread, or
+//!   [`Schedule::run_due`] from its own `schedule:run` command.
 //!
 //! Settings:
 //!
@@ -38,6 +41,12 @@
 //! fn prune(_config: &Config, _db: &Db) -> Result<(), String> {
 //!     Ok(())
 //! }
+//!
+//! // Headless, without `web::App`: run the tasks due this minute.
+//! let config = Config::parse("DB_DATABASE=:memory:");
+//! let schedule = rustclamp::schedule::Schedule::new(SCHEDULE, &config, Db::open(&config));
+//! schedule.run_due(std::time::SystemTime::now()).unwrap();
+//! // Or `schedule.start()` and keep `main` alive: `loop { std::thread::park() }`.
 //! ```
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -112,8 +121,8 @@ impl At {
     }
 }
 
-/// The app's tasks on its database. Build one with
-/// [`App::schedule`](crate::web::App::schedule).
+/// The app's tasks on its database. A web app builds one with
+/// `web::App::schedule`; any other process with [`Schedule::new`].
 #[derive(Debug, Clone)]
 pub struct Schedule {
     tasks: &'static [Task],
@@ -176,7 +185,7 @@ impl Schedule {
             if !self.claim(task.name, slot, now)? {
                 continue;
             }
-            let result = crate::web::catch_panic(|| (task.run)(&self.config, &self.db));
+            let result = crate::error::catch_panic(|| (task.run)(&self.config, &self.db));
             if let Err(problem) = &result {
                 Log::error(format_args!(
                     "schedule: task {} failed: {problem}",
@@ -198,7 +207,8 @@ impl Schedule {
     fn claim(&self, task: &str, slot: i64, now: i64) -> crate::db::Result<bool> {
         self.db.with(|sql| {
             sql.execute(
-                "INSERT OR IGNORE INTO schedule_runs (task, slot, started_at, finished_at) VALUES (?1, -1, 0, 0)",
+                "INSERT INTO schedule_runs (task, slot, started_at, finished_at) VALUES (?1, -1, 0, 0) \
+                 ON CONFLICT (task) DO NOTHING",
                 params![task],
             )?;
             let (last, started_at, finished): (i64, i64, Option<i64>) = sql.query_row(
@@ -247,6 +257,7 @@ impl Schedule {
     }
 
     /// Unix seconds of the latest run, if any task ever ran.
+    #[cfg(feature = "web")]
     pub(crate) fn last_run(&self) -> crate::db::Result<Option<i64>> {
         self.db.with(|sql| {
             create_table(sql)?;
@@ -335,6 +346,13 @@ mod tests {
         (Schedule::new(tasks, &config, db.clone()), db)
     }
 
+    /// Runs `test` with `TASKS` on each engine.
+    fn on_each_engine(test: impl Fn(Schedule, &Db)) {
+        crate::db::testing::each_engine(|db| {
+            test(Schedule::new(TASKS, &Config::parse(""), db.clone()), db);
+        });
+    }
+
     fn at(text: &str) -> SystemTime {
         time::parse_rfc3339(text).unwrap()
     }
@@ -362,67 +380,71 @@ mod tests {
 
     #[test]
     fn a_daily_task_runs_once_a_day() {
-        let (schedule, db) = schedule(TASKS);
-        let ran = schedule.run_due(at("2026-10-05T03:00:00Z")).unwrap();
-        // 03:00 is also a quarter hour; name order, failures reported.
-        assert_eq!(names(&ran), ["fails", "panics", "report:daily"]);
-        assert_eq!(ran[0].1, Err("nope".into()));
-        assert_eq!(ran[1].1, Err("panicked: kaboom".into()));
-        assert_eq!(ran[2].1, Ok(()));
-        let again = schedule.run_due(at("2026-10-05T03:00:59Z")).unwrap();
-        assert!(again.is_empty(), "once per minute");
-        assert!(
-            schedule
-                .run_due(at("2026-10-05T03:01:00Z"))
-                .unwrap()
-                .is_empty()
-        );
-        let next_day = schedule.run_due(at("2026-10-06T03:00:00Z")).unwrap();
-        assert!(names(&next_day).contains(&"report:daily"));
-        let done: i64 = db
-            .with(|c| c.query_row("SELECT COUNT(*) FROM done", &[], |r| r.get(0)))
-            .unwrap();
-        assert_eq!(done, 2);
-        let error: Option<String> = db
-            .with(|c| {
-                c.query_row(
-                    "SELECT error FROM schedule_runs WHERE task = 'fails'",
-                    &[],
-                    |r| r.get(0),
-                )
-            })
-            .unwrap();
-        assert_eq!(error.as_deref(), Some("nope"));
+        on_each_engine(|schedule, db| {
+            let ran = schedule.run_due(at("2026-10-05T03:00:00Z")).unwrap();
+            // 03:00 is also a quarter hour; name order, failures reported.
+            assert_eq!(names(&ran), ["fails", "panics", "report:daily"]);
+            assert_eq!(ran[0].1, Err("nope".into()));
+            assert_eq!(ran[1].1, Err("panicked: kaboom".into()));
+            assert_eq!(ran[2].1, Ok(()));
+            let again = schedule.run_due(at("2026-10-05T03:00:59Z")).unwrap();
+            assert!(again.is_empty(), "once per minute");
+            assert!(
+                schedule
+                    .run_due(at("2026-10-05T03:01:00Z"))
+                    .unwrap()
+                    .is_empty()
+            );
+            let next_day = schedule.run_due(at("2026-10-06T03:00:00Z")).unwrap();
+            assert!(names(&next_day).contains(&"report:daily"));
+            let done: i64 = db
+                .with(|c| c.query_row("SELECT COUNT(*) FROM done", &[], |r| r.get(0)))
+                .unwrap();
+            assert_eq!(done, 2);
+            let error: Option<String> = db
+                .with(|c| {
+                    c.query_row(
+                        "SELECT error FROM schedule_runs WHERE task = 'fails'",
+                        &[],
+                        |r| r.get(0),
+                    )
+                })
+                .unwrap();
+            assert_eq!(error.as_deref(), Some("nope"));
+        });
     }
 
     #[test]
     fn two_processes_run_a_slot_once() {
-        let (first, db) = schedule(TASKS);
-        let second = Schedule::new(TASKS, &Config::parse(""), db);
-        let now = at("2026-10-05T03:00:00Z");
-        assert_eq!(first.run_due(now).unwrap().len(), 3);
-        assert!(second.run_due(now).unwrap().is_empty());
+        on_each_engine(|first, db| {
+            let second = Schedule::new(TASKS, &Config::parse(""), db.clone());
+            let now = at("2026-10-05T03:00:00Z");
+            assert_eq!(first.run_due(now).unwrap().len(), 3);
+            assert!(second.run_due(now).unwrap().is_empty());
+        });
     }
 
     #[test]
     fn an_unfinished_run_blocks_until_it_is_stale() {
-        let (schedule, db) = schedule(TASKS);
-        let start = at("2026-10-05T03:00:00Z");
-        schedule.run_due(start).unwrap();
-        // The 03:00 run of `fails` never finished, as if its process died.
-        db.with(|c| {
-            c.execute(
-                "UPDATE schedule_runs SET finished_at = NULL WHERE task = 'fails'",
-                &[],
-            )
-        })
-        .unwrap();
-        let quarter = schedule.run_due(at("2026-10-05T03:15:00Z")).unwrap();
-        assert_eq!(names(&quarter), ["panics"]);
-        let after_an_hour = schedule.run_due(at("2026-10-05T04:15:00Z")).unwrap();
-        assert_eq!(names(&after_an_hour), ["fails", "panics"]);
+        on_each_engine(|schedule, db| {
+            let start = at("2026-10-05T03:00:00Z");
+            schedule.run_due(start).unwrap();
+            // The 03:00 run of `fails` never finished, as if its process died.
+            db.with(|c| {
+                c.execute(
+                    "UPDATE schedule_runs SET finished_at = NULL WHERE task = 'fails'",
+                    &[],
+                )
+            })
+            .unwrap();
+            let quarter = schedule.run_due(at("2026-10-05T03:15:00Z")).unwrap();
+            assert_eq!(names(&quarter), ["panics"]);
+            let after_an_hour = schedule.run_due(at("2026-10-05T04:15:00Z")).unwrap();
+            assert_eq!(names(&after_an_hour), ["fails", "panics"]);
+        });
     }
 
+    #[cfg(feature = "web")]
     #[test]
     fn schedule_run_is_a_built_in_command() {
         const EVERY_MINUTE: &[Task] = &[Task {
