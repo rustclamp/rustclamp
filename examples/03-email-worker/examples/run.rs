@@ -152,7 +152,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let message = bus.receive().await?.ok_or("email queue was empty")?;
     registry
         .dispatch(Delivery {
-            message,
+            message: message.into(),
             attempt: 1,
         })
         .await?;

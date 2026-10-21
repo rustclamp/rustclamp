@@ -88,9 +88,18 @@ jobs:
         with:
           path: rustclamp
       - name: Siblings
+        # A sibling branch named like this PR's branch is checked out instead of main,
+        # so a change spanning repos is tested together before either side merges.
+        env:
+          BRANCH: ${{ github.head_ref }}
         run: |
           for repo in core kernel runtime http postgres messaging worker scheduler; do
-            git clone --depth 1 "https://github.com/rustclamp/$repo" "$repo"
+            url="https://github.com/rustclamp/$repo"
+            if [ -n "$BRANCH" ] && git ls-remote --exit-code --heads "$url" "$BRANCH" >/dev/null; then
+              git clone --depth 1 --branch "$BRANCH" "$url" "$repo"
+            else
+              git clone --depth 1 "$url" "$repo"
+            fi
           done
       - name: Fetch
         # Each repo's own lock first: the isolated package checks use them, and once

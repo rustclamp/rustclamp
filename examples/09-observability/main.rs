@@ -131,7 +131,7 @@ async fn one_request(app: &App) -> Result<(String, String), Box<dyn Error>> {
     let message = app.bus.receive().await?.ok_or("the queue was empty")?;
     app.worker
         .dispatch(Delivery {
-            message,
+            message: message.into(),
             attempt: 1,
         })
         .await?;

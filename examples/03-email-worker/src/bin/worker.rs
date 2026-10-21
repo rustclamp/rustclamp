@@ -169,7 +169,7 @@ async fn handle_message(
     let (correlation_id, message_id) = (envelope.correlation_id.clone(), envelope.id.clone());
     let delivery = registry.deliver(
         Delivery {
-            message: envelope,
+            message: envelope.into(),
             attempt,
         },
         &policy,
