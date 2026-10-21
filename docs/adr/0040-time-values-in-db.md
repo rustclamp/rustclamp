@@ -1,6 +1,7 @@
 # ADR 0040: Time values as query parameters and row values
 
-Status: Proposed, 2026-10-21.
+Status: Accepted, 2026-10-21: option (a). The open questions are resolved
+below.
 
 ## Context
 
@@ -59,17 +60,19 @@ and the choice is a decision, not a fix.
   the bounds with `time::Zone` (rustclamp/rustclamp#177) and binds the
   instants. It does not rely on the server's zone.
 
-## Open questions for review
+## Resolved questions
 
-1. Is a UTC session acceptable? It changes raw SQL that relies on the
-   server's zone (`current_date`, `now()::date`, `to_char(now(), ..)`).
-   Whether an app can still override it with `options=-c TimeZone=..` in
-   `DATABASE_URL` needs a test of startup-parameter precedence.
-2. Whole seconds, or microseconds when the value has them? Microseconds
-   break SQLite's lexical order against whole-second rows (`.` sorts before
-   end of string), so (a) keeps whole seconds.
-3. Is there a separate `Date` type, or does a date stay a `SystemTime` at
-   midnight UTC, as `time::parse_date` returns today?
+1. **A UTC session is acceptable.** Raw SQL that relies on the server's
+   zone (`current_date`, `now()::date`, `to_char(now(), ..)`) sees UTC, as
+   the CHANGELOG says. An app that wants another zone names it in
+   `DATABASE_URL` with `options=-c TimeZone=..`: the client then leaves
+   `TimeZone=UTC` out of the startup message, so precedence never matters.
+   `postgres::tests::sessions_run_in_utc_unless_options_name_a_zone` checks
+   both against a live server.
+2. **Whole seconds.** Microseconds would break SQLite's lexical order
+   against whole-second rows. Reads keep fractions they find.
+3. **No `Date` type.** A date stays a `SystemTime` at midnight UTC, as
+   `time::parse_date` returns, and binds into a `date` column as its day.
 
 ## Consequences
 

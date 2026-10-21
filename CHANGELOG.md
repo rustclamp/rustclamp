@@ -11,6 +11,20 @@
   `hour_minute`, `weekday` and `start_of_day`, the local midnight for "today"
   in a query. Other regions' rules are not included.
 
+- `SystemTime` binds and reads on both engines (ADR 0040, #178). It binds as
+  UTC `YYYY-MM-DD HH:MM:SS` text in whole seconds, the form `Schema::timestamp`
+  columns hold. It reads that text, RFC 3339, Postgres `timestamp` and
+  `timestamptz` output with any offset (`+02`, `+05:30`), a bare `date`
+  (midnight UTC) and Unix seconds in an integer column.
+
+### Changed
+
+- Postgres sessions run in UTC: the startup message sends `TimeZone=UTC`, so
+  a bound `SystemTime` lands in a `timestamptz` column unshifted and reads back
+  with `+00`. Raw SQL that relied on the server's zone (`current_date`,
+  `now()::date`) now sees UTC. `options=-c TimeZone=..` in `DATABASE_URL`
+  still sets another zone.
+
 ### Fixed
 
 - `row.get::<f64>()` reads a Postgres `numeric` column (and `sum`/`avg`, which

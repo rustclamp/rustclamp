@@ -196,6 +196,16 @@ impl Param for crate::uuid::Uuid {
     }
 }
 
+/// UTC `YYYY-MM-DD HH:MM:SS` text, as [`timestamp::format`](crate::db::timestamp::format)
+/// writes it: the form `Schema::timestamp` columns hold, in whole seconds
+/// (ADR 0040). Postgres sessions run in UTC, so it binds into `timestamptz`
+/// and `timestamp` columns unshifted too.
+impl Param for std::time::SystemTime {
+    fn to_value(&self) -> Value {
+        Value::Text(crate::db::timestamp::format(*self))
+    }
+}
+
 /// A type a column can be read as, with [`Row::get`].
 pub trait FromColumn: Sized {
     /// `value` as `Self`, or why it is not one.
@@ -286,6 +296,47 @@ impl FromColumn for crate::uuid::Uuid {
         let text = String::from_value(value)?;
         Self::parse(&text).ok_or_else(|| Error::new(format!("not a UUID: {text}")))
     }
+}
+
+/// The convention text `YYYY-MM-DD HH:MM:SS` (UTC), RFC 3339, Postgres
+/// `timestamp` and `timestamptz` output with any offset (`+02`, `+05:30`) and
+/// fraction, a bare `YYYY-MM-DD` date (midnight UTC), or Unix seconds in an
+/// integer column.
+impl FromColumn for std::time::SystemTime {
+    fn from_value(value: Value) -> Result<Self> {
+        use std::time::{Duration, UNIX_EPOCH};
+        let text = match value {
+            Value::Integer(n) => {
+                let since = Duration::from_secs(n.unsigned_abs());
+                return Ok(if n < 0 {
+                    UNIX_EPOCH - since
+                } else {
+                    UNIX_EPOCH + since
+                });
+            }
+            value => String::from_value(value)?,
+        };
+        parse_time(&text).ok_or_else(|| Error::new(format!("not a time: {text}")))
+    }
+}
+
+/// `text` as RFC 3339 wants it: `Z` for no offset, `+02` as `+02:00`.
+fn parse_time(text: &str) -> Option<std::time::SystemTime> {
+    if text.len() == 10 {
+        return crate::time::parse_date(text);
+    }
+    // The offset starts after the seconds and any fraction.
+    let end = text
+        .get(19..)?
+        .find(|c: char| c != '.' && !c.is_ascii_digit())
+        .map_or(text.len(), |at| at + 19);
+    let (time, offset) = text.split_at(end);
+    let offset = match offset.len() {
+        0 => "Z".to_owned(),
+        3 => format!("{offset}:00"),
+        _ => offset.to_owned(),
+    };
+    crate::time::parse_rfc3339(&format!("{time}{offset}"))
 }
 
 /// A column of a [`Row`]: its position from 0, or its name.
@@ -690,6 +741,77 @@ mod tests {
             .with(|sql| sql.query_row("SELECT ?1", params![true], |row| row.get(0)))
             .unwrap();
         assert_eq!(stored, 1);
+    }
+
+    #[test]
+    fn times_read_every_text_form() {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        let at = UNIX_EPOCH + Duration::from_secs(1_000_000_000); // 2001-09-09 01:46:40 UTC
+        let read = |text: &str| SystemTime::from_value(Value::Text(text.into()));
+        for text in [
+            "2001-09-09 01:46:40",
+            "2001-09-09T01:46:40Z",
+            "2001-09-09 03:46:40+02",
+            "2001-09-09 03:46:40+02:00",
+            "2001-09-09 07:16:40+05:30",
+            "2001-09-08 22:46:40-03",
+        ] {
+            assert_eq!(read(text), Ok(at), "{text}");
+        }
+        assert_eq!(
+            read("2001-09-09 01:46:40.25+00"),
+            Ok(at + Duration::from_millis(250))
+        );
+        assert_eq!(read("2001-09-09"), Ok(at - Duration::from_secs(6400)));
+        assert_eq!(
+            SystemTime::from_value(Value::Integer(1_000_000_000)),
+            Ok(at)
+        );
+        assert!(read("2001-09-09 01:46").is_err());
+        assert!(read("yesterday").is_err());
+        assert!(SystemTime::from_value(Value::Real(1.0)).is_err());
+    }
+
+    #[test]
+    fn times_round_trip_on_both_engines() {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        let at = UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        let fraction = at + Duration::from_millis(250);
+        each_engine(|db| {
+            db.with(|sql| {
+                sql.execute_batch("CREATE TABLE stamps (at TEXT NOT NULL)")?;
+                // Whole seconds, in the text `Schema::timestamp` columns hold.
+                sql.execute("INSERT INTO stamps (at) VALUES (?1)", params![fraction])?;
+                let text =
+                    sql.query_row("SELECT at FROM stamps", &[], |row| row.get::<String>(0))?;
+                assert_eq!(text, "2001-09-09 01:46:40");
+                let read =
+                    sql.query_row("SELECT at FROM stamps", &[], |row| row.get::<SystemTime>(0))?;
+                assert_eq!(read, at);
+                let now = sql.query_row("SELECT CURRENT_TIMESTAMP", &[], |row| {
+                    row.get::<SystemTime>(0)
+                })?;
+                assert!(now > at);
+                if is_postgres(db) {
+                    // Native columns: the UTC session keeps the bound text unshifted.
+                    let (zoned, plain, day) = sql.query_row(
+                        "SELECT ?1::timestamptz, ?1::timestamp, ?1::date",
+                        params![at],
+                        |row| {
+                            Ok((
+                                row.get::<SystemTime>(0)?,
+                                row.get::<SystemTime>(1)?,
+                                row.get::<SystemTime>(2)?,
+                            ))
+                        },
+                    )?;
+                    assert_eq!((zoned, plain), (at, at));
+                    assert_eq!(day, at - Duration::from_secs(6400));
+                }
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+        });
     }
 
     #[test]
