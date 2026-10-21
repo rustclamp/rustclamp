@@ -530,6 +530,15 @@ impl Client {
         if let Some(options) = &config.options {
             pairs.push(("options", options));
         }
+        // Sessions run in UTC (ADR 0040), so unzoned UTC text binds into
+        // `timestamptz` unshifted; `options=-c TimeZone=..` still overrides it.
+        let zoned = config
+            .options
+            .as_ref()
+            .is_some_and(|options| options.to_ascii_lowercase().contains("timezone"));
+        if !zoned {
+            pairs.push(("TimeZone", "UTC"));
+        }
         for (key, value) in pairs {
             body.extend(cstr(key));
             body.extend(cstr(value));
@@ -1687,5 +1696,24 @@ mod tests {
         let rows = client.query("SELECT * FROM t WHERE id = $1 UNION ALL SELECT 2, NULL, NULL, NULL, NULL WHERE $1 = 1", &[Datum::Integer(1)]).unwrap();
         assert_eq!(rows.rows[0], row);
         assert!(rows.rows[1][1..].iter().all(|d| *d == Datum::Null));
+    }
+
+    #[test]
+    #[ignore = "needs a Postgres server"]
+    fn sessions_run_in_utc_unless_options_name_a_zone() {
+        let url =
+            std::env::var("RUSTCLAMP_TEST_DATABASE_URL").expect("set RUSTCLAMP_TEST_DATABASE_URL");
+        let separator = if url.contains('?') { '&' } else { '?' };
+        for (url, zone) in [
+            (url.clone(), "UTC"),
+            (
+                format!("{url}{separator}options=-c%20TimeZone%3DAsia/Kolkata"),
+                "Asia/Kolkata",
+            ),
+        ] {
+            let mut client = Client::connect(&Config::parse_url(&url).unwrap()).unwrap();
+            let rows = client.query("SHOW TimeZone", &[]).unwrap();
+            assert_eq!(rows.rows[0][0], Datum::Text(zone.into()));
+        }
     }
 }
