@@ -14,7 +14,7 @@ const ROWS: i64 = 3_400;
 const SAMPLES: i64 = 7;
 const ONE_ROW: &str = "INSERT INTO measure_upsert_many (series_id, valid_from, price, fetched_at) VALUES (?, ?, ?, ?) \
     ON CONFLICT (series_id, valid_from) DO UPDATE SET price = excluded.price, fetched_at = excluded.fetched_at \
-    WHERE measure_upsert_many.price <> excluded.price";
+    WHERE measure_upsert_many.price IS DISTINCT FROM excluded.price";
 
 fn main() {
     let mut engines = vec![("sqlite (memory)", "DB_DATABASE=:memory:".to_owned())];
@@ -55,7 +55,7 @@ fn main() {
                         &rows,
                         &["series_id", "valid_from"],
                         &["price", "fetched_at"],
-                        Some("measure_upsert_many.price <> excluded.price"),
+                        &["price"],
                     )?;
                 } else {
                     for (n, p) in &data {
