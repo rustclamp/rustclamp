@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "rustclamp"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "argon2",
  "base64ct",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "rustclamp-postgres"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "rustclamp-core",
  "sqlx",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "rustclamp-scheduler"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "rustclamp-core",
 ]
