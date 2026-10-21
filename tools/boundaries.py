@@ -377,10 +377,14 @@ for _name in ("rustclamp-runtime", "rustclamp-worker"):
 # rustclamp-http's IdempotencyStore, so it may reach http's closure; the
 # `tower` entry is its dev-dependency for driving the router in tests.
 ALLOWED["rustclamp-postgres"] |= ALLOWED["rustclamp-http"] | {"rustclamp-http"}
+# Feature `postgres` of rustclamp-worker (ADR 0038): rustclamp-postgres and
+# exactly the closure already allowed for it.
+ALLOWED["rustclamp-worker"] |= {"rustclamp-postgres"} | ALLOWED["rustclamp-postgres"]
+
 OPTIONAL = {
     "rustclamp-postgres": {"rustclamp-http"},
     "rustclamp-runtime": {"tokio", "serde", "toml"},
-    "rustclamp-worker": {"tokio", "rustclamp-runtime", "rusqlite", "rumqttc"},
+    "rustclamp-worker": {"tokio", "rustclamp-runtime", "rusqlite", "rumqttc", "rustclamp-postgres"},
     "rustclamp-scheduler": {"tokio"},
     "rustclamp": {"rustclamp-core", "rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "regex", "rustclamp-macros", "rustls", "webpki-roots", "clap"},
 }
