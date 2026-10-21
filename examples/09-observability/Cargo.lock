@@ -307,7 +307,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rustclamp-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "getrandom",
 ]
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "rustclamp-http"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "axum",
  "bytes",
@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "rustclamp-worker"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "rustclamp-core",
  "rustclamp-messaging",

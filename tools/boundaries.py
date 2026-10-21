@@ -194,6 +194,8 @@ ALLOWED = {
     # hashbrown's default hasher, enabled by the facade's hashlink when the
     # coordinated workspace unifies features.
     'foldhash',
+    # Feature `idempotency` (ADR 0037): SHA-256 request fingerprints.
+    'sha2',
     },
     "rustclamp-postgres": {
     # cipher, inout and const-oid are feature-unification artifacts, not
@@ -371,7 +373,12 @@ RUNTIME_CONFIG = {
 }
 for _name in ("rustclamp-runtime", "rustclamp-worker"):
     ALLOWED[_name] |= RUNTIME_CONFIG
+# Feature `idempotency` (ADR 0037): rustclamp-postgres implements
+# rustclamp-http's IdempotencyStore, so it may reach http's closure; the
+# `tower` entry is its dev-dependency for driving the router in tests.
+ALLOWED["rustclamp-postgres"] |= ALLOWED["rustclamp-http"] | {"rustclamp-http"}
 OPTIONAL = {
+    "rustclamp-postgres": {"rustclamp-http"},
     "rustclamp-runtime": {"tokio", "serde", "toml"},
     "rustclamp-worker": {"tokio", "rustclamp-runtime", "rusqlite", "rumqttc"},
     "rustclamp-scheduler": {"tokio"},

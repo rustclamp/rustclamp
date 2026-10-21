@@ -964,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "rustclamp-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "getrandom 0.4.3",
 ]
@@ -991,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "rustclamp-http"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "axum",
  "bytes",
