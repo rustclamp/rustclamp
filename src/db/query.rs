@@ -9,8 +9,8 @@ use super::{Connection, Db, Dialect, Param, Result, Row};
 
 /// A query on one table, from [`Db::table`]. Chain conditions, then finish
 /// with [`get`](Self::get), [`first`](Self::first), [`count`](Self::count),
-/// [`paginate`](Self::paginate), [`insert`](Self::insert), [`update`](Self::update) or
-/// [`delete`](Self::delete).
+/// [`paginate`](Self::paginate), [`insert`](Self::insert), [`upsert`](Self::upsert),
+/// [`update`](Self::update) or [`delete`](Self::delete).
 ///
 /// ```
 /// use rustclamp::config::Config;
@@ -319,6 +319,75 @@ impl<'a> Query<'a> {
                 )
                 .map(|_| ())
         })
+    }
+
+    /// Inserts one row, or, when it would break the unique key `unique_by`,
+    /// sets `update` on the row already there to the values given instead,
+    /// and returns the row's `id` either way: `INSERT ... ON CONFLICT
+    /// (unique_by) DO UPDATE SET ... RETURNING id` on both engines.
+    /// `unique_by` must match a primary key or unique index. With `update`
+    /// empty an existing row keeps its values (only its `id` comes back).
+    /// Conditions are ignored.
+    ///
+    /// ```
+    /// use rustclamp::config::Config;
+    /// use rustclamp::db::{Db, params};
+    ///
+    /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    /// db.with(|sql| sql.execute_batch(
+    ///     "CREATE TABLE stations (id INTEGER PRIMARY KEY, code TEXT UNIQUE, name TEXT)",
+    /// )).unwrap();
+    /// let stations = db.table("stations");
+    /// let id = stations.upsert(&["code", "name"], params!["S1", "Old"], &["code"], &["name"]).unwrap();
+    /// let again = stations.upsert(&["code", "name"], params!["S1", "New"], &["code"], &["name"]).unwrap();
+    /// assert_eq!(id, again);
+    /// let name = stations.where_eq("id", &id).first(|row| row.get::<String>("name"));
+    /// assert_eq!(name.unwrap().as_deref(), Some("New"));
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// When `unique_by` is empty.
+    pub fn upsert(
+        &self,
+        columns: &[&str],
+        values: &[&dyn Param],
+        unique_by: &[&str],
+        update: &[&str],
+    ) -> Result<i64> {
+        self.with(|connection| {
+            let sql = self.upsert_sql(columns, unique_by, update, connection.dialect());
+            connection.query_row(&sql, values, |row| row.get(0))
+        })
+    }
+
+    fn upsert_sql(
+        &self,
+        columns: &[&str],
+        unique_by: &[&str],
+        update: &[&str],
+        dialect: Dialect,
+    ) -> String {
+        assert!(!unique_by.is_empty(), "upsert needs a unique key");
+        let keys: Vec<String> = unique_by.iter().map(|column| name(column)).collect();
+        // `DO NOTHING` would return no row; setting a key to itself returns it unchanged.
+        let sets: Vec<String> = if update.is_empty() {
+            &unique_by[..1]
+        } else {
+            update
+        }
+        .iter()
+        .map(|column| format!("{0} = excluded.{0}", name(column)))
+        .collect();
+        let insert = self.insert_sql(columns, Dialect::Sqlite, false);
+        for_dialect(
+            format!(
+                "{insert} ON CONFLICT ({}) DO UPDATE SET {} RETURNING id",
+                keys.join(", "),
+                sets.join(", ")
+            ),
+            dialect,
+        )
     }
 
     /// `returning_id` adds Postgres's `RETURNING id`; SQLite reads
@@ -767,6 +836,74 @@ mod tests {
             db.table("posts").limit(2).select_sql(Postgres),
             "SELECT * FROM posts LIMIT 2"
         );
+    }
+
+    #[test]
+    fn upsert_sql_per_dialect() {
+        use crate::db::Dialect::{Postgres, Sqlite};
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let prices = db.table("prices");
+        assert_eq!(
+            prices.upsert_sql(
+                &["station", "day", "price"],
+                &["station", "day"],
+                &["price"],
+                Postgres
+            ),
+            "INSERT INTO prices (station, day, price) VALUES ($1, $2, $3) ON CONFLICT (station, day) DO UPDATE SET price = excluded.price RETURNING id"
+        );
+        assert_eq!(
+            prices.upsert_sql(&["code"], &["code"], &[], Sqlite),
+            "INSERT INTO prices (code) VALUES (?) ON CONFLICT (code) DO UPDATE SET code = excluded.code RETURNING id"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "upsert needs a unique key")]
+    fn upsert_needs_a_key() {
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let _ = db.table("t").upsert(&["a"], &[&1], &[], &["a"]);
+    }
+
+    #[test]
+    fn upsert_inserts_then_updates_and_returns_the_same_id() {
+        each_engine(|db| {
+            let create = crate::db::Schema::create("stations", |table| {
+                table.id();
+                table.string("code").unique();
+                table.string("name");
+            });
+            db.with(|sql| sql.execute_batch(create.render(db.dialect())))
+                .unwrap();
+            let stations = db.table("stations");
+            let upsert = |code: &str, name: &str, update: &[&str]| {
+                stations.upsert(&["code", "name"], &[&code, &name], &["code"], update)
+            };
+            let first = upsert("a", "one", &["name"]).unwrap();
+            let other = upsert("b", "two", &["name"]).unwrap();
+            assert_ne!(first, other);
+            assert_eq!(upsert("a", "uno", &["name"]).unwrap(), first);
+            // With nothing to update the row keeps its name, and its id still comes back.
+            assert_eq!(upsert("a", "ignored", &[]).unwrap(), first);
+            let name = db
+                .table("stations")
+                .where_eq("id", &first)
+                .first(|r| r.get::<String>("name"));
+            assert_eq!(name.unwrap().as_deref(), Some("uno"));
+            assert_eq!(stations.count().unwrap(), 2);
+            // In a transaction, and a key that matches no unique index fails.
+            let in_tx = db.transaction(|tx| {
+                tx.table("stations").upsert(
+                    &["code", "name"],
+                    &[&"c", &"three"],
+                    &["code"],
+                    &["name"],
+                )
+            });
+            assert!(in_tx.unwrap() > other);
+            let no_index = stations.upsert(&["code", "name"], &[&"d", &"x"], &["name"], &["code"]);
+            assert!(no_index.is_err());
+        });
     }
 
     #[test]

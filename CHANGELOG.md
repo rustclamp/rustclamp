@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- `Query::upsert(columns, values, unique_by, update)`: inserts a row or, on a
+  conflict with the unique key `unique_by`, sets the `update` columns on the
+  existing row, and returns the row's `id` either way. One
+  `INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING id` on SQLite and
+  Postgres; with `update` empty an existing row keeps its values.
+
 ### Fixed
 
 - `row.get::<f64>()` reads a Postgres `numeric` column (and `sum`/`avg`, which
