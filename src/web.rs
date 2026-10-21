@@ -1101,7 +1101,7 @@ impl App {
     /// # Panics
     ///
     /// When a migration fails: the app must not serve an old schema. When
-    /// the queue settings cannot work ([`Queue::new`](crate::queue::Queue::new)).
+    /// the queue settings cannot work (`queue::Queue::new`).
     /// When an app command takes a built-in name, or two take the same one.
     pub fn run(self) {
         use crate::db::Db;

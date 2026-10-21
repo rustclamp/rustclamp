@@ -1,7 +1,7 @@
 //! A small synchronous Redis client (ADR 0027), with the `redis` feature.
 //!
 //! Std only: RESP2 over one `TcpStream`, shared by every clone and thread
-//! behind a lock, like [`Db`](crate::db::Db)'s writer. It connects on first
+//! behind a lock, like `db::Db`'s writer. It connects on first
 //! use, and after a network error it connects again on the next call. The
 //! command that failed is not retried, because Redis may already have run it.
 //!
@@ -226,7 +226,7 @@ impl Redis {
     /// Counts one hit on `key` in a fixed window: the count so far and the
     /// time left in the window, which starts at the key's first hit. Atomic
     /// across every app instance sharing this Redis, so it backs a shared rate
-    /// limit ([`Throttle::shared`](crate::web::Throttle::shared)).
+    /// limit (`web::Throttle::shared`).
     ///
     /// # Errors
     ///

@@ -161,7 +161,7 @@ pub enum Delivery {
 }
 
 /// The app's mailer: shared with handlers as router state
-/// ([`App`](crate::web::App) adds it).
+/// (`web::App` adds it).
 #[derive(Debug)]
 pub struct Mailer {
     settings: Settings,
@@ -452,7 +452,7 @@ impl crate::web::Request {
     ///
     /// # Panics
     ///
-    /// When the router has no `Mailer` state ([`App`](crate::web::App) adds it).
+    /// When the router has no `Mailer` state (`web::App` adds it).
     pub fn mailer(&self) -> &Mailer {
         self.state::<std::sync::Arc<Mailer>>()
             .expect("no Mailer: add .state(Arc::new(Mailer::new(settings))) to the router")

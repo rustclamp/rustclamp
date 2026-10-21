@@ -1,8 +1,8 @@
 //! Framework errors as exit codes and problem JSON.
 //!
 //! An app's `main` maps errors to a process exit code and an error message;
-//! [`ExitError`] gives the facade's own errors ([`ConfigError`], [`DbError`],
-//! [`ServeError`]) one answer for both, and [`run`] prints it and exits:
+//! [`ExitError`] gives the facade's own errors (`config::ConfigError`,
+//! `db::DbError`, `web::ServeError`) one answer for both, and [`run`] prints it and exits:
 //!
 //! ```no_run
 //! use rustclamp::error::{ExitError, Problem};
@@ -35,13 +35,9 @@
 //!
 //! Exit codes follow `sysexits.h`: `78` for configuration, `69` for a service
 //! that is not available and `74` for input/output.
-//!
-//! [`ConfigError`]: crate::config::ConfigError
-//! [`DbError`]: crate::db::DbError
-//! [`ServeError`]: crate::web::ServeError
 
 /// An RFC 9457 problem: the `type`, `title`, `status` and `detail` shape of
-/// `rustclamp-http`'s `HttpError` and [`web::problem`](crate::web::problem).
+/// `rustclamp-http`'s `HttpError` and `web::problem`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
     /// An HTTP status code that classes the failure, such as `500`.

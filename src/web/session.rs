@@ -107,7 +107,7 @@ impl PartialEq for Session {
 impl Eq for Session {}
 
 /// Server-side sessions: the cookie holds only a random ID, the values stay
-/// on the server, in memory or, with [`database`](Self::database), in
+/// on the server, in memory or, with `Sessions::database`, in
 /// SQLite so they survive restarts. Add [`Sessions::middleware`] to the routes
 /// that need [`Request::session`], usually a `web` group.
 #[derive(Debug)]
