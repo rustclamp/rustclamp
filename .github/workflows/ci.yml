@@ -79,11 +79,15 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       RUSTCLAMP_TEST_MQTT_URL: mqtt://127.0.0.1:1883
+      RUSTCLAMP_TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres?sslmode=disable
     steps:
       # A real broker for rustclamp-worker's live MQTT test. A step, not a service:
       # Mosquitto 2 needs its bundled anonymous-listener config passed as the command.
       - name: Mosquitto
         run: docker run -d -p 1883:1883 eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
+      # rustclamp-worker's Postgres tests (ADR 0038); each test makes a schema of its own.
+      - name: Postgres
+        run: docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=test --health-cmd "pg_isready -U postgres" --health-interval 2s postgres:17-alpine
       - uses: actions/checkout@v7
         with:
           path: rustclamp
