@@ -1,5 +1,21 @@
 # Changelog: rustclamp
 
+## Unreleased
+
+### Changed
+
+- The `schedule` feature no longer needs `web` (ADR 0035 amendment): it is
+  `db` + `log`, so a headless worker builds a `Schedule` with
+  `Schedule::new(tasks, &config, db)` and calls `start()` or `run_due(now)`.
+  With `web`, `App::schedule` and `schedule:run` work as before. An app that
+  named only `schedule` and used `web` items must now name `web` too.
+
+### Fixed
+
+- Scheduled tasks run on Postgres: claiming a slot used SQLite's
+  `INSERT OR IGNORE`, which Postgres rejects; it is now
+  `INSERT ... ON CONFLICT (task) DO NOTHING` on both engines.
+
 ## 1.1.0 - 2026-10-21
 
 ### Added

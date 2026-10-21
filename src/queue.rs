@@ -545,7 +545,7 @@ pub fn workers(config: &Config) -> usize {
 
 /// Runs `handler`, turning a panic into a failure.
 fn run(handler: Handler, job: &Job<'_>) -> Result<(), String> {
-    crate::web::catch_panic(|| handler(job))
+    crate::error::catch_panic(|| handler(job))
 }
 
 fn row_id(job: &Reserved) -> i64 {
