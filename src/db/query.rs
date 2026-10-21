@@ -356,19 +356,21 @@ impl<'a> Query<'a> {
     }
 
     /// [`insert_many`](Self::insert_many) as an upsert: a row that would break
-    /// the unique key `unique_by` sets `update` on the row already there,
-    /// from `excluded`, and with `when` only where that condition holds:
-    /// `INSERT ... VALUES (..), (..) ON CONFLICT (unique_by) DO UPDATE SET
-    /// col = excluded.col WHERE when`, on both engines. With `update` empty
-    /// such a row is left alone (`DO NOTHING`). Returns how many rows went in
-    /// or changed; a row skipped by `when` or `DO NOTHING` does not count.
-    /// Same chunks and transaction as `insert_many`; nothing comes back per row.
+    /// the unique key `unique_by` sets the `update` columns on the row already
+    /// there, from `excluded`: `INSERT ... VALUES (..), (..) ON CONFLICT
+    /// (unique_by) DO UPDATE SET col = excluded.col`, on both engines. With
+    /// `update` empty such a row is left alone (`DO NOTHING`).
     ///
-    /// `when` is written into the SQL as is, so it is a `&'static str` from
-    /// the app's code. It names the existing row by the table and the
-    /// proposed one as `excluded`: `"prices.price <> excluded.price"`.
-    /// A key may appear once per call: Postgres refuses to update a row twice
-    /// in one statement.
+    /// With `only_if_changed` columns, an existing row is updated only when
+    /// one of them differs: `WHERE t.c1 IS DISTINCT FROM excluded.c1 OR ..`,
+    /// so a change to or from `NULL` counts and an unchanged row is not
+    /// written (its other `update` columns keep their old values too).
+    ///
+    /// Returns how many rows went in or changed; a row skipped by
+    /// `only_if_changed` or `DO NOTHING` does not count. Same chunks and
+    /// transaction as `insert_many`; nothing comes back per row. A key may
+    /// appear once per call: Postgres refuses to update a row twice in one
+    /// statement.
     ///
     /// ```
     /// use rustclamp::config::Config;
@@ -378,16 +380,13 @@ impl<'a> Query<'a> {
     /// db.with(|sql| sql.execute_batch(
     ///     "CREATE TABLE prices (station TEXT PRIMARY KEY, price REAL, seen INTEGER)",
     /// )).unwrap();
-    /// let prices = || db.table("prices");
-    /// let first: [[&dyn Param; 3]; 2] = [[&"S1", &1.49, &1], [&"S2", &1.52, &1]];
-    /// prices().upsert_many(&["station", "price", "seen"], &first, &["station"], &["price", "seen"], None).unwrap();
-    /// // S1 is unchanged, so only S2 is written.
-    /// let again: [[&dyn Param; 3]; 2] = [[&"S1", &1.49, &2], [&"S2", &1.55, &2]];
-    /// let changed = prices()
-    ///     .upsert_many(&["station", "price", "seen"], &again, &["station"], &["price", "seen"],
-    ///         Some("prices.price <> excluded.price"))
-    ///     .unwrap();
-    /// assert_eq!(changed, 1);
+    /// let columns = ["station", "price", "seen"];
+    /// let upsert = |rows: &[[&dyn Param; 3]]| {
+    ///     db.table("prices").upsert_many(&columns, rows, &["station"], &["price", "seen"], &["price"])
+    /// };
+    /// upsert(&[[&"S1", &1.49, &1], [&"S2", &1.52, &1]]).unwrap();
+    /// // S1's price is unchanged, so only S2 is written.
+    /// assert_eq!(upsert(&[[&"S1", &1.49, &2], [&"S2", &1.55, &2]]).unwrap(), 1);
     /// ```
     ///
     /// # Errors
@@ -397,16 +396,18 @@ impl<'a> Query<'a> {
     ///
     /// # Panics
     ///
-    /// When `unique_by` is empty, or `when` is given with `update` empty.
+    /// When `unique_by` is empty, or `only_if_changed` is given with `update`
+    /// empty.
     pub fn upsert_many<'v, R: AsRef<[&'v dyn Param]>>(
         &self,
         columns: &[&str],
         rows: &[R],
         unique_by: &[&str],
         update: &[&str],
-        when: Option<&'static str>,
+        only_if_changed: &[&str],
     ) -> Result<usize> {
-        self.write_many(columns, rows, &on_conflict(unique_by, update, when))
+        let suffix = on_conflict(&self.table, unique_by, update, only_if_changed);
+        self.write_many(columns, rows, &suffix)
     }
 
     /// Multi-row inserts of `rows` in chunks, each followed by `suffix`.
@@ -679,22 +680,39 @@ impl<T: crate::web::ToValue> crate::web::ToValue for Page<T> {
     }
 }
 
-/// ` ON CONFLICT (unique_by) DO UPDATE SET .. [WHERE when]`, or `DO NOTHING`
-/// with nothing to update.
-fn on_conflict(unique_by: &[&str], update: &[&str], when: Option<&'static str>) -> String {
+/// ` ON CONFLICT (unique_by) DO UPDATE SET ..`, with `WHERE` checks for
+/// `only_if_changed`, or `DO NOTHING` with nothing to update.
+fn on_conflict(
+    table: &str,
+    unique_by: &[&str],
+    update: &[&str],
+    only_if_changed: &[&str],
+) -> String {
     assert!(!unique_by.is_empty(), "upsert needs a unique key");
     let keys: Vec<String> = unique_by.iter().map(|column| name(column)).collect();
     if update.is_empty() {
-        assert!(when.is_none(), "a `when` needs columns to update");
+        assert!(
+            only_if_changed.is_empty(),
+            "only_if_changed needs columns to update"
+        );
         return format!(" ON CONFLICT ({}) DO NOTHING", keys.join(", "));
     }
     let sets: Vec<String> = update
         .iter()
         .map(|column| format!("{0} = excluded.{0}", name(column)))
         .collect();
-    let when = when.map_or(String::new(), |when| format!(" WHERE {when}"));
+    // `IS DISTINCT FROM`, so NULL to a value is a change; SQLite has it since 3.39.
+    let changed: Vec<String> = only_if_changed
+        .iter()
+        .map(|column| format!("{table}.{0} IS DISTINCT FROM excluded.{0}", name(column)))
+        .collect();
+    let only = if changed.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", changed.join(" OR "))
+    };
     format!(
-        " ON CONFLICT ({}) DO UPDATE SET {}{when}",
+        " ON CONFLICT ({}) DO UPDATE SET {}{only}",
         keys.join(", "),
         sets.join(", ")
     )
@@ -1075,9 +1093,10 @@ mod tests {
         use crate::db::Dialect::{Postgres, Sqlite};
         let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
         let suffix = super::on_conflict(
+            "prices",
             &["series_id", "valid_from"],
             &["price", "fetched_at"],
-            Some("prices.price <> excluded.price"),
+            &["price", "fetched_at"],
         );
         assert_eq!(
             db.table("prices").insert_many_sql(
@@ -1088,13 +1107,13 @@ mod tests {
             ),
             "INSERT INTO prices (series_id, valid_from, price, fetched_at) VALUES ($1, $2, $3, $4), ($5, $6, $7, $8) \
              ON CONFLICT (series_id, valid_from) DO UPDATE SET price = excluded.price, fetched_at = excluded.fetched_at \
-             WHERE prices.price <> excluded.price"
+             WHERE prices.price IS DISTINCT FROM excluded.price OR prices.fetched_at IS DISTINCT FROM excluded.fetched_at"
         );
         assert_eq!(
             db.table("t").insert_many_sql(
                 &["k"],
                 1,
-                &super::on_conflict(&["k"], &[], None),
+                &super::on_conflict("t", &["k"], &[], &[]),
                 Sqlite
             ),
             "INSERT INTO t (k) VALUES (?) ON CONFLICT (k) DO NOTHING"
@@ -1102,9 +1121,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a `when` needs columns to update")]
-    fn upsert_many_when_needs_an_update() {
-        let _ = super::on_conflict(&["k"], &[], Some("t.v <> excluded.v"));
+    #[should_panic(expected = "only_if_changed needs columns to update")]
+    fn upsert_many_only_if_changed_needs_an_update() {
+        let _ = super::on_conflict("t", &["k"], &[], &["v"]);
     }
 
     #[test]
@@ -1119,7 +1138,7 @@ mod tests {
             })
             .unwrap();
             let columns = ["series_id", "valid_from", "price", "fetched_at"];
-            let upsert = |price: &dyn Fn(i64) -> f64, fetched: i64, when| {
+            let upsert = |price: &dyn Fn(i64) -> f64, fetched: i64, only: &[&str]| {
                 // 4 columns: 20 000 rows are three statements.
                 let data: Vec<(i64, f64)> = (0..20_000).map(|n| (n, price(n))).collect();
                 let rows: Vec<[&dyn Param; 4]> = data
@@ -1131,16 +1150,12 @@ mod tests {
                     &rows,
                     &["series_id", "valid_from"],
                     &["price", "fetched_at"],
-                    when,
+                    only,
                 )
             };
-            assert_eq!(upsert(&|_| 1.0, 1, None).unwrap(), 20_000);
+            assert_eq!(upsert(&|_| 1.0, 1, &[]).unwrap(), 20_000);
             // Every 10th price changes: only those rows are written, and only they get fetched_at 2.
-            let changed = upsert(
-                &|n| if n % 10 == 0 { 2.0 } else { 1.0 },
-                2,
-                Some("prices.price <> excluded.price"),
-            );
+            let changed = upsert(&|n| if n % 10 == 0 { 2.0 } else { 1.0 }, 2, &["price"]);
             assert_eq!(changed.unwrap(), 2_000);
             let fetched: Vec<i64> = db
                 .table("prices")
@@ -1149,8 +1164,8 @@ mod tests {
                 .unwrap();
             assert_eq!(fetched.len(), 2_000);
             assert!(fetched.iter().all(|n| n % 10 == 0));
-            // Without `when` every row is updated; with nothing to update, nothing is.
-            assert_eq!(upsert(&|_| 3.0, 3, None).unwrap(), 20_000);
+            // Without `only_if_changed` every row is updated; with nothing to update, nothing is.
+            assert_eq!(upsert(&|_| 3.0, 3, &[]).unwrap(), 20_000);
             let rows: [[&dyn Param; 4]; 2] = [
                 [&1, &"2026-10-21", &9.0, &9],
                 [&20_001, &"2026-10-21", &9.0, &9],
@@ -1160,7 +1175,7 @@ mod tests {
                 &rows,
                 &["series_id", "valid_from"],
                 &[],
-                None,
+                &[],
             );
             assert_eq!(nothing.unwrap(), 1);
             assert_eq!(db.table("prices").count().unwrap(), 20_001);
@@ -1172,9 +1187,47 @@ mod tests {
             // A key that matches no unique index fails, and nothing of the call stays.
             let wrong =
                 db.table("prices")
-                    .upsert_many(&columns, &rows, &["price"], &["fetched_at"], None);
+                    .upsert_many(&columns, &rows, &["price"], &["fetched_at"], &[]);
             assert!(wrong.is_err());
             assert_eq!(db.table("prices").count().unwrap(), 20_001);
+        });
+    }
+
+    #[test]
+    fn upsert_many_counts_null_changes() {
+        use crate::db::Param;
+        each_engine(|db| {
+            db.with(|sql| {
+                sql.execute_batch(
+                    "CREATE TABLE prices (id INTEGER PRIMARY KEY, price DOUBLE PRECISION, seen INTEGER)",
+                )
+            })
+            .unwrap();
+            let upsert = |price: Option<f64>, seen: i64| {
+                let rows: [[&dyn Param; 3]; 1] = [[&1, &price, &seen]];
+                db.table("prices").upsert_many(
+                    &["id", "price", "seen"],
+                    &rows,
+                    &["id"],
+                    &["price", "seen"],
+                    &["price"],
+                )
+            };
+            let state = || {
+                db.table("prices")
+                    .first(|row| Ok((row.get::<Option<f64>>("price")?, row.get::<i64>("seen")?)))
+                    .unwrap()
+            };
+            assert_eq!(upsert(None, 1).unwrap(), 1);
+            // NULL to NULL is no change: `<>` would say unknown, IS DISTINCT FROM says equal.
+            assert_eq!(upsert(None, 2).unwrap(), 0);
+            assert_eq!(state(), Some((None, 1)));
+            // NULL to a value, and a value back to NULL, are changes.
+            assert_eq!(upsert(Some(1.5), 3).unwrap(), 1);
+            assert_eq!(state(), Some((Some(1.5), 3)));
+            assert_eq!(upsert(Some(1.5), 4).unwrap(), 0);
+            assert_eq!(upsert(None, 5).unwrap(), 1);
+            assert_eq!(state(), Some((None, 5)));
         });
     }
 
