@@ -9,7 +9,7 @@ publish = false
 futures-executor = "0.3"
 rustclamp-core = { version = "1.0.0", path = "../../../core" }
 rustclamp-kernel = { version = "1.0.0", path = "../../../kernel" }
-rustclamp-scheduler = { version = "1.0.0", path = "../../../scheduler" }
+rustclamp-scheduler = { version = "2.0.0", path = "../../../scheduler" }
 
 [[example]]
 name = "04-scheduler"
