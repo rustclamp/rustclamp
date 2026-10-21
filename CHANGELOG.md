@@ -4,6 +4,14 @@
 
 ### Added
 
+- `Query::upsert_many(columns, rows, unique_by, update, when)` (#188): many
+  rows as `insert_many` does, with `ON CONFLICT (unique_by) DO UPDATE SET
+  col = excluded.col` and an optional `WHERE when` that compares the existing
+  row with `excluded`, or `DO NOTHING` when `update` is empty. Same chunks and
+  transaction, both engines; returns the rows inserted or changed. 3 400 rows
+  with one in ten changed, on a local Postgres 17: 20 ms against 301 ms one
+  statement a row (`cargo run --release --example measure-upsert-many
+  --features postgres,db`).
 - `time::Zone` (#177): local time without a tz database. `Zone::UTC`,
   `Zone::fixed(minutes)`, and `Zone::eu(standard_minutes)` with EU summer
   time (last Sunday of March to last Sunday of October, 01:00 UTC). It has

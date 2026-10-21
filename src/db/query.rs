@@ -352,6 +352,70 @@ impl<'a> Query<'a> {
         columns: &[&str],
         rows: &[R],
     ) -> Result<usize> {
+        self.write_many(columns, rows, "")
+    }
+
+    /// [`insert_many`](Self::insert_many) as an upsert: a row that would break
+    /// the unique key `unique_by` sets `update` on the row already there,
+    /// from `excluded`, and with `when` only where that condition holds:
+    /// `INSERT ... VALUES (..), (..) ON CONFLICT (unique_by) DO UPDATE SET
+    /// col = excluded.col WHERE when`, on both engines. With `update` empty
+    /// such a row is left alone (`DO NOTHING`). Returns how many rows went in
+    /// or changed; a row skipped by `when` or `DO NOTHING` does not count.
+    /// Same chunks and transaction as `insert_many`; nothing comes back per row.
+    ///
+    /// `when` is written into the SQL as is, so it is a `&'static str` from
+    /// the app's code. It names the existing row by the table and the
+    /// proposed one as `excluded`: `"prices.price <> excluded.price"`.
+    /// A key may appear once per call: Postgres refuses to update a row twice
+    /// in one statement.
+    ///
+    /// ```
+    /// use rustclamp::config::Config;
+    /// use rustclamp::db::{Db, Param};
+    ///
+    /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    /// db.with(|sql| sql.execute_batch(
+    ///     "CREATE TABLE prices (station TEXT PRIMARY KEY, price REAL, seen INTEGER)",
+    /// )).unwrap();
+    /// let prices = || db.table("prices");
+    /// let first: [[&dyn Param; 3]; 2] = [[&"S1", &1.49, &1], [&"S2", &1.52, &1]];
+    /// prices().upsert_many(&["station", "price", "seen"], &first, &["station"], &["price", "seen"], None).unwrap();
+    /// // S1 is unchanged, so only S2 is written.
+    /// let again: [[&dyn Param; 3]; 2] = [[&"S1", &1.49, &2], [&"S2", &1.55, &2]];
+    /// let changed = prices()
+    ///     .upsert_many(&["station", "price", "seen"], &again, &["station"], &["price", "seen"],
+    ///         Some("prices.price <> excluded.price"))
+    ///     .unwrap();
+    /// assert_eq!(changed, 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As [`insert_many`](Self::insert_many); also when `unique_by` matches
+    /// no unique index.
+    ///
+    /// # Panics
+    ///
+    /// When `unique_by` is empty, or `when` is given with `update` empty.
+    pub fn upsert_many<'v, R: AsRef<[&'v dyn Param]>>(
+        &self,
+        columns: &[&str],
+        rows: &[R],
+        unique_by: &[&str],
+        update: &[&str],
+        when: Option<&'static str>,
+    ) -> Result<usize> {
+        self.write_many(columns, rows, &on_conflict(unique_by, update, when))
+    }
+
+    /// Multi-row inserts of `rows` in chunks, each followed by `suffix`.
+    fn write_many<'v, R: AsRef<[&'v dyn Param]>>(
+        &self,
+        columns: &[&str],
+        rows: &[R],
+        suffix: &str,
+    ) -> Result<usize> {
         if let Some(at) = rows
             .iter()
             .position(|row| row.as_ref().len() != columns.len())
@@ -365,13 +429,14 @@ impl<'a> Query<'a> {
         let connection = match self.source {
             _ if rows.is_empty() => return Ok(0),
             Source::Db(db) => {
-                return db.transaction(|tx| tx.table(&self.table).insert_many(columns, rows));
+                return db
+                    .transaction(|tx| tx.table(&self.table).write_many(columns, rows, suffix));
             }
             Source::Transaction(connection) => connection,
         };
         let mut inserted = 0;
         for chunk in rows.chunks((MAX_PARAMS / columns.len().max(1)).max(1)) {
-            let sql = self.insert_many_sql(columns, chunk.len(), connection.dialect());
+            let sql = self.insert_many_sql(columns, chunk.len(), suffix, connection.dialect());
             let values: Vec<&dyn Param> =
                 chunk.iter().flat_map(|row| row.as_ref()).copied().collect();
             inserted += connection.execute(&sql, &values)?;
@@ -379,12 +444,18 @@ impl<'a> Query<'a> {
         Ok(inserted)
     }
 
-    fn insert_many_sql(&self, columns: &[&str], rows: usize, dialect: Dialect) -> String {
+    fn insert_many_sql(
+        &self,
+        columns: &[&str],
+        rows: usize,
+        suffix: &str,
+        dialect: Dialect,
+    ) -> String {
         let names: Vec<String> = columns.iter().map(|column| name(column)).collect();
         let row = format!("({})", vec!["?"; columns.len()].join(", "));
         for_dialect(
             format!(
-                "INSERT INTO {} ({}) VALUES {}",
+                "INSERT INTO {} ({}) VALUES {}{suffix}",
                 self.table,
                 names.join(", "),
                 vec![row; rows].join(", ")
@@ -606,6 +677,27 @@ impl<T: crate::web::ToValue> crate::web::ToValue for Page<T> {
             ("next", &self.next()),
         ])
     }
+}
+
+/// ` ON CONFLICT (unique_by) DO UPDATE SET .. [WHERE when]`, or `DO NOTHING`
+/// with nothing to update.
+fn on_conflict(unique_by: &[&str], update: &[&str], when: Option<&'static str>) -> String {
+    assert!(!unique_by.is_empty(), "upsert needs a unique key");
+    let keys: Vec<String> = unique_by.iter().map(|column| name(column)).collect();
+    if update.is_empty() {
+        assert!(when.is_none(), "a `when` needs columns to update");
+        return format!(" ON CONFLICT ({}) DO NOTHING", keys.join(", "));
+    }
+    let sets: Vec<String> = update
+        .iter()
+        .map(|column| format!("{0} = excluded.{0}", name(column)))
+        .collect();
+    let when = when.map_or(String::new(), |when| format!(" WHERE {when}"));
+    format!(
+        " ON CONFLICT ({}) DO UPDATE SET {}{when}",
+        keys.join(", "),
+        sets.join(", ")
+    )
 }
 
 /// `sql` as the dialect writes it: Postgres numbers its `?` marks.
@@ -979,16 +1071,124 @@ mod tests {
     }
 
     #[test]
+    fn upsert_many_sql_per_dialect() {
+        use crate::db::Dialect::{Postgres, Sqlite};
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let suffix = super::on_conflict(
+            &["series_id", "valid_from"],
+            &["price", "fetched_at"],
+            Some("prices.price <> excluded.price"),
+        );
+        assert_eq!(
+            db.table("prices").insert_many_sql(
+                &["series_id", "valid_from", "price", "fetched_at"],
+                2,
+                &suffix,
+                Postgres
+            ),
+            "INSERT INTO prices (series_id, valid_from, price, fetched_at) VALUES ($1, $2, $3, $4), ($5, $6, $7, $8) \
+             ON CONFLICT (series_id, valid_from) DO UPDATE SET price = excluded.price, fetched_at = excluded.fetched_at \
+             WHERE prices.price <> excluded.price"
+        );
+        assert_eq!(
+            db.table("t").insert_many_sql(
+                &["k"],
+                1,
+                &super::on_conflict(&["k"], &[], None),
+                Sqlite
+            ),
+            "INSERT INTO t (k) VALUES (?) ON CONFLICT (k) DO NOTHING"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "a `when` needs columns to update")]
+    fn upsert_many_when_needs_an_update() {
+        let _ = super::on_conflict(&["k"], &[], Some("t.v <> excluded.v"));
+    }
+
+    #[test]
+    fn upsert_many_updates_only_changed_rows_in_chunks() {
+        use crate::db::Param;
+        each_engine(|db| {
+            db.with(|sql| {
+                sql.execute_batch(
+                    "CREATE TABLE prices (series_id INTEGER, valid_from TEXT, price DOUBLE PRECISION, fetched_at INTEGER,
+                     PRIMARY KEY (series_id, valid_from))",
+                )
+            })
+            .unwrap();
+            let columns = ["series_id", "valid_from", "price", "fetched_at"];
+            let upsert = |price: &dyn Fn(i64) -> f64, fetched: i64, when| {
+                // 4 columns: 20 000 rows are three statements.
+                let data: Vec<(i64, f64)> = (0..20_000).map(|n| (n, price(n))).collect();
+                let rows: Vec<[&dyn Param; 4]> = data
+                    .iter()
+                    .map(|(n, p)| [n as &dyn Param, &"2026-10-21", p, &fetched])
+                    .collect();
+                db.table("prices").upsert_many(
+                    &columns,
+                    &rows,
+                    &["series_id", "valid_from"],
+                    &["price", "fetched_at"],
+                    when,
+                )
+            };
+            assert_eq!(upsert(&|_| 1.0, 1, None).unwrap(), 20_000);
+            // Every 10th price changes: only those rows are written, and only they get fetched_at 2.
+            let changed = upsert(
+                &|n| if n % 10 == 0 { 2.0 } else { 1.0 },
+                2,
+                Some("prices.price <> excluded.price"),
+            );
+            assert_eq!(changed.unwrap(), 2_000);
+            let fetched: Vec<i64> = db
+                .table("prices")
+                .where_eq("fetched_at", &2)
+                .get(|row| row.get("series_id"))
+                .unwrap();
+            assert_eq!(fetched.len(), 2_000);
+            assert!(fetched.iter().all(|n| n % 10 == 0));
+            // Without `when` every row is updated; with nothing to update, nothing is.
+            assert_eq!(upsert(&|_| 3.0, 3, None).unwrap(), 20_000);
+            let rows: [[&dyn Param; 4]; 2] = [
+                [&1, &"2026-10-21", &9.0, &9],
+                [&20_001, &"2026-10-21", &9.0, &9],
+            ];
+            let nothing = db.table("prices").upsert_many(
+                &columns,
+                &rows,
+                &["series_id", "valid_from"],
+                &[],
+                None,
+            );
+            assert_eq!(nothing.unwrap(), 1);
+            assert_eq!(db.table("prices").count().unwrap(), 20_001);
+            let kept = db
+                .table("prices")
+                .where_eq("series_id", &1)
+                .first(|row| row.get::<f64>("price"));
+            assert_eq!(kept.unwrap(), Some(3.0));
+            // A key that matches no unique index fails, and nothing of the call stays.
+            let wrong =
+                db.table("prices")
+                    .upsert_many(&columns, &rows, &["price"], &["fetched_at"], None);
+            assert!(wrong.is_err());
+            assert_eq!(db.table("prices").count().unwrap(), 20_001);
+        });
+    }
+
+    #[test]
     fn insert_many_sql_per_dialect() {
         use crate::db::Dialect::{Postgres, Sqlite};
         let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
         let pairs = db.table("pairs");
         assert_eq!(
-            pairs.insert_many_sql(&["a", "b"], 2, Sqlite),
+            pairs.insert_many_sql(&["a", "b"], 2, "", Sqlite),
             "INSERT INTO pairs (a, b) VALUES (?, ?), (?, ?)"
         );
         assert_eq!(
-            pairs.insert_many_sql(&["a", "b"], 2, Postgres),
+            pairs.insert_many_sql(&["a", "b"], 2, "", Postgres),
             "INSERT INTO pairs (a, b) VALUES ($1, $2), ($3, $4)"
         );
     }
