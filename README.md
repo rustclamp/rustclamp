@@ -68,7 +68,7 @@ All modules are opt-in Cargo features. Unsafe code is forbidden.
 | `uuid` | `rustclamp::uuid` | UUID v4 and v7; v7 comes from `rustclamp_core::Reference` ([ADR 0021](docs/adr/0021-reference.md)) |
 | `storage` | `rustclamp::storage` | Named file disks (`local`, `public`) that refuse paths leaving the disk |
 | `crypto` | `rustclamp::crypto` | Password hashing, encryption, SHA-256/HMAC, random bytes ([ADR 0010](docs/adr/0010-crypto.md)) |
-| `db` | `rustclamp::db` | Bundled SQLite: migrations, seeders, `Schema` builder, `table(..)` query builder, `Db::transaction`, `States`, `#[derive(Model)]` ([ADR 0009](docs/adr/0009-database.md), [0014](docs/adr/0014-derive-macros.md)) |
+| `db` | `rustclamp::db` | The same as `sqlite`; with `postgres` alone the module has no SQLite in it ([ADR 0034](docs/adr/0034-postgres-behind-db.md)). Bundled SQLite: migrations, seeders, `Schema` builder, `table(..)` query builder, `Db::transaction`, `States`, `#[derive(Model)]` ([ADR 0009](docs/adr/0009-database.md), [0014](docs/adr/0014-derive-macros.md)) |
 | `web` | `rustclamp::web` | std-only HTTP server: routing, sessions, CSRF, validation, uploads, Blade-style views, `problem+json` errors, graceful `serve_until`, `web::testing::Client` ([ADR 0007](docs/adr/0007-phase9-web-scaffold-options.md), [0012](docs/adr/0012-view-templates.md)) |
 | `auth` | `rustclamp::web::auth` | Login, roles, email verification and password reset ([ADR 0013](docs/adr/0013-auth-and-roles.md), [0016](docs/adr/0016-account-flows.md)) |
 | `mail` | `rustclamp::mail` | SMTP with STARTTLS over rustls, queued through a `mail_outbox` table ([ADR 0015](docs/adr/0015-mail.md)) |

@@ -24,6 +24,10 @@
   `f64` now parses text that is a number on either engine, rounding to the
   nearest double.
 
+- Scheduled tasks run on Postgres: claiming a slot used SQLite's
+  `INSERT OR IGNORE`, which Postgres rejects; it is now
+  `INSERT ... ON CONFLICT (task) DO NOTHING` on both engines.
+
 ## 1.1.0 - 2026-10-21
 
 ### Added

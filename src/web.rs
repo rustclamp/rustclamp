@@ -48,6 +48,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::error::panic_reason;
 use crate::log::Log;
 
 #[cfg(feature = "regex")]
@@ -167,7 +168,7 @@ impl Router {
     #[must_use]
     pub fn up(self, path: &str) -> Self {
         self.get(path, |request: &Request| {
-            #[cfg(feature = "db")]
+            #[cfg(feature = "db-core")]
             if let Some(db) = request.state::<crate::db::Db>()
                 && db
                     .with(|sql| sql.query_row("SELECT 1", &[], |_| Ok(())))
@@ -175,7 +176,7 @@ impl Router {
             {
                 return error(503);
             }
-            #[cfg(not(feature = "db"))]
+            #[cfg(not(feature = "db-core"))]
             let _ = request;
             json(r#"{"status":"ok"}"#)
         })
@@ -967,7 +968,7 @@ fn content_type(file: &Path) -> &'static str {
 ///     0
 /// }
 /// ```
-#[cfg(feature = "db")]
+#[cfg(feature = "db-core")]
 #[derive(Debug, Clone, Copy)]
 pub struct Command {
     /// What follows `cargo run --`, such as `greet` or `report:daily`.
@@ -980,7 +981,7 @@ pub struct Command {
 }
 
 /// Commands [`App::run`] handles itself, which an app command cannot take.
-#[cfg(feature = "db")]
+#[cfg(feature = "db-core")]
 const BUILT_IN: &[(&str, &str)] = &[
     ("list", "List the commands (also: help)"),
     ("help", ""),
@@ -1053,7 +1054,7 @@ const BUILT_IN: &[(&str, &str)] = &[
 ///     app().run();
 /// }
 /// ```
-#[cfg(feature = "db")]
+#[cfg(feature = "db-core")]
 #[derive(Debug, Clone, Copy)]
 pub struct App {
     /// `app/config/logging.rs`.
@@ -1088,7 +1089,7 @@ pub struct App {
     pub schedule: &'static [crate::schedule::Task],
 }
 
-#[cfg(feature = "db")]
+#[cfg(feature = "db-core")]
 impl App {
     /// Loads `.env`, installs the logger, then either runs the command given
     /// as the first argument (see [`App::command`]) and exits with its status,
@@ -1407,25 +1408,6 @@ impl App {
             .unwrap_or_else(|error| panic!("seeding failed: {error}"));
         (self.router(&config, db.clone()), db)
     }
-}
-
-/// Runs `work`, turning a panic into an `Err` with its message, for queue
-/// jobs and scheduled tasks.
-#[cfg(any(feature = "queue", feature = "schedule"))]
-pub(crate) fn catch_panic(
-    work: impl FnOnce() -> std::result::Result<(), String>,
-) -> std::result::Result<(), String> {
-    catch_unwind(AssertUnwindSafe(work))
-        .unwrap_or_else(|panic| Err(format!("panicked: {}", panic_reason(&*panic))))
-}
-
-/// The message of a caught panic, or nothing.
-fn panic_reason(panic: &(dyn std::any::Any + Send)) -> String {
-    panic
-        .downcast_ref::<&str>()
-        .map(|text| (*text).to_owned())
-        .or_else(|| panic.downcast_ref::<String>().cloned())
-        .unwrap_or_default()
 }
 
 /// Threads answering requests unless `WEB_THREADS` says otherwise.
@@ -1850,7 +1832,7 @@ fn respond(connection: &mut Connection, routes: &Router, shutdown: &Shutdown) ->
 mod tests {
     use super::*;
 
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     fn console_app(commands: &'static [Command]) -> App {
         App {
             logging: crate::log::Settings::from_config,
@@ -1871,7 +1853,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     #[test]
     fn app_commands_run_with_args_and_return_their_status() {
         const EXIT: Command = Command {
@@ -1938,7 +1920,7 @@ mod tests {
         assert!(app.list().contains("queue:forget"));
     }
 
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     #[test]
     #[should_panic(expected = "app command \"migrate\" is already taken")]
     fn app_commands_cannot_shadow_built_ins() {
@@ -1950,7 +1932,7 @@ mod tests {
         console_app(&[MIGRATE]).check_commands();
     }
 
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     #[test]
     #[should_panic(expected = "app command \"greet\" is already taken")]
     fn app_commands_have_one_name_each() {

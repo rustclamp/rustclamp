@@ -1,6 +1,7 @@
 # ADR 0035: Scheduled tasks in web apps
 
-Status: Accepted, 2026-10-07.
+Status: Accepted, 2026-10-07. Amended 2026-10-21: `schedule` no longer
+needs `web` (see Amendment).
 
 ## Context
 
@@ -164,3 +165,26 @@ idea with std threads, wall-clock times and a database lock, as the queue
 3. **Frequencies:** the four `At` forms, UTC only. `At::Cron` waits until an
    app needs it.
 4. **`SCHEDULE_STALE_AFTER`:** one global setting, 1 hour by default.
+
+## Amendment, 2026-10-21: schedule without `web`
+
+A headless process, such as a Postgres-backed data collector with no HTTP
+server, wants the same tasks, lock and skip rules, but `schedule = ["web",
+"db"]` made it compile the web server and could only run tasks through
+`web::App`. Nothing in `Schedule` needs `web`: it uses `Db`, `Log` and a
+panic guard that lived in `web.rs`.
+
+- `schedule` is now (`db`, `log`). With `web` too, `App::schedule`,
+  `schedule:run` and the `SCHEDULE_THREAD` thread work as before. Without
+  it, the process builds `Schedule::new(tasks, &config, db)` and calls
+  `start()` for the thread or `run_due(now)` from its own command. Enabling
+  `schedule` alone no longer turns on `web`; an app that used `web` items
+  while naming only `schedule` names `web` itself.
+- The panic guard moved to `rustclamp::error` (crate-private), shared by
+  the queue and the schedule.
+- The row insert before the claim was SQLite's `INSERT OR IGNORE`, which
+  Postgres rejects, so the schedule failed on `DB_CONNECTION=pgsql`. It is
+  now `INSERT ... ON CONFLICT (task) DO NOTHING` on both engines, and the
+  schedule's database tests run on each engine.
+- Still no new dependency and no `tools/boundaries.py` change.
+
