@@ -138,6 +138,14 @@ def check(path):
     run("cargo", "test", "--offline", "--locked", "--workspace", "--no-default-features", cwd=path)
     run("cargo", "doc", "--offline", "--locked", "--workspace", "--no-deps", "--all-features",
         cwd=path, env={**os.environ, "RUSTDOCFLAGS": "-D warnings"})
+    # Intra-doc links must resolve under each facade feature alone, not only all of them.
+    manifest = tomllib.loads((Path(path) / "Cargo.toml").read_text())
+    if manifest.get("package", {}).get("name") == "rustclamp":
+        # `db-core` and `schedule` need an engine feature beside them.
+        for feature in ["", *sorted(set(manifest["features"]) - {"db-core", "schedule"})]:
+            run("cargo", "doc", "--offline", "--locked", "-p", "rustclamp", "--no-deps",
+                "--no-default-features", "--features", feature,
+                cwd=path, env={**os.environ, "RUSTDOCFLAGS": "-D warnings"})
 
 
 def check_examples(root):

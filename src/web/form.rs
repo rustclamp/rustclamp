@@ -70,9 +70,9 @@ impl Request {
     /// or `https` only, so a stored link can never be `javascript:`). With the
     /// `db` feature, `unique:table,column` fails when a row already has the value,
     /// and `unique:table,column,ID` ignores the row with that `id` (an edit form);
-    /// it reads the [`Db`](crate::db::Db) given to [`Router::state`](super::Router::state).
+    /// it reads the `db::Db` given to [`Router::state`](super::Router::state).
     /// With the `regex` feature, `regex:NAME` matches the pattern registered as
-    /// `NAME` in the [`Patterns`](super::Patterns) given to `Router::state`, so a
+    /// `NAME` in the `Patterns` given to `Router::state`, so a
     /// `|` in a pattern never meets the rule separator.
     /// A field that is empty and not `required` passes. Values are trimmed.
     ///

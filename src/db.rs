@@ -1330,7 +1330,7 @@ pub fn migration_name(file: &'static str) -> &'static str {
 pub trait Migration {
     /// A unique name that sorts in run order, such as
     /// `2026_09_29_000001_create_posts`. Migrations listed by
-    /// [`build::database`](crate::build) are named after their file, so they
+    /// `build::database` are named after their file, so they
     /// leave this out; one listed by hand implements it, usually as
     /// `migration_name(file!())`.
     ///
