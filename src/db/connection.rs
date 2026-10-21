@@ -34,6 +34,7 @@ pub struct Error {
     /// Postgres's five-character SQLSTATE; `None` for SQLite and local errors.
     sqlstate: Option<String>,
     /// SQLite's extended result code; `None` for Postgres and local errors.
+    #[cfg(feature = "sqlite")]
     sqlite_code: Option<i32>,
 }
 
@@ -52,6 +53,7 @@ impl Error {
         Self {
             message: message.into(),
             sqlstate: None,
+            #[cfg(feature = "sqlite")]
             sqlite_code: None,
         }
     }
@@ -66,14 +68,17 @@ impl Error {
     /// either engine: SQLite's `SQLITE_CONSTRAINT_UNIQUE` and `_PRIMARYKEY`,
     /// Postgres's `23505`.
     pub fn is_unique_violation(&self) -> bool {
-        self.sqlstate() == Some("23505")
-            || matches!(
-                self.sqlite_code,
-                Some(
-                    rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
-                        | rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY
-                )
+        #[cfg(feature = "sqlite")]
+        if matches!(
+            self.sqlite_code,
+            Some(
+                rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+                    | rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY
             )
+        ) {
+            return true;
+        }
+        self.sqlstate() == Some("23505")
     }
 }
 
@@ -85,6 +90,7 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+#[cfg(feature = "sqlite")]
 impl From<rusqlite::Error> for Error {
     fn from(error: rusqlite::Error) -> Self {
         let sqlite_code = match &error {
@@ -335,6 +341,7 @@ pub struct Connection<'a>(pub(super) Inner<'a>);
 /// a `RefCell`, since the wire client needs `&mut`), or the reason there is none.
 #[derive(Clone, Copy)]
 pub(super) enum Inner<'a> {
+    #[cfg(feature = "sqlite")]
     Sqlite(&'a rusqlite::Connection),
     #[cfg(feature = "postgres")]
     Postgres(&'a std::cell::RefCell<super::postgres::Client>),
@@ -349,6 +356,7 @@ impl std::fmt::Debug for Connection<'_> {
     }
 }
 
+#[cfg(feature = "sqlite")]
 impl rusqlite::ToSql for Value {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
         use rusqlite::types::ValueRef;
@@ -363,6 +371,7 @@ impl rusqlite::ToSql for Value {
     }
 }
 
+#[cfg(feature = "sqlite")]
 fn bind(params: &[&dyn Param]) -> impl rusqlite::Params {
     rusqlite::params_from_iter(params.iter().map(|param| param.to_value()))
 }
@@ -414,6 +423,7 @@ impl Connection<'_> {
     /// The engine this connection talks to.
     pub fn dialect(&self) -> Dialect {
         match self.0 {
+            #[cfg(feature = "sqlite")]
             Inner::Sqlite(_) => Dialect::Sqlite,
             #[cfg(feature = "postgres")]
             Inner::Postgres(_) | Inner::Unavailable(_) => Dialect::Postgres,
@@ -443,6 +453,7 @@ impl Connection<'_> {
     /// The id of the last row inserted on this SQLite connection.
     pub(super) fn last_insert_rowid(&self) -> i64 {
         match self.0 {
+            #[cfg(feature = "sqlite")]
             Inner::Sqlite(connection) => connection.last_insert_rowid(),
             #[cfg(feature = "postgres")]
             _ => unreachable!("Postgres inserts read RETURNING id"),
@@ -456,6 +467,7 @@ impl Connection<'_> {
     /// When the SQL fails.
     pub fn execute(&self, sql: &str, params: &[&dyn Param]) -> Result<usize> {
         match self.0 {
+            #[cfg(feature = "sqlite")]
             Inner::Sqlite(connection) => Ok(connection.execute(sql, bind(params))?),
             #[cfg(feature = "postgres")]
             _ => Ok(self.run(sql, params)?.affected as usize),
@@ -469,6 +481,7 @@ impl Connection<'_> {
     /// When any of them fails; the ones before it stay done.
     pub fn execute_batch(&self, sql: &str) -> Result<()> {
         match self.0 {
+            #[cfg(feature = "sqlite")]
             Inner::Sqlite(connection) => Ok(connection.execute_batch(sql)?),
             #[cfg(feature = "postgres")]
             Inner::Postgres(client) => Ok(client.borrow_mut().execute_batch(sql)?),
@@ -539,17 +552,14 @@ impl Connection<'_> {
         &self,
         sql: &str,
         params: &[&dyn Param],
-        mut visit: impl FnMut(Row) -> Result<bool>,
+        visit: impl FnMut(Row) -> Result<bool>,
     ) -> Result<()> {
-        use rusqlite::types::ValueRef;
-        #[cfg_attr(
-            not(feature = "postgres"),
-            allow(clippy::infallible_destructuring_match)
-        )]
-        let connection = match self.0 {
-            Inner::Sqlite(connection) => connection,
+        match self.0 {
+            #[cfg(feature = "sqlite")]
+            Inner::Sqlite(connection) => each_sqlite(connection, sql, params, visit),
             #[cfg(feature = "postgres")]
             _ => {
+                let mut visit = visit;
                 let result = self.run(sql, params)?;
                 let columns: Rc<[String]> = result.columns.into();
                 for values in result.rows {
@@ -559,38 +569,49 @@ impl Connection<'_> {
                         break;
                     }
                 }
-                return Ok(());
-            }
-        };
-        let mut statement = connection.prepare(sql)?;
-        let columns: Rc<[String]> = statement
-            .column_names()
-            .into_iter()
-            .map(String::from)
-            .collect();
-        let mut rows = statement.query(bind(params))?;
-        while let Some(row) = rows.next()? {
-            let values = (0..columns.len())
-                .map(|at| {
-                    Ok(match row.get_ref(at)? {
-                        ValueRef::Null => Value::Null,
-                        ValueRef::Integer(n) => Value::Integer(n),
-                        ValueRef::Real(n) => Value::Real(n),
-                        ValueRef::Text(text) => Value::Text(String::from_utf8_lossy(text).into()),
-                        ValueRef::Blob(bytes) => Value::Blob(bytes.to_vec()),
-                    })
-                })
-                .collect::<Result<_>>()?;
-            let more = visit(Row {
-                columns: columns.clone(),
-                values,
-            })?;
-            if !more {
-                break;
+                Ok(())
             }
         }
-        Ok(())
     }
+}
+
+/// [`Connection::each`] on SQLite.
+#[cfg(feature = "sqlite")]
+fn each_sqlite(
+    connection: &rusqlite::Connection,
+    sql: &str,
+    params: &[&dyn Param],
+    mut visit: impl FnMut(Row) -> Result<bool>,
+) -> Result<()> {
+    use rusqlite::types::ValueRef;
+    let mut statement = connection.prepare(sql)?;
+    let columns: Rc<[String]> = statement
+        .column_names()
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let mut rows = statement.query(bind(params))?;
+    while let Some(row) = rows.next()? {
+        let values = (0..columns.len())
+            .map(|at| {
+                Ok(match row.get_ref(at)? {
+                    ValueRef::Null => Value::Null,
+                    ValueRef::Integer(n) => Value::Integer(n),
+                    ValueRef::Real(n) => Value::Real(n),
+                    ValueRef::Text(text) => Value::Text(String::from_utf8_lossy(text).into()),
+                    ValueRef::Blob(bytes) => Value::Blob(bytes.to_vec()),
+                })
+            })
+            .collect::<Result<_>>()?;
+        let more = visit(Row {
+            columns: columns.clone(),
+            values,
+        })?;
+        if !more {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// A list of [`Param`]s for a statement, of any types:
