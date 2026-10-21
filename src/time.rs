@@ -229,7 +229,7 @@ fn last_sunday_one_utc(year: i64, month: u32) -> i64 {
 
 /// `YYYY-MM-DD HH:MM:SS` in UTC for Unix `seconds`, the form SQLite's
 /// `CURRENT_TIMESTAMP` writes.
-#[cfg(any(feature = "log", feature = "db"))]
+#[cfg(any(feature = "log", feature = "db-core"))]
 pub(crate) fn timestamp(seconds: u64) -> String {
     let (date, clock) = split(seconds as i64);
     format!("{date} {clock}")
@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "log", feature = "db"))]
+    #[cfg(any(feature = "log", feature = "db-core"))]
     fn timestamps_are_utc_dates() {
         assert_eq!(timestamp(0), "1970-01-01 00:00:00");
         assert_eq!(timestamp(951_782_400), "2000-02-29 00:00:00");

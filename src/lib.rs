@@ -20,8 +20,15 @@ pub mod cli;
 pub mod config;
 #[cfg(feature = "crypto")]
 pub mod crypto;
-#[cfg(feature = "db")]
+#[cfg(feature = "db-core")]
 pub mod db;
+#[cfg(all(
+    feature = "db-core",
+    not(any(feature = "sqlite", feature = "postgres"))
+))]
+compile_error!("`db-core` has no engine: add `sqlite` (or `db`) or `postgres`");
+#[cfg(all(test, feature = "db-core", not(feature = "sqlite")))]
+compile_error!("rustclamp's own tests open SQLite in memory: add the `sqlite` feature");
 pub mod error;
 #[cfg(feature = "log")]
 pub mod log;

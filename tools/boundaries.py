@@ -9,7 +9,8 @@ import tempfile
 
 # Every new edge requires prototype evidence and an explicit policy change.
 ALLOWED = {
-    # The optional `db` feature: rusqlite with bundled SQLite (ADR 0009). The
+    # The optional `sqlite` feature (and `db`, which turns it on): rusqlite with
+    # bundled SQLite (ADR 0009, ADR 0034 amendment). The
     # wasm-bindgen, js-sys and sqlite-wasm-rs entries build only for wasm32;
     # Cargo metadata resolves every target.
     "rustclamp": {

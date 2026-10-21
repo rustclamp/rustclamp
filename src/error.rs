@@ -128,7 +128,7 @@ impl ExitError for crate::config::ConfigError {
     }
 }
 
-#[cfg(feature = "db")]
+#[cfg(feature = "db-core")]
 impl ExitError for crate::db::DbError {
     fn exit_code(&self) -> i32 {
         match self {
@@ -162,6 +162,26 @@ impl ExitError for crate::web::ServeError {
     }
 }
 
+/// Runs `work`, turning a panic into an `Err` with its message, for queue
+/// jobs and scheduled tasks.
+#[cfg(any(feature = "queue", feature = "schedule"))]
+pub(crate) fn catch_panic(
+    work: impl FnOnce() -> std::result::Result<(), String>,
+) -> std::result::Result<(), String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+        .unwrap_or_else(|panic| Err(format!("panicked: {}", panic_reason(&*panic))))
+}
+
+/// The message of a caught panic, or nothing.
+#[cfg(any(feature = "web", feature = "schedule"))]
+pub(crate) fn panic_reason(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|text| (*text).to_owned())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,7 +213,7 @@ mod tests {
         assert!(busy.problem().detail.contains("Port 80"));
     }
 
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     #[test]
     fn database_errors_split_config_from_io() {
         use crate::db::DbError;

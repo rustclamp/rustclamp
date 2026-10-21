@@ -27,7 +27,13 @@ storage = []
 # Optional build-script helpers (`rustclamp::build`), such as migration discovery.
 build = []
 # Optional SQLite database from `.env` (`rustclamp::db`); compiles SQLite in.
-db = ["config", "time", "uuid", "dep:rusqlite", "dep:rustclamp-macros"]
+# The same as `sqlite`, kept so `db` apps stay on SQLite.
+db = ["sqlite"]
+# `rustclamp::db` with SQLite, a bundled C library and most of a cold build.
+sqlite = ["db-core", "dep:rusqlite"]
+# `rustclamp::db` without an engine (ADR 0034 amendment): `sqlite` and
+# `postgres` each add one. Not useful alone.
+db-core = ["config", "time", "uuid", "dep:rustclamp-macros"]
 # Optional std-only UUID v4 and v7 (`rustclamp::uuid`); v7 comes from
 # `rustclamp_core::Reference` (ADR 0021).
 uuid = ["dep:rustclamp-core"]
@@ -50,11 +56,12 @@ redis = ["config"]
 # needs `redis`.
 queue = ["web", "db"]
 # Optional scheduled tasks (`rustclamp::schedule`, ADR 0035): `schedule:run`
-# from cron, or a thread beside the server outside production.
-schedule = ["web", "db"]
+# from cron, or a thread beside the server outside production. Without `web`
+# a headless process runs a `Schedule` itself.
+schedule = ["db-core", "log"]
 # Optional Postgres for `rustclamp::db` (ADR 0034): a std-only wire client over TCP,
-# behind `DB_CONNECTION=pgsql`.
-postgres = ["db", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom", "dep:rustls", "dep:webpki-roots"]
+# behind `DB_CONNECTION=pgsql`. Without `db` or `sqlite` SQLite is not compiled.
+postgres = ["db-core", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom", "dep:rustls", "dep:webpki-roots"]
 # Optional console commands for non-web processes (`rustclamp::cli`, ADR 0024):
 # a `ContributionTarget` that builds a `clap` command tree from module declarations.
 cli = ["dep:rustclamp-core", "dep:clap"]
@@ -70,6 +77,12 @@ name = "blog"
 path = "examples/blog/main.rs"
 required-features = ["auth", "mail"]
 test = true
+
+# Query::insert_many against one insert a row, on SQLite and (with a server) Postgres.
+[[example]]
+name = "measure-insert-many"
+path = "examples/measure/insert_many.rs"
+required-features = ["db"]
 
 [lints.rust]
 unsafe_code = "forbid"

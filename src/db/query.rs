@@ -5,12 +5,17 @@
 //! `letters, digits, _ or .` panics rather than reach SQLite.
 
 use super::dialect::to_postgres_placeholders;
-use super::{Connection, Db, Dialect, Param, Result, Row};
+use super::{Connection, Db, Dialect, Error, Param, Result, Row};
+
+/// The most values one statement binds: SQLite's default limit since 3.32,
+/// and under the 32 767 of the Postgres client.
+const MAX_PARAMS: usize = 32_766;
 
 /// A query on one table, from [`Db::table`]. Chain conditions, then finish
 /// with [`get`](Self::get), [`first`](Self::first), [`count`](Self::count),
-/// [`paginate`](Self::paginate), [`insert`](Self::insert), [`update`](Self::update) or
-/// [`delete`](Self::delete).
+/// [`paginate`](Self::paginate), [`insert`](Self::insert),
+/// [`insert_many`](Self::insert_many), [`upsert`](Self::upsert),
+/// [`update`](Self::update) or [`delete`](Self::delete).
 ///
 /// ```
 /// use rustclamp::config::Config;
@@ -319,6 +324,142 @@ impl<'a> Query<'a> {
                 )
                 .map(|_| ())
         })
+    }
+
+    /// Inserts every row of `rows`, each with values for `columns`, in as few
+    /// statements as the engines allow: multi-row `VALUES`, at most 32 766
+    /// values a statement. Returns how many rows went in. It runs in one
+    /// transaction (the caller's, from [`Tx::table`](super::Tx::table)), so
+    /// either every row goes in or none does. Conditions are ignored.
+    ///
+    /// ```
+    /// use rustclamp::config::Config;
+    /// use rustclamp::db::{Db, Param};
+    ///
+    /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    /// db.with(|sql| sql.execute_batch("CREATE TABLE prices (station TEXT, price REAL)")).unwrap();
+    /// let read = [("S1", 1.49), ("S2", 1.52)];
+    /// let rows: Vec<[&dyn Param; 2]> = read.iter().map(|(s, p)| [s as &dyn Param, p]).collect();
+    /// assert_eq!(db.table("prices").insert_many(&["station", "price"], &rows).unwrap(), 2);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// When a row does not have one value per column, or the SQL fails; then
+    /// no row of this call stays.
+    pub fn insert_many<'v, R: AsRef<[&'v dyn Param]>>(
+        &self,
+        columns: &[&str],
+        rows: &[R],
+    ) -> Result<usize> {
+        if let Some(at) = rows
+            .iter()
+            .position(|row| row.as_ref().len() != columns.len())
+        {
+            return Err(Error::new(format!(
+                "row {at} has {} values for {} columns",
+                rows[at].as_ref().len(),
+                columns.len()
+            )));
+        }
+        let connection = match self.source {
+            _ if rows.is_empty() => return Ok(0),
+            Source::Db(db) => {
+                return db.transaction(|tx| tx.table(&self.table).insert_many(columns, rows));
+            }
+            Source::Transaction(connection) => connection,
+        };
+        let mut inserted = 0;
+        for chunk in rows.chunks((MAX_PARAMS / columns.len().max(1)).max(1)) {
+            let sql = self.insert_many_sql(columns, chunk.len(), connection.dialect());
+            let values: Vec<&dyn Param> =
+                chunk.iter().flat_map(|row| row.as_ref()).copied().collect();
+            inserted += connection.execute(&sql, &values)?;
+        }
+        Ok(inserted)
+    }
+
+    fn insert_many_sql(&self, columns: &[&str], rows: usize, dialect: Dialect) -> String {
+        let names: Vec<String> = columns.iter().map(|column| name(column)).collect();
+        let row = format!("({})", vec!["?"; columns.len()].join(", "));
+        for_dialect(
+            format!(
+                "INSERT INTO {} ({}) VALUES {}",
+                self.table,
+                names.join(", "),
+                vec![row; rows].join(", ")
+            ),
+            dialect,
+        )
+    }
+
+    /// Inserts one row, or, when it would break the unique key `unique_by`,
+    /// sets `update` on the row already there to the values given instead,
+    /// and returns the row's `id` either way: `INSERT ... ON CONFLICT
+    /// (unique_by) DO UPDATE SET ... RETURNING id` on both engines.
+    /// `unique_by` must match a primary key or unique index. With `update`
+    /// empty an existing row keeps its values (only its `id` comes back).
+    /// Conditions are ignored.
+    ///
+    /// ```
+    /// use rustclamp::config::Config;
+    /// use rustclamp::db::{Db, params};
+    ///
+    /// let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+    /// db.with(|sql| sql.execute_batch(
+    ///     "CREATE TABLE stations (id INTEGER PRIMARY KEY, code TEXT UNIQUE, name TEXT)",
+    /// )).unwrap();
+    /// let stations = db.table("stations");
+    /// let id = stations.upsert(&["code", "name"], params!["S1", "Old"], &["code"], &["name"]).unwrap();
+    /// let again = stations.upsert(&["code", "name"], params!["S1", "New"], &["code"], &["name"]).unwrap();
+    /// assert_eq!(id, again);
+    /// let name = stations.where_eq("id", &id).first(|row| row.get::<String>("name"));
+    /// assert_eq!(name.unwrap().as_deref(), Some("New"));
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// When `unique_by` is empty.
+    pub fn upsert(
+        &self,
+        columns: &[&str],
+        values: &[&dyn Param],
+        unique_by: &[&str],
+        update: &[&str],
+    ) -> Result<i64> {
+        self.with(|connection| {
+            let sql = self.upsert_sql(columns, unique_by, update, connection.dialect());
+            connection.query_row(&sql, values, |row| row.get(0))
+        })
+    }
+
+    fn upsert_sql(
+        &self,
+        columns: &[&str],
+        unique_by: &[&str],
+        update: &[&str],
+        dialect: Dialect,
+    ) -> String {
+        assert!(!unique_by.is_empty(), "upsert needs a unique key");
+        let keys: Vec<String> = unique_by.iter().map(|column| name(column)).collect();
+        // `DO NOTHING` would return no row; setting a key to itself returns it unchanged.
+        let sets: Vec<String> = if update.is_empty() {
+            &unique_by[..1]
+        } else {
+            update
+        }
+        .iter()
+        .map(|column| format!("{0} = excluded.{0}", name(column)))
+        .collect();
+        let insert = self.insert_sql(columns, Dialect::Sqlite, false);
+        for_dialect(
+            format!(
+                "{insert} ON CONFLICT ({}) DO UPDATE SET {} RETURNING id",
+                keys.join(", "),
+                sets.join(", ")
+            ),
+            dialect,
+        )
     }
 
     /// `returning_id` adds Postgres's `RETURNING id`; SQLite reads
@@ -767,6 +908,128 @@ mod tests {
             db.table("posts").limit(2).select_sql(Postgres),
             "SELECT * FROM posts LIMIT 2"
         );
+    }
+
+    #[test]
+    fn upsert_sql_per_dialect() {
+        use crate::db::Dialect::{Postgres, Sqlite};
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let prices = db.table("prices");
+        assert_eq!(
+            prices.upsert_sql(
+                &["station", "day", "price"],
+                &["station", "day"],
+                &["price"],
+                Postgres
+            ),
+            "INSERT INTO prices (station, day, price) VALUES ($1, $2, $3) ON CONFLICT (station, day) DO UPDATE SET price = excluded.price RETURNING id"
+        );
+        assert_eq!(
+            prices.upsert_sql(&["code"], &["code"], &[], Sqlite),
+            "INSERT INTO prices (code) VALUES (?) ON CONFLICT (code) DO UPDATE SET code = excluded.code RETURNING id"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "upsert needs a unique key")]
+    fn upsert_needs_a_key() {
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let _ = db.table("t").upsert(&["a"], &[&1], &[], &["a"]);
+    }
+
+    #[test]
+    fn upsert_inserts_then_updates_and_returns_the_same_id() {
+        each_engine(|db| {
+            let create = crate::db::Schema::create("stations", |table| {
+                table.id();
+                table.string("code").unique();
+                table.string("name");
+            });
+            db.with(|sql| sql.execute_batch(create.render(db.dialect())))
+                .unwrap();
+            let stations = db.table("stations");
+            let upsert = |code: &str, name: &str, update: &[&str]| {
+                stations.upsert(&["code", "name"], &[&code, &name], &["code"], update)
+            };
+            let first = upsert("a", "one", &["name"]).unwrap();
+            let other = upsert("b", "two", &["name"]).unwrap();
+            assert_ne!(first, other);
+            assert_eq!(upsert("a", "uno", &["name"]).unwrap(), first);
+            // With nothing to update the row keeps its name, and its id still comes back.
+            assert_eq!(upsert("a", "ignored", &[]).unwrap(), first);
+            let name = db
+                .table("stations")
+                .where_eq("id", &first)
+                .first(|r| r.get::<String>("name"));
+            assert_eq!(name.unwrap().as_deref(), Some("uno"));
+            assert_eq!(stations.count().unwrap(), 2);
+            // In a transaction, and a key that matches no unique index fails.
+            let in_tx = db.transaction(|tx| {
+                tx.table("stations").upsert(
+                    &["code", "name"],
+                    &[&"c", &"three"],
+                    &["code"],
+                    &["name"],
+                )
+            });
+            assert!(in_tx.unwrap() > other);
+            let no_index = stations.upsert(&["code", "name"], &[&"d", &"x"], &["name"], &["code"]);
+            assert!(no_index.is_err());
+        });
+    }
+
+    #[test]
+    fn insert_many_sql_per_dialect() {
+        use crate::db::Dialect::{Postgres, Sqlite};
+        let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
+        let pairs = db.table("pairs");
+        assert_eq!(
+            pairs.insert_many_sql(&["a", "b"], 2, Sqlite),
+            "INSERT INTO pairs (a, b) VALUES (?, ?), (?, ?)"
+        );
+        assert_eq!(
+            pairs.insert_many_sql(&["a", "b"], 2, Postgres),
+            "INSERT INTO pairs (a, b) VALUES ($1, $2), ($3, $4)"
+        );
+    }
+
+    #[test]
+    fn insert_many_chunks_under_the_parameter_limit_and_is_all_or_nothing() {
+        use crate::db::Param;
+        each_engine(|db| {
+            db.with(|sql| {
+                sql.execute_batch("CREATE TABLE pairs (a INTEGER PRIMARY KEY, b TEXT NOT NULL)")
+            })
+            .unwrap();
+            let pairs = || db.table("pairs");
+            // 2 columns: three statements of up to 16 383 rows each.
+            let numbers: Vec<i64> = (0..40_000).collect();
+            let rows: Vec<[&dyn Param; 2]> =
+                numbers.iter().map(|n| [n as &dyn Param, &"x"]).collect();
+            assert_eq!(pairs().insert_many(&["a", "b"], &rows).unwrap(), 40_000);
+            assert_eq!(pairs().count().unwrap(), 40_000);
+            let none: &[[&dyn Param; 2]] = &[];
+            assert_eq!(pairs().insert_many(&["a", "b"], none).unwrap(), 0);
+            // A duplicate in the last chunk undoes the chunks before it.
+            let more: Vec<i64> = (40_000..80_000).chain([0]).collect();
+            let rows: Vec<[&dyn Param; 2]> = more.iter().map(|n| [n as &dyn Param, &"y"]).collect();
+            let error = pairs().insert_many(&["a", "b"], &rows).unwrap_err();
+            assert!(error.is_unique_violation(), "{error}");
+            assert_eq!(pairs().count().unwrap(), 40_000);
+            // A short row is refused before anything runs.
+            let short: [&[&dyn Param]; 2] = [&[&90_000, &"z"], &[&90_001]];
+            let error = pairs().insert_many(&["a", "b"], &short).unwrap_err();
+            assert_eq!(error.to_string(), "row 1 has 1 values for 2 columns");
+            // Inside a transaction it is that transaction's.
+            let rolled_back: crate::db::Result<()> = db.transaction(|tx| {
+                tx.table("pairs")
+                    .insert_many(&["a", "b"], &[[&90_000 as &dyn Param, &"t"]])?;
+                assert_eq!(tx.table("pairs").count()?, 40_001);
+                Err(crate::db::Error::new("undo"))
+            });
+            assert!(rolled_back.is_err());
+            assert_eq!(pairs().count().unwrap(), 40_000);
+        });
     }
 
     #[test]
