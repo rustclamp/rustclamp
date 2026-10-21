@@ -198,6 +198,9 @@ ALLOWED = {
     'sha2',
     },
     "rustclamp-postgres": {
+    # Feature `scheduler` (ADR 0039): AdvisoryLeader implements the scheduler's
+    # LeaderLock. Its closure (core, Tokio) is already allowed below.
+    'rustclamp-scheduler',
     # cipher, inout and const-oid are feature-unification artifacts, not
     # postgres edges: `--all-features` metadata resolves one graph, so the
     # chacha20/digest postgres already uses carry the `crypto` feature's
@@ -382,7 +385,7 @@ ALLOWED["rustclamp-postgres"] |= ALLOWED["rustclamp-http"] | {"rustclamp-http"}
 ALLOWED["rustclamp-worker"] |= {"rustclamp-postgres"} | ALLOWED["rustclamp-postgres"]
 
 OPTIONAL = {
-    "rustclamp-postgres": {"rustclamp-http"},
+    "rustclamp-postgres": {"rustclamp-http", "rustclamp-scheduler"},
     "rustclamp-runtime": {"tokio", "serde", "toml"},
     "rustclamp-worker": {"tokio", "rustclamp-runtime", "rusqlite", "rumqttc", "rustclamp-postgres"},
     "rustclamp-scheduler": {"tokio"},
