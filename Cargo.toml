@@ -55,6 +55,9 @@ schedule = ["web", "db"]
 # Optional Postgres for `rustclamp::db` (ADR 0034): a std-only wire client over TCP,
 # behind `DB_CONNECTION=pgsql`.
 postgres = ["db", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom", "dep:rustls", "dep:webpki-roots"]
+# Optional console commands for non-web processes (`rustclamp::cli`, ADR 0024):
+# a `ContributionTarget` that builds a `clap` command tree from module declarations.
+cli = ["dep:rustclamp-core", "dep:clap"]
 crypto = ["config", "dep:argon2", "dep:chacha20poly1305", "dep:sha2", "dep:hmac", "dep:base64ct", "dep:getrandom"]
 
 [[example]]
@@ -88,7 +91,13 @@ getrandom = { version = "0.4.3", optional = true }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 webpki-roots = { version = "1.0.9", optional = true }
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"], optional = true }
+clap = { version = "4.6.7", default-features = false, features = ["std", "help", "usage", "error-context"], optional = true }
 regex = { version = "1.13.1", default-features = false, features = ["std", "unicode-perl", "unicode-case"], optional = true }
+
+[dev-dependencies]
+# tests/cli.rs builds the CLI target through a frozen process projection.
+# A path dev-dependency: projects that depend on rustclamp never build it.
+rustclamp-kernel = { version = "1.0.0", path = "../kernel" }
 
 # Local multi-repo development: build against the sibling ../core checkout instead of
 # fetching it. Only applies when this repository is the build root; a project that

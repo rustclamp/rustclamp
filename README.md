@@ -76,6 +76,7 @@ All modules are opt-in Cargo features. Unsafe code is forbidden.
 | `schedule` | `rustclamp::schedule` | Scheduled tasks in UTC (`EveryMinutes`, `Hourly`, `Daily`, `Weekly`), `schedule:run` for cron, once per minute across processes ([ADR 0035](docs/adr/0035-scheduled-tasks.md)) |
 | `markdown` | `rustclamp::web::markdown` | Markdown to HTML that escapes raw HTML and unsafe links |
 | `regex` | `rustclamp::web::Patterns` | `regex:NAME` validation rule with linear-time patterns ([ADR 0033](docs/adr/0033-regex-validation.md)) |
+| `cli` | `rustclamp::cli` | Console commands for non-web processes: modules contribute `CommandDeclaration`s, `CliCommandTarget` builds a `clap` `CommandTree` from the ones the process selected ([ADR 0024](docs/adr/0024-command-contribution-target.md)) |
 | `cache` | `rustclamp::cache` | Bounded in-process cache with LRU eviction and optional TTL |
 | `metrics` | `rustclamp::metrics` | Counters and gauges with a Prometheus text renderer; `Router::metrics` serves them |
 | `build` | `rustclamp::build` | `build.rs` helpers such as `build::database` |

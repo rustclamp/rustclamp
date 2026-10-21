@@ -48,6 +48,9 @@ ALLOWED = {
         # The optional `db` feature's `#[derive(Model)]` (ADR 0014): a
         # proc-macro crate, so syn and quote run at compile time only.
         "rustclamp-macros",
+        # The optional `cli` feature: clap without default features, keeping
+        # std, help, usage and error-context (ADR 0024).
+        "anstyle", "clap", "clap_builder", "clap_lex",
     },
     "rustclamp-macros": {"proc-macro2", "quote", "syn", "unicode-ident"},
     "rustclamp-core": set(),
@@ -362,7 +365,7 @@ OPTIONAL = {
     "rustclamp-runtime": {"tokio"},
     "rustclamp-worker": {"tokio", "rustclamp-runtime", "rusqlite", "rumqttc"},
     "rustclamp-scheduler": {"tokio"},
-    "rustclamp": {"rustclamp-core", "rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "regex", "rustclamp-macros", "rustls", "webpki-roots"},
+    "rustclamp": {"rustclamp-core", "rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "regex", "rustclamp-macros", "rustls", "webpki-roots", "clap"},
 }
 
 
