@@ -4,6 +4,12 @@
 
 ### Added
 
+- `Query::insert_many(columns, rows)`: many rows in multi-row `VALUES`
+  statements, chunked under 32 766 bound values a statement, inside one
+  transaction (or the caller's), on SQLite and Postgres. Returns the rows
+  inserted. 3 400 rows on a local Postgres 17: 15 ms against 372 ms row by row
+  in one transaction (`cargo run --release --example measure-insert-many
+  --features postgres`).
 - `Query::upsert(columns, values, unique_by, update)`: inserts a row or, on a
   conflict with the unique key `unique_by`, sets the `update` columns on the
   existing row, and returns the row's `id` either way. One
