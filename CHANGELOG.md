@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- `time::Zone` (#177): local time without a tz database. `Zone::UTC`,
+  `Zone::fixed(minutes)`, and `Zone::eu(standard_minutes)` with EU summer
+  time (last Sunday of March to last Sunday of October, 01:00 UTC). It has
+  `offset_at`, `format_date`, `format_rfc3339` (with the local offset),
+  `hour_minute`, `weekday` and `start_of_day`, the local midnight for "today"
+  in a query. Other regions' rules are not included.
+
 ### Fixed
 
 - `row.get::<f64>()` reads a Postgres `numeric` column (and `sum`/`avg`, which
