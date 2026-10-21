@@ -2,23 +2,19 @@
 
 ## Unreleased
 
-### Changed
+### Added
 
-- SQLite has its own feature (ADR 0034 amendment, #173). `db-core` is
-  `rustclamp::db` with no engine; `sqlite` adds `rusqlite`; `db` is `sqlite`, so
-  apps that name `db` are unchanged. `postgres` and `schedule` need only
-  `db-core`, so a Postgres-only build no longer compiles bundled SQLite: a cold
-  release build of the facade with `--features postgres` takes 16 s instead of
-  about 59 s. An app that names only `postgres` and also opens SQLite (or
-  `:memory:` in its tests) adds `sqlite`. With `DB_CONNECTION=sqlite` (the
-  default) and no `sqlite` feature, `Db::try_connect` returns
-  `DbError::Engine`, whose message names the feature. `queue`, `mail` and
-  `auth` still turn on `db`. The crate's own tests need `sqlite`.
-- The `schedule` feature no longer needs `web` (ADR 0035 amendment): it is
-  `db-core` + `log`, so a headless worker builds a `Schedule` with
-  `Schedule::new(tasks, &config, db)` and calls `start()` or `run_due(now)`.
-  With `web`, `App::schedule` and `schedule:run` work as before. An app that
-  named only `schedule` and used `web` items must now name `web` too.
+- `Query::insert_many(columns, rows)`: many rows in multi-row `VALUES`
+  statements, chunked under 32 766 bound values a statement, inside one
+  transaction (or the caller's), on SQLite and Postgres. Returns the rows
+  inserted. 3 400 rows on a local Postgres 17: 15 ms against 372 ms row by row
+  in one transaction (`cargo run --release --example measure-insert-many
+  --features postgres`).
+- `Query::upsert(columns, values, unique_by, update)`: inserts a row or, on a
+  conflict with the unique key `unique_by`, sets the `update` columns on the
+  existing row, and returns the row's `id` either way. One
+  `INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING id` on SQLite and
+  Postgres; with `update` empty an existing row keeps its values.
 
 ### Fixed
 

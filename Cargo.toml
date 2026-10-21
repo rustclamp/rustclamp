@@ -78,6 +78,12 @@ path = "examples/blog/main.rs"
 required-features = ["auth", "mail"]
 test = true
 
+# Query::insert_many against one insert a row, on SQLite and (with a server) Postgres.
+[[example]]
+name = "measure-insert-many"
+path = "examples/measure/insert_many.rs"
+required-features = ["db"]
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "deny"
