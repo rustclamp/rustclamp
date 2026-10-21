@@ -192,7 +192,8 @@ impl Datum {
         })
     }
 
-    /// Reads a text-format column of type `oid`. Types not listed come back as text.
+    /// Reads a text-format column of type `oid`. Types not listed come back as
+    /// text, `numeric` among them: its exact digits, which `f64` parses.
     fn decode(oid: u32, raw: &[u8]) -> Result<Self, String> {
         let text = std::str::from_utf8(raw).map_err(|_| "a column is not valid UTF-8")?;
         let bad = |kind: &str| format!("bad {kind} {text:?} from the server");
