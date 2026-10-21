@@ -270,7 +270,7 @@ fn check(request: &Request, rule: &str, value: &str, label: &str, name: &str) ->
             (confirmation.unwrap_or_default().trim() != value)
                 .then(|| format!("The {label} field confirmation does not match."))
         }
-        #[cfg(feature = "db")]
+        #[cfg(feature = "db-core")]
         "unique" => {
             let db = request
                 .state::<crate::db::Db>()
@@ -527,7 +527,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "db")]
+    #[cfg(feature = "db-core")]
     #[test]
     fn unique_reads_the_router_db() {
         use super::super::request::State;

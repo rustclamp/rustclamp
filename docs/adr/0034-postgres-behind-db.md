@@ -1,6 +1,7 @@
 # ADR 0034: Postgres behind `Db`
 
-Status: Accepted, 2026-10-07.
+Status: Accepted, 2026-10-07. Amended 2026-10-21: SQLite gets its own
+feature, and `postgres` no longer compiles it (see Amendment).
 
 ## Context
 
@@ -93,3 +94,43 @@ MySQL, read replicas, `LISTEN`/`NOTIFY`, `COPY`, binary format, native `timestam
 - The facade maintains a second wire protocol. SCRAM, TLS and type decoding are security-relevant code that needs the same review as the SMTP client.
 - Each `Query` call on Postgres is a network round trip rather than an in-process call, so N+1 loops that SQLite hid become visible. Eager loading (deferred in ADR 0009) gains priority.
 - The test suite runs twice in CI, and the SQLite-only assumptions in `queue.rs` and `mail.rs` get Postgres-specific code paths that only the live job exercises.
+
+## Amendment, 2026-10-21: SQLite behind its own feature
+
+Resolved question 2 kept SQLite compiled into every `postgres` build. For a
+Postgres-only app that is most of a cold build: `libsqlite3-sys` compiles
+the bundled C library. A headless Postgres-backed collector spent most of a
+one-minute release build on it, and never opens SQLite.
+
+- **Features:** `db-core` is `rustclamp::db` with no engine (config, time,
+  uuid, the `Model` derive). `sqlite` is `db-core` plus `rusqlite`. `db` is
+  `sqlite`, so every app that names `db` keeps SQLite exactly as before.
+  `postgres` is `db-core` plus the wire client's crates, without `rusqlite`.
+  `schedule` needs only `db-core`, so `schedule` + `postgres` has no SQLite
+  either.
+- **`queue`, `mail` and `auth` still name `db`.** Their tests run only on
+  SQLite; moving them to `db-core` waits until they have
+  Postgres coverage.
+- **A build with `DB_CONNECTION=sqlite`** (the default) and no `sqlite`
+  feature stops at startup with `DbError::Engine`, whose message names the
+  feature, as `pgsql` without `postgres` does. `Db::connect` creates no
+  `storage/` folder for it.
+- **The crate's own tests** open SQLite in memory, so they need `sqlite`:
+  without it `cargo test` stops with a `compile_error!` that says so.
+  `--all-features` and `--features postgres,sqlite` run them on both engines
+  as before.
+- **Compatibility:** an app that named only `postgres` and also opened a
+  SQLite file (or `:memory:` in its tests) adds `sqlite` (or `db`). No new
+  crate, and `tools/boundaries.py` changes only a comment.
+- **Measured:** a cold release build of the facade alone, in a fresh target
+  directory, offline, Rust 1.96.1, 6 cores, 3 runs each (wall seconds):
+
+  | Build | Wall | CPU |
+  | --- | --- | --- |
+  | `main`, `--features postgres` | 70.3, 66.5, 63.7 | 103 to 105 |
+  | this change, `--features postgres,db` (SQLite on, as before) | 58.6, 60.5, 58.7 | 98 to 100 |
+  | this change, `--features postgres` | 16.0, 15.8, 16.0 | 40 |
+
+  The `main` runs shared the machine with a desktop indexer, so take the
+  same-branch `postgres,db` row as the control: about 59 s against 16 s.
+
