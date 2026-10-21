@@ -238,12 +238,19 @@ impl FromColumn for bool {
     }
 }
 
+/// A real, an integer, or text that parses as a number. Postgres sends
+/// `numeric` (and `sum`/`avg` over it) as its exact decimal text, which a
+/// `String` keeps digit for digit; as `f64` it rounds to the nearest double.
 impl FromColumn for f64 {
     fn from_value(value: Value) -> Result<Self> {
         match value {
             Value::Real(n) => Ok(n),
             // As SQLite reads it: an integer column holding a whole number.
             Value::Integer(n) => Ok(n as f64),
+            Value::Text(text) => match text.parse() {
+                Ok(n) => Ok(n),
+                Err(_) => mismatch(&Value::Text(text), "a number"),
+            },
             value => mismatch(&value, "a number"),
         }
     }
@@ -653,6 +660,10 @@ mod tests {
         assert!(!bool::from_value(Value::Integer(0)).unwrap());
         assert!(bool::from_value(Value::Integer(2)).unwrap());
         assert!(bool::from_value(Value::Text("t".into())).is_err());
+        assert_eq!(f64::from_value(Value::Text("12.345".into())), Ok(12.345));
+        assert_eq!(f64::from_value(Value::Text("-0.5".into())), Ok(-0.5));
+        assert!(f64::from_value(Value::Text("1,5".into())).is_err());
+        assert!(f64::from_value(Value::Blob(vec![1])).is_err());
         let db = Db::open(&Config::parse("DB_DATABASE=:memory:"));
         let stored: i64 = db
             .with(|sql| sql.query_row("SELECT ?1", params![true], |row| row.get(0)))
@@ -725,6 +736,15 @@ mod tests {
                 .query_row("SELECT 'x' AS n", &[], |row| row.get::<i64>("n"))
                 .unwrap_err();
             assert!(error.to_string().starts_with("column n: expected"), "{error}");
+            // `numeric` comes back as its exact text; f64 parses it.
+            let (exact, price) = sql.query_row(
+                "SELECT 1.4990::numeric(10,4) AS p, ?1::numeric AS q",
+                params![2.5],
+                |row| Ok((row.get::<String>("p")?, row.get::<f64>("q")?)),
+            )?;
+            assert_eq!((exact.as_str(), price), ("1.4990", 2.5));
+            let nan = sql.query_row("SELECT 'NaN'::numeric", &[], |row| row.get::<f64>(0))?;
+            assert!(nan.is_nan());
             // Marks in literals and comments are not parameters.
             let marks = sql.query_row("SELECT '?' || ?1::text -- ?", params!["x"], |row| row.get::<String>(0))?;
             assert_eq!(marks, "?x");

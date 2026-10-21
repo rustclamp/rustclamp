@@ -1,5 +1,15 @@
 # Changelog: rustclamp
 
+## Unreleased
+
+### Fixed
+
+- `row.get::<f64>()` reads a Postgres `numeric` column (and `sum`/`avg`, which
+  return `numeric`) instead of failing with "expected a number". `numeric`
+  still arrives as its exact text, so `row.get::<String>()` keeps every digit;
+  `f64` now parses text that is a number on either engine, rounding to the
+  nearest double.
+
 ## 1.1.0 - 2026-10-21
 
 ### Added
