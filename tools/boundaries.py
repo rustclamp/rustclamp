@@ -361,8 +361,18 @@ CORE_RANDOM = {"getrandom", "cfg-if", "libc", "r-efi", "rand_core"}
 for _name in ("rustclamp-core", "rustclamp-kernel", "rustclamp-runtime", "rustclamp-messaging",
               "rustclamp-scheduler", "rustclamp-worker"):
     ALLOWED[_name] |= CORE_RANDOM
+# Runtime features `config` / `config-toml` (ADR 0036): serde, and toml with only
+# its parser. indexmap, toml_writer and their deps are toml's inactive optional
+# features; Cargo metadata lists them anyway. Worker reaches them via Runtime.
+RUNTIME_CONFIG = {
+    "serde", "serde_core", "serde_derive", "serde_spanned", "toml", "toml_datetime",
+    "toml_parser", "toml_writer", "winnow", "indexmap", "equivalent", "hashbrown",
+    "foldhash",
+}
+for _name in ("rustclamp-runtime", "rustclamp-worker"):
+    ALLOWED[_name] |= RUNTIME_CONFIG
 OPTIONAL = {
-    "rustclamp-runtime": {"tokio"},
+    "rustclamp-runtime": {"tokio", "serde", "toml"},
     "rustclamp-worker": {"tokio", "rustclamp-runtime", "rusqlite", "rumqttc"},
     "rustclamp-scheduler": {"tokio"},
     "rustclamp": {"rustclamp-core", "rusqlite", "argon2", "chacha20poly1305", "sha2", "hmac", "base64ct", "getrandom", "pulldown-cmark", "regex", "rustclamp-macros", "rustls", "webpki-roots", "clap"},
@@ -388,7 +398,9 @@ def violations(data):
         for dep in package["dependencies"]:
             if dep["name"] not in ALLOWED[name]:
                 errors.append(f"{name} -> {dep['name']}: forbidden dependency")
-            if dep["name"] in OPTIONAL.get(name, set()) and not dep["optional"]:
+            # Dev-dependencies never reach consumers, so they may be required.
+            if (dep["name"] in OPTIONAL.get(name, set()) and not dep["optional"]
+                    and dep["kind"] != "dev"):
                 errors.append(f"{name} -> {dep['name']}: dependency must remain optional")
             if dep.get("path") and dep["req"] == "*":
                 errors.append(f"{name} -> {dep['name']}: path requires a version")
