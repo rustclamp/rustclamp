@@ -102,7 +102,7 @@ each step: see the [examples](examples/README.md) for the learning path and the 
 | [`core`](https://github.com/rustclamp/core) | Shared, domain-neutral contracts: capabilities, modules, contributions, identities, `Reference` |
 | [`kernel`](https://github.com/rustclamp/kernel) | Composition and resolution of typed requirements and contributions |
 | [`runtime`](https://github.com/rustclamp/runtime) | Executor-neutral task supervision; optional Tokio adapter |
-| [`http`](https://github.com/rustclamp/http) | Optional Axum and Tower integration for HTTP interfaces |
+| [`http`](https://github.com/rustclamp/http) | Async HTTP on Axum and Tower for APIs and services; web apps use the `web` feature ([ADR 0041](docs/adr/0041-two-http-stacks.md)) |
 | [`messaging`](https://github.com/rustclamp/messaging) | Versioned message envelope contracts |
 | [`worker`](https://github.com/rustclamp/worker) | Message handler contributions and routing for workers |
 | [`scheduler`](https://github.com/rustclamp/scheduler) | Contribution target for bounded, clock-driven jobs |
