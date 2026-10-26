@@ -25,6 +25,10 @@
 //!
 //! web::serve(routes);
 //! ```
+//!
+//! This server is synchronous and stays that way. For async HTTP, gRPC or
+//! Tower middleware, use the `rustclamp-http` crate instead; ADR 0041
+//! (`docs/adr/0041-two-http-stacks.md`) says which one to pick.
 
 #[cfg(feature = "auth")]
 pub mod auth;
